@@ -28,7 +28,7 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 - **The top bar** is always there: the inbox button with the number waiting, the mood line, Talk, Scratchpad and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
-- **The folder outline** on the right shows the vault's areas and projects as folders, and which one the open thread is in (see Folders below).
+- **The outline** on the right shows where the open thread sits: its area, its project and the threads beside it, joined by lines like a file tree (see Folders below).
 - **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
 
 ## The queue
@@ -49,13 +49,20 @@ The order is worked out in the background, so moving on never waits for a model.
 
 **Requeue** (Alt+S) means "not now": the thread goes to the back for 20 minutes and you get the next one.
 
+**Send and done** (Ctrl+Enter), next to Send: your message goes out and the thread closes by itself once Claude has answered, without stopping in the inbox. If the turn fails or you stop it, the thread comes back to the inbox instead.
+
+**Attach files** with the paperclip, by dropping them on the thread, or by pasting. They upload at once and go out with your next message; Claude reads them (text, images, PDFs; up to 25 MB each). They live in the thread, not in the vault.
+
 **Send into spin-off** (Alt+Enter), next to Send: your message starts a new thread that begins as a copy of this one, files included. Nothing is sent to the thread you are in; it goes to the back of the queue, since you have just dealt with it. The spin-off gets the conversation so far as text, not Claude's working memory of it. The brain update files the copied part from the original only.
+
+You can also ask for a spin-off in the message itself: "…also spin off a new task only about the mail draft". Claude then starts that thread, which works in parallel, and carries on with the rest of your message where you are. It does this only when you ask.
 
 **Delete**, in a thread's header, removes it for good after a second click: for chats that were a test, random, or nothing for the brain. What an update already filed from it stays in the brain.
 
 | Key | What it does |
 |---|---|
 | Enter | Send, then open what the queue puts next |
+| Ctrl+Enter | Send and done |
 | Alt+Enter | Send into a spin-off |
 | Shift+Enter | New line |
 | Alt+N | New thread |
@@ -82,6 +89,10 @@ A card is one finished message: a LinkedIn note, a first mail, a follow-up on so
 - **Y** accepts: the text is copied and the person's page opens, if there is one. **N** declines. Either way the card is done and the next thing comes up.
 - A mail card has **Put in Gmail** and **Send** instead; using either accepts the card.
 - **A line for your reason**, under the text, for either verdict: why not, or what the card got wrong ("this is outdated, we already met"). It is optional. It is kept with the decision, the queue and the next card run read it, and the next brain update files it: a reason as a rule about that kind of card, a correction as a fact in the note it concerns.
+
+A **proposal** is a third kind of card: a piece of work Claude offers to do in a thread for one of your projects or areas, such as research for a next step, a first draft, a timeline, or checking where something quiet stands. The text is the brief, editable like any card. **Accept and start** opens the thread in that project and Claude begins; decline, with a reason if you like, and it is not proposed again.
+
+**What is coming up.** With the calendar connected, the same run looks at today and tomorrow every few hours. For an entry worth preparing (a meeting, a fair, a talk) it starts a thread by itself, marked "Coming up": Claude writes a briefing from the Brain and opens a preparation session with you. There is nothing to accept; delete the thread if you do not want it. Each entry is prepared once.
 
 Cards are made in the background by a run that reads the vault and searches the web for the right person. It starts by itself when fewer than three unseen cards are left while you work the queue, at most every 45 minutes, or when you press "Look for opportunities". Chase cards come from rows in `Brain/Waiting For.md` whose chase date has passed.
 
@@ -125,13 +136,12 @@ These two buttons are the only things in the app that write the vault, and they 
 
 ## Folders
 
-The outline on the right shows the vault's areas and projects, read from `Brain/Projects/Projects Index.md`, plus "No project". The app keeps no list of its own: a project is here exactly when it is in the vault.
+The outline on the right shows where the open thread is, read from `Brain/Projects/Projects Index.md`: the area, under it the project, under that the threads in the same project, joined by lines. The thread's header shows the same path under its name. A thread without a project is shown under "No project" with the other loose threads.
 
-- The folder of the open thread is lit and open, and the thread's header shows the same path under its name.
-- A folder opens while the pointer rests on it and closes again when the pointer leaves the outline; a click keeps it open. Inside are its threads, and "New thread", "Move this thread here" and "Note".
-- A number on a folder says how many threads in it wait for you.
-- A new thread started from a folder begins with the project's note and its area's note already loaded.
-- When the window is too narrow for the outline (and on the phone), it is the **Folders** tab in the inbox.
+- Click the project's name to read its note. "+ New thread" starts another thread there, with the project's note and its area's note already loaded.
+- **All folders**, underneath, opens the whole tree of areas and projects: rest the pointer on it, or click to keep it open. A folder in it opens while the pointer rests on it; a number says how many threads in it wait for you.
+- To file a thread somewhere else, drag it: the whole tree shows while a thread is being dragged. Or open the folder under All folders and use "Move this thread here".
+- When the window is too narrow for the outline (and on the phone), the whole tree is the **Folders** tab in the inbox.
 
 ## Scratchpad
 
@@ -213,7 +223,7 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `protectedPaths` | Scratchpad, .obsidian, For Claude, For Florian | Never written by the app. |
 | `hiddenPaths` | Scratchpad, .obsidian, For Claude/processed | Never on the app's disk. |
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
-| `cards` | automatic, keep 3 ready, 3 per run, 45 min pause | The card run. `auto: false` makes cards only on request. |
+| `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads. |
 | `maxParallel` | `4` | Threads worked on at once. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |

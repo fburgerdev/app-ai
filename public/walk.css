@@ -7,7 +7,7 @@
   --serif: 'Literata Variable', 'Literata', Georgia, serif;
   --sans: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
 }
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; scrollbar-width: thin; scrollbar-color: #4a5072 transparent; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--ground); color: var(--text); font: 16px/1.45 var(--sans); overscroll-behavior: none; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; color: inherit; }

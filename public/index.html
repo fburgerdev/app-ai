@@ -61,12 +61,18 @@
           <div id="messages" class="messages quotable"></div>
         </div>
         <form id="composer" class="composer" autocomplete="off">
+          <div id="attached" class="attached" hidden></div>
           <textarea id="input" rows="1" placeholder="Reply…" aria-label="Your message"></textarea>
           <div class="composer-foot">
+            <button id="attach" class="btn btn-quiet btn-icon" type="button" aria-label="Attach files" title="Attach files. You can also drop them on the thread or paste them.">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5l-8 8a5 5 0 01-7-7l8.5-8.5a3.3 3.3 0 014.7 4.7L9.8 17.1a1.7 1.7 0 01-2.4-2.4l7.4-7.4"/></svg>
+            </button>
+            <input id="file-input" type="file" multiple hidden>
             <div id="model" class="pick" data-label="Model"></div>
             <div id="effort" class="pick" data-label="Effort"></div>
             <span class="foot-space"></span>
             <button id="spin" class="btn btn-quiet btn-spin" type="button" title="Send this into a spin-off: a new thread that starts as a copy of this one. Nothing is sent here, and this thread goes to the back of the queue. (Alt Enter)">Send into spin-off</button>
+            <button id="send-done" class="btn btn-quiet" type="button" title="Send, and close the thread by itself once Claude has answered: it does not come back to the inbox. (Ctrl Enter)">Send and done</button>
             <button id="send" class="btn btn-send" type="submit">Send</button>
           </div>
         </form>

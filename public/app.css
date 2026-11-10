@@ -32,6 +32,15 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Scrollbars in the app's own colours: thin, no track, a thumb that shows on the dark ground. */
+* { scrollbar-width: thin; scrollbar-color: #4a5072 transparent; }
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #4a5072; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #6b7192; }
+}
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--ground);
@@ -833,81 +842,101 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .steps[open] ol { animation: swap 160ms ease-out; }
 .status { animation: swap 200ms ease-out; }
 
-/* ---------- the folder outline ----------
-   Areas, their projects, and the threads in them. The folder of the open thread is lit.
-   A folder opens when the pointer rests on it and closes again when the pointer leaves
-   the outline; a click keeps it open. Threads are dropped onto folders to file them. */
+/* ---------- the outline ----------
+   Where the open thread sits: its area, its project, and the threads next to it, joined
+   by lines the way a file tree is. "All folders" underneath opens the whole vault tree,
+   for looking around and for filing a thread somewhere else. */
 
 .tree {
+  --guide: #454b6b;
   display: flex;
   flex-direction: column;
-  gap: 1px;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   background: var(--rail);
   border-left: 1px solid var(--line);
-  padding: 12px 8px 24px;
-  scrollbar-width: thin;
+  padding: 14px 10px 24px;
 }
-.tree-label { margin: 2px 8px 8px; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
-.tree-note { margin: 4px 8px; color: var(--faint); font-size: 12.5px; }
-.folder-row {
+.tree-label { margin: 0 6px 8px; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.tree-note { margin: 2px 6px; color: var(--faint); font-size: 12.5px; }
+.folder-row, .tree-thread {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  padding: 5px 8px;
+  min-height: 28px;
+  padding: 3px 7px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   background: none;
   color: var(--muted);
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
-.folder-row:hover, .folder.is-open > .folder-row { background: var(--panel); color: var(--text); }
-.folder-row svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; opacity: 0.8; }
-.folder.is-open > .folder-row svg .flap { fill: currentColor; fill-opacity: 0.22; }
-.folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.folder.is-area > .folder-row .folder-name { font-weight: 600; color: var(--text); }
+.folder-row:hover, .tree-thread:hover { background: var(--panel); color: var(--text); }
+.folder-name, .tree-thread span:last-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder.is-area > .folder-row { color: var(--text); font-weight: 600; }
+.folder.is-here > .folder-row { color: var(--you); font-weight: 600; }
 .folder-count { flex: none; min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--raised); color: var(--muted); font: 650 11px/1.4 var(--sans); text-align: center; }
 .folder-count.has-ready { background: var(--you); color: var(--you-ink); }
 .folder-count.is-working::before { content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--work); vertical-align: 1px; }
-.folder.is-here > .folder-row { color: var(--bright); box-shadow: inset 2px 0 0 var(--you); }
-.folder.is-here > .folder-row svg { color: var(--you); opacity: 1; }
 .folder.is-drop > .folder-row { background: rgba(245, 183, 92, 0.12); box-shadow: inset 0 0 0 1.5px var(--you); color: var(--bright); }
-.folder-kids { margin: 1px 0 3px 15px; padding-left: 5px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; animation: swap 150ms ease-out; }
-.tree-thread {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.tree-thread:hover { background: var(--panel); color: var(--text); }
+.tree-thread { font-size: 13px; }
 .tree-thread.is-current { background: var(--raised); color: var(--bright); }
-.tree-thread span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
 .dot-ready { background: var(--you); }
 .dot-working { background: var(--work); }
 .dot-done { background: var(--done); opacity: 0.55; }
-.folder-acts { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 3px 8px 5px; font-size: 12px; }
-.folder-acts .link { color: var(--faint); }
-.folder-acts .link:hover { color: var(--text); }
+
+/* The lines: every child hangs on an elbow from its parent's rail, and the rail runs on
+   past every child but the last. */
+.kids { margin-left: 12px; }
+.kid { position: relative; padding-left: 13px; }
+.kid::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0;
+  width: 10px; height: 14px;
+  border-left: 1px solid var(--guide);
+  border-bottom: 1px solid var(--guide);
+}
+.kid:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 0; top: 14px; bottom: 0;
+  border-left: 1px solid var(--guide);
+}
+.folder-acts { display: flex; flex-wrap: wrap; gap: 0 12px; min-height: 28px; align-items: center; padding: 0 7px; font-size: 12.5px; }
+.folder-acts .link { color: var(--faint); text-decoration: none; }
+.folder-acts .link:hover { color: var(--text); text-decoration: underline; }
+.tree-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 14px 0 4px;
+  padding: 6px 7px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  color: var(--faint);
+  font: 650 11px/1 var(--sans);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.tree-all:hover, .tree-all.is-on { color: var(--muted); }
+.tree-all::after { content: ''; width: 5px; height: 5px; margin-left: auto; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 150ms ease; }
+.tree-all.is-on::after { transform: rotate(45deg); }
 .rail-lists .tree { border: 0; background: none; padding: 8px 0 12px; overflow: visible; }
+.rail-lists .tree-all { display: none; }
 
 /* ---------- the thread's place, under its name ---------- */
 
 .thread-path { flex-basis: 100%; display: flex; align-items: center; gap: 6px; margin-top: -3px; color: var(--faint); font-size: 12.5px; }
-.thread-path svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
 .thread-path b { font-weight: 550; color: var(--muted); }
 .btn-danger { color: var(--bad); border-color: rgba(255, 143, 143, 0.5); }
 .btn-danger:hover { background: rgba(255, 143, 143, 0.1); }
@@ -993,6 +1022,36 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .window-body h3.window-head { margin: 0 0 4px; font: 650 17px/1.3 var(--sans); color: var(--bright); }
 .window-body .pad { min-height: 16rem; }
 
+/* ---------- attached files ---------- */
+
+.attached { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.attached[hidden] { display: none; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-size { color: var(--faint); white-space: nowrap; }
+.chip.is-loading { color: var(--muted); border-style: dashed; }
+.chip.is-failed { color: var(--bad); border-color: rgba(255, 143, 143, 0.5); }
+.chip button { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; }
+.chip button:hover { background: var(--raised); color: var(--text); }
+a.chip { padding-right: 10px; }
+a.chip:hover { border-color: var(--muted); }
+.msg-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.btn-icon { padding: 5px 7px; }
+.btn-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.stage.is-dropping { outline: 2px dashed var(--you); outline-offset: -8px; }
+
 /* ---------- a card's reason line, the brain footer's buttons ---------- */
 
 .card-reason {
@@ -1048,9 +1107,10 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
   #rail-pin { display: none; }
   .rail-close { display: inline; margin-left: auto; font-size: 14px; padding: 6px 2px; }
   .item { padding: 11px 8px; }
-  .folder-row { padding: 9px 8px; font-size: 15px; }
-  .tree-thread { padding: 8px; font-size: 14.5px; }
-  .folder-acts { font-size: 13.5px; gap: 6px 16px; padding: 6px 8px 8px; }
+  .folder-row, .tree-thread { min-height: 40px; font-size: 15px; }
+  .kid::before { height: 20px; }
+  .kid:not(:last-child)::after { top: 20px; }
+  .folder-acts { font-size: 14px; gap: 0 18px; min-height: 40px; }
 
   .thread-head { padding: 8px 14px; min-height: 0; gap: 2px 10px; }
   .thread-title { flex-basis: 100%; font-size: 16px; }
@@ -1064,11 +1124,13 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
   .composer { padding: 0 12px max(10px, env(safe-area-inset-bottom)); }
   .composer textarea { font-size: 16px; padding: 12px 14px; max-height: 40dvh; }
   .composer-foot { gap: 6px; flex-wrap: wrap; }
-  .foot-space { display: none; }
+  .foot-space { display: block; flex: 1 1 100%; height: 0; }
   .pick-btn { height: 42px; }
   .pick-label { display: none; }
-  .btn-spin { min-height: 42px; margin-left: auto; }
-  .btn-send { min-height: 42px; flex: 1 1 100%; max-width: none; text-align: center; }
+  .btn-spin, #send-done { min-height: 42px; }
+  .btn-icon { min-height: 42px; min-width: 42px; justify-content: center; }
+  .btn-spin, #send-done { padding-left: 8px; padding-right: 8px; }
+  .btn-send { min-height: 42px; flex: 1; max-width: none; text-align: center; }
 
   .card { margin-top: 1vh; touch-action: pan-y; will-change: transform; }
   .card-actions { position: sticky; bottom: 0; padding: 10px 0; background: linear-gradient(to top, var(--ground) 70%, transparent); }

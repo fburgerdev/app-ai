@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   app: $('app'), lists: $('rail-lists'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
-  send: $('send'), spin: $('spin'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
+  send: $('send'), spin: $('spin'), sendDone: $('send-done'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   mood: $('mood'), model: $('model'), effort: $('effort'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
@@ -36,6 +36,7 @@ const S = {
   lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
+  attach: new Map(), // files picked for a message not sent yet, by thread ('new' for a new one)
   showDone: false,
 };
 
@@ -137,9 +138,9 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { 'brain-update': 'Questions', 'mail-reply': 'Mail to answer' };
+const KIND = { 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up' };
 function kindLabel(t) {
-  if (t.kind === 'card') return t.card?.type === 'chase' ? 'Chase' : 'Opportunity';
+  if (t.kind === 'card') return { chase: 'Chase', proposal: 'Proposal' }[t.card?.type] || 'Opportunity';
   return KIND[t.kind] || '';
 }
 
@@ -147,7 +148,7 @@ function kindLabel(t) {
 
 function railItem(t) {
   let sub = '';
-  if (t.state === 'working') sub = t.activity || 'Working';
+  if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = t.archived ? 'in the brain' : isUnfiled(t) ? 'not in the brain yet' : 'closed';
   const label = kindLabel(t);
@@ -197,12 +198,13 @@ function queueLists() {
 // ---------- the folder outline: areas, projects, and the threads in them ----------
 
 const svg = (markup) => { const t = document.createElement('template'); t.innerHTML = markup.trim(); return t.content.firstChild; };
-const FOLDER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="flap" d="M3 7.5A1.5 1.5 0 014.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0121 9.7v8.8A1.5 1.5 0 0119.5 20h-15A1.5 1.5 0 013 18.5v-11z"/></svg>';
 
 const wide = window.matchMedia('(min-width: 1100px)');
 const tree = {
   kept: new Set((() => { try { return JSON.parse(localStorage.getItem('tree-open') || '[]'); } catch { return []; } })()), // opened by a click
   hover: new Set(), // opened because the pointer rests on them
+  all: (() => { try { return localStorage.getItem('tree-all') === '1'; } catch { return false; } })(), // "All folders" kept open
+  allHover: false,
   timer: 0,
 };
 
@@ -227,49 +229,46 @@ function treeThread(t) {
     h('span', { class: `dot dot-${t.state}` }), h('span', {}, t.title));
 }
 
-function folderEl({ key, name, isArea, project, about, threads, kids = [], here }) {
+// One row of the outline with what hangs below it. `forced` rows belong to the open
+// thread's own branch: they are always open, and a click reads the project's note.
+function folderEl({ key, name, isArea, project, about, threads, kids = [], here, forced = false }) {
   const mine = threads || [];
   const below = [...mine, ...kids.flatMap((k) => k.threads || [])];
   const ready = below.filter((t) => t.state === 'ready').length;
   const busy = below.some((t) => t.state === 'working');
-  const open = tree.kept.has(key) || tree.hover.has(key) || here.open.has(key);
+  const open = forced || tree.kept.has(key) || tree.hover.has(key);
   const current = S.current ? S.threads.get(S.current) : null;
   const canMove = project != null && current && current.kind !== 'card' && (current.project || '') !== project;
   const row = h('button', {
-    class: 'folder-row', type: 'button', title: about || name, dataset: { key },
+    class: 'folder-row', type: 'button', title: forced && project ? `Read the note of ${name}` : about || name, dataset: { key },
     onclick: () => {
+      if (forced) { if (project) openPanel({ kind: 'note', link: project }); return; }
       if (open && tree.kept.has(key)) { tree.kept.delete(key); tree.hover.delete(key); } else tree.kept.add(key);
       try { localStorage.setItem('tree-open', JSON.stringify([...tree.kept])); } catch { /* private mode */ }
       renderTree();
     },
-  }, svg(FOLDER), h('span', { class: 'folder-name' }, name),
-  ready || busy ? h('span', { class: `folder-count${ready ? ' has-ready' : ''}${busy ? ' is-working' : ''}` }, ready ? String(ready) : '') : null);
-  const acts = project == null ? null : h('div', { class: 'folder-acts' },
-    project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, 'New thread') : null,
+  }, h('span', { class: 'folder-name' }, name),
+  !forced && (ready || busy) ? h('span', { class: `folder-count${ready ? ' has-ready' : ''}${busy ? ' is-working' : ''}` }, ready ? String(ready) : '') : null);
+  // On the open thread's branch only the folder it is in offers actions, not the area above it.
+  const acts = project == null || (forced && kids.length) ? null : h('div', { class: 'folder-acts' },
+    project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, '+ New thread') : null,
     canMove ? h('button', { class: 'link', type: 'button', onclick: () => moveToProject(current.id, project) }, 'Move this thread here') : null,
-    project ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
+    project && !forced ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
   );
-  return h('div', {
-    class: `folder${isArea ? ' is-area' : ''}${open ? ' is-open' : ''}${here.at === key ? ' is-here' : ''}`,
-    dataset: project == null ? {} : { drop: 'folder', project },
-  }, row, open ? h('div', { class: 'folder-kids' },
+  const below2 = open ? [
     ...openFirst(mine).map(treeThread),
     ...kids.map((k) => folderEl({ ...k, here })),
     acts && acts.children.length ? acts : null,
-    !mine.length && !kids.length && !(acts && acts.children.length) ? h('p', { class: 'tree-note' }, 'Empty') : null,
-  ) : null);
+  ].filter(Boolean) : [];
+  return h('div', {
+    class: `folder${isArea ? ' is-area' : ''}${open ? ' is-open' : ''}${here.at === key ? ' is-here' : ''}`,
+    dataset: project == null ? {} : { drop: 'folder', project },
+  }, row, below2.length ? h('div', { class: 'kids' }, below2.map((el) => h('div', { class: 'kid' }, el))) : null);
 }
 
-function treeNodes() {
+// The whole vault tree: every area with its projects, and "No project".
+function allFolders(here) {
   const t = S.projects;
-  if (!t) return [h('p', { class: 'tree-note' }, 'Reading the vault…')];
-  // The folder the open thread (or the thread being started) is in, and what leads to it.
-  const now = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
-  const path = now ? pathOf(now) : [];
-  const here = { at: now == null ? '' : now ? (path.length === 1 && t.groups.some((g) => g.isArea && g.name === now) ? `a:${now}` : `p:${now}`) : 'none', open: new Set() };
-  if (here.at) here.open.add(here.at); // the folder you are in shows what else is in it
-  if (path.length === 2) here.open.add(`a:${path[0]}`);
-  for (const g of t.groups) if (!g.isArea && g.projects.some((p) => p.name === now)) here.open.add(`a:${g.name}`);
   const nodes = (t.missing ? [] : t.groups).map((g) => folderEl({
     key: `a:${g.name}`, name: g.name, isArea: true, about: g.about,
     project: g.isArea ? g.name : null,
@@ -283,27 +282,63 @@ function treeNodes() {
     nodes.push(folderEl({ key: `p:${name}`, name, project: name, threads: threadsIn(name), here }));
   }
   nodes.push(folderEl({ key: 'none', name: 'No project', project: '', threads: threadsIn(''), here }));
-  if (t.missing) nodes.unshift(h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.'));
   return nodes;
+}
+
+// Just the branch the open thread is on: its area, its project, and the threads beside it.
+function branch(now, here) {
+  if (now == null) return [];
+  if (!now) return [folderEl({ key: 'none', name: 'No project', project: '', threads: threadsIn(''), here, forced: true })];
+  const path = pathOf(now);
+  const leaf = { key: here.at, name: now, project: now, threads: threadsIn(now), here, forced: true };
+  if (path.length === 2) return [folderEl({ key: `a:${path[0]}`, name: path[0], isArea: true, project: path[0], threads: [], kids: [leaf], here, forced: true })];
+  return [folderEl({ ...leaf, isArea: here.at.startsWith('a:') })];
+}
+
+function treeNodes({ everything = false } = {}) {
+  const t = S.projects;
+  if (!t) return [h('p', { class: 'tree-note' }, 'Reading the vault…')];
+  // The folder the open thread (or the thread being started) is in.
+  const now = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
+  const here = { at: now == null ? '' : !now ? 'none' : t.groups.some((g) => g.isArea && g.name === now) ? `a:${now}` : `p:${now}` };
+  if (everything) return t.missing ? [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')] : allFolders(here);
+  const showAll = tree.all || tree.allHover || Boolean(drag?.active);
+  const toggle = h('button', {
+    class: `tree-all${showAll ? ' is-on' : ''}`, type: 'button', title: 'Every area and project in the vault. Drag a thread onto one to file it there.',
+    onclick: () => { tree.all = !(tree.all || tree.allHover); tree.allHover = false; try { localStorage.setItem('tree-all', tree.all ? '1' : ''); } catch { /* private mode */ } renderTree(); },
+  }, 'All folders');
+  return [
+    h('p', { class: 'tree-label' }, now == null ? 'Not in a folder' : 'This thread is in'),
+    ...branch(now, here),
+    toggle,
+    ...(showAll ? (t.missing ? [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')] : allFolders(here)) : []),
+  ];
 }
 
 function renderTree(force = false) {
   if (drag?.active && !force) { drag.stale = true; return; }
-  if (wide.matches) els.tree.replaceChildren(h('p', { class: 'tree-label' }, 'Folders'), ...treeNodes());
+  if (wide.matches) els.tree.replaceChildren(...treeNodes());
   else if (S.tab === 'projects') renderRail();
 }
 
-// A folder opens while the pointer rests on it, and everything opened that way closes
-// again once the pointer has left the outline.
+// In the full tree a folder opens while the pointer rests on it, and "All folders" opens
+// while the pointer rests on that. Everything opened that way closes again once the
+// pointer has left the outline.
 els.tree.addEventListener('mouseover', (e) => {
-  const key = e.target.closest('.folder-row')?.dataset.key;
   clearTimeout(tree.timer);
+  if (e.target.closest('.tree-all')) {
+    if (!tree.all && !tree.allHover) tree.timer = setTimeout(() => { tree.allHover = true; renderTree(); }, 220);
+    return;
+  }
+  const key = e.target.closest('.folder-row')?.dataset.key;
   if (!key || tree.hover.has(key) || tree.kept.has(key)) return;
   tree.timer = setTimeout(() => { tree.hover.add(key); renderTree(); }, 170);
 });
 els.tree.addEventListener('mouseleave', () => {
   clearTimeout(tree.timer);
-  tree.timer = setTimeout(() => { if (tree.hover.size && !drag?.active) { tree.hover.clear(); renderTree(); } }, 400);
+  tree.timer = setTimeout(() => {
+    if ((tree.hover.size || tree.allHover) && !drag?.active) { tree.hover.clear(); tree.allHover = false; renderTree(); }
+  }, 450);
 });
 
 async function moveToProject(id, project) {
@@ -319,7 +354,7 @@ function renderRail() {
   if (drag?.active) { drag.stale = true; return; }
   const folders = S.tab === 'projects' && !wide.matches;
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes())] : queueLists()));
+  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes({ everything: true }))] : queueLists()));
   els.tabQueue.classList.toggle('is-on', !folders);
   els.tabProjects.classList.toggle('is-on', folders);
   if (!reducedMotion.matches && before.size) {
@@ -419,6 +454,8 @@ function beginDrag() {
   document.body.classList.add('is-dragging');
   drag.ghost = h('div', { class: 'drag-ghost' }, S.threads.get(drag.id)?.title || '');
   document.body.append(drag.ghost);
+  // The outline shows every folder while a thread is in the air, so there is somewhere to drop it.
+  if (S.threads.get(drag.id)?.kind !== 'card') renderTree(true);
   if (drag.touch) navigator.vibrate?.(12);
 }
 
@@ -451,7 +488,8 @@ async function endDrag(drop) {
   if (!d) return;
   clearTimeout(d.timer);
   clearTimeout(d.spring);
-  if (tree.hover.size && !els.tree.matches(':hover')) { tree.hover.clear(); d.stale = true; }
+  if (!els.tree.matches(':hover')) tree.hover.clear();
+  if (d.active) d.stale = true;
   d.item.classList.remove('is-dragged');
   d.ghost?.remove();
   document.body.classList.remove('is-dragging');
@@ -728,7 +766,10 @@ function messageEl(threadId, m) {
   }
   if (m.role === 'user') {
     return h('article', { class: 'msg msg-you' },
-      h('div', { class: 'msg-body' }, renderMarkdown(m.text)),
+      m.text ? h('div', { class: 'msg-body' }, renderMarkdown(m.text)) : null,
+      m.files?.length ? h('div', { class: 'msg-files' }, m.files.map((f) => h('a', {
+        class: 'chip', href: `/api/threads/${threadId}/upload?name=${encodeURIComponent(f.name)}`, target: '_blank', rel: 'noopener', title: `Open ${f.name}`,
+      }, h('span', { class: 'chip-name' }, f.name), h('span', { class: 'chip-size' }, fileSize(f.size))))) : null,
       h('time', { class: 'msg-time' }, stamp(m.ts)),
     );
   }
@@ -780,7 +821,7 @@ const nearBottom = () => els.scroller.scrollHeight - els.scroller.scrollTop - el
 // Where the thread is filed, as a line under its name.
 function pathEl(project) {
   const path = pathOf(project);
-  return h('p', { class: 'thread-path', title: 'Drag the thread onto a folder to file it somewhere else' }, svg(FOLDER),
+  return h('p', { class: 'thread-path', title: 'Drag the thread onto a folder to file it somewhere else' },
     path.length ? path.flatMap((name, i) => [i ? ' › ' : null, i === path.length - 1 ? h('b', {}, name) : name]) : 'No project');
 }
 
@@ -852,16 +893,65 @@ function renderComposer() {
   // A spin-off needs a thread to start from.
   els.spin.hidden = !t;
   els.spin.textContent = phone.matches ? 'Spin off' : 'Send into spin-off';
+  let verb = 'Send';
   if (!t) {
     els.input.placeholder = 'What should Claude work on?';
-    els.send.textContent = 'Start';
+    verb = 'Start';
   } else if (t.state === 'working') {
     els.input.placeholder = 'Add to this thread. Claude gets it when this turn ends.';
-    els.send.textContent = 'Add';
+    verb = 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.' : 'Reply.';
-    els.send.textContent = 'Send';
   }
+  els.send.textContent = verb;
+  els.sendDone.textContent = `${verb} and done`;
+  renderAttached();
+}
+
+// ---------- files attached to the message being written ----------
+
+const fileSize = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+const attachKey = () => S.current || 'new';
+const attachedNow = () => S.attach.get(attachKey()) || [];
+
+function renderAttached() {
+  const list = attachedNow();
+  els.attached.hidden = !list.length;
+  els.attached.replaceChildren(...list.map((f) => h('span', { class: `chip${f.id ? '' : f.error ? ' is-failed' : ' is-loading'}`, title: f.error || f.name },
+    h('span', { class: 'chip-name' }, f.name),
+    h('span', { class: 'chip-size' }, f.error ? 'failed' : f.id ? fileSize(f.size) : 'uploading…'),
+    h('button', { type: 'button', 'aria-label': `Remove ${f.name}`, onclick: () => { S.attach.set(attachKey(), attachedNow().filter((x) => x !== f)); renderAttached(); } }, '×'),
+  )));
+}
+
+const asBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+  reader.onerror = () => reject(new Error('The file could not be read.'));
+  reader.readAsDataURL(file);
+});
+
+// Each file is uploaded as soon as it is picked and waits for the message to be sent.
+function addFiles(files) {
+  const key = attachKey();
+  for (const file of files) {
+    const entry = { name: file.name || 'pasted file', size: file.size, id: '', error: '' };
+    S.attach.set(key, [...(S.attach.get(key) || []), entry]);
+    if (file.size > 25 * 1024 * 1024) { entry.error = 'Larger than 25 MB'; continue; }
+    asBase64(file)
+      .then((data) => api('POST', '/api/uploads', { name: entry.name, data }))
+      .then((out) => { entry.id = out.id; entry.name = out.name; entry.size = out.size; })
+      .catch((err) => { entry.error = err.message; toast(`${entry.name}: ${err.message}`); })
+      .finally(() => { if (attachKey() === key) renderAttached(); });
+  }
+  renderAttached();
+}
+
+// What a message carries: the uploaded files' ids. Null while one is still on its way.
+function filesToSend() {
+  const list = attachedNow().filter((f) => !f.error);
+  if (list.some((f) => !f.id)) { toast('A file is still uploading. One moment.'); return null; }
+  return list.map((f) => f.id);
 }
 
 function renderEmpty() {
@@ -892,21 +982,25 @@ async function renderCard(t) {
   if (t.id !== S.current) return;
   const card = t.card || {};
   const decided = t.state !== 'ready';
+  const work = card.channel === 'thread'; // a proposal: accepting starts a thread
   const head = h('div', { class: 'card-head' },
     h('p', { class: 'card-why' }, card.why || ''),
-    h('p', { class: 'card-to' }, card.channel === 'linkedin' ? 'LinkedIn note to ' : card.channel === 'mail' ? 'Mail to ' : 'Message to ', h('strong', {}, card.to || 'someone'),
-      card.link ? [' (', h('a', { href: card.link, target: '_blank', rel: 'noopener noreferrer' }, 'open their page'), ')'] : null),
+    work
+      ? h('p', { class: 'card-to' }, 'Claude proposes to do this in a thread', t.project ? [' for ', h('strong', {}, t.project)] : null, '. The text is the brief; change it if you like.')
+      : h('p', { class: 'card-to' }, card.channel === 'linkedin' ? 'LinkedIn note to ' : card.channel === 'mail' ? 'Mail to ' : 'Message to ', h('strong', {}, card.to || 'someone'),
+        card.link ? [' (', h('a', { href: card.link, target: '_blank', rel: 'noopener noreferrer' }, 'open their page'), ')'] : null),
   );
   const decide = async (outcome) => {
     try {
       await flush();
-      if (outcome === 'accepted') {
+      if (outcome === 'accepted' && !work) {
         await navigator.clipboard.writeText(area.value).catch(() => {});
         if (card.link) window.open(card.link, '_blank', 'noopener');
       }
       const out = await api('POST', `/api/threads/${t.id}/card`, { outcome, reason: reason.value });
       S.threads.set(t.id, out.thread);
-      toast(outcome === 'accepted' ? 'Accepted. The text is copied.' : 'Declined.');
+      if (out.started) S.threads.set(out.started.id, out.started);
+      toast(outcome !== 'accepted' ? 'Declined.' : work ? 'Accepted. Claude has started on it.' : 'Accepted. The text is copied.');
       advance(t.id);
     } catch (err) { toast(err.message); }
   };
@@ -937,7 +1031,7 @@ async function renderCard(t) {
   }
   const buttons = decided ? h('p', { class: 'card-done' }, `You ${card.outcome || 'decided'} this${card.how ? ` (${card.how})` : ''}.${card.reason ? ` You wrote: “${card.reason}”` : ''}`)
     : h('div', { class: 'card-actions' },
-      parseMail(raw) ? null : h('button', { class: 'btn btn-send', type: 'button', onclick: () => decide('accepted') }, 'Accept and copy ', kbd('Y')),
+      parseMail(raw) ? null : h('button', { class: 'btn btn-send', type: 'button', onclick: () => decide('accepted') }, work ? 'Accept and start ' : 'Accept and copy ', kbd('Y')),
       h('button', { class: 'btn', type: 'button', onclick: () => decide('declined') }, 'Decline ', kbd('N')),
       h('span', { class: 'card-hint' }, parseMail(raw) ? 'Putting it in Gmail or sending it accepts the card.' : phone.matches ? 'Edit the text first if you like. Swipe right to accept, left to decline.' : 'Edit the text first if you like. While typing: Ctrl+Enter accepts.'),
     );
@@ -1072,25 +1166,34 @@ async function openPad() {
   area.setSelectionRange(area.value.length, area.value.length);
 }
 
-async function send() {
+// `done` is "send and done": the thread closes by itself once Claude has answered.
+async function send(done = false) {
   const text = els.input.value.trim();
-  if (!text || S.pad) return;
+  if (S.pad) return;
+  const files = filesToSend();
+  if (!files || (!text && !files.length)) return;
   const from = S.current;
   els.send.disabled = true;
+  els.sendDone.disabled = true;
   try {
-    if (from) await api('POST', `/api/threads/${from}/messages`, { text });
-    else {
-      const out = await api('POST', '/api/threads', { text, project: S.newProject });
+    if (from) {
+      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done });
+      S.threads.set(from, out.thread);
+    } else {
+      const out = await api('POST', '/api/threads', { text, files, done, project: S.newProject });
       S.threads.set(out.thread.id, out.thread);
       S.newProject = '';
     }
     els.input.value = '';
     S.drafts.delete(from || 'new');
+    S.attach.delete(from || 'new');
+    if (done) toast('Sent. The thread closes when Claude has answered.');
     advance(from);
   } catch (err) {
     toast(err.message);
   } finally {
     els.send.disabled = false;
+    els.sendDone.disabled = false;
   }
 }
 
@@ -1100,14 +1203,17 @@ async function spinOff() {
   const text = els.input.value.trim();
   const from = S.current;
   if (!from || S.pad) return;
-  if (!text) { toast('Write what the spin-off should do first.'); return; }
+  const files = filesToSend();
+  if (!files) return;
+  if (!text && !files.length) { toast('Write what the spin-off should do first.'); return; }
   els.spin.disabled = true;
   try {
-    const out = await api('POST', `/api/threads/${from}/spinoff`, { text });
+    const out = await api('POST', `/api/threads/${from}/spinoff`, { text, files });
     S.threads.set(out.thread.id, out.thread);
     S.threads.set(out.from.id, out.from);
     els.input.value = '';
     S.drafts.delete(from);
+    S.attach.delete(from);
     toast(`Spun off: “${clip(out.thread.title, 48)}”`);
     advance(from);
   } catch (err) {
@@ -1431,6 +1537,7 @@ async function fillQueue(body, token) {
 function fillKeys(body) {
   const rows = [
     ['Enter', 'Send, then open what the queue puts next'],
+    ['Ctrl Enter', 'Send and done: the thread closes by itself once Claude has answered'],
     ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
     ['Shift Enter', 'New line'],
     ['Alt N', 'New thread'],
@@ -1530,11 +1637,31 @@ els.input.addEventListener('input', autosize);
 els.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    if (e.altKey) spinOff(); else send();
+    if (e.altKey) spinOff(); else send(e.ctrlKey);
   }
 });
 els.composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
 els.spin.addEventListener('click', spinOff);
+els.sendDone.addEventListener('click', () => send(true));
+els.attach.addEventListener('click', () => els.fileInput.click());
+els.fileInput.addEventListener('change', () => { addFiles([...els.fileInput.files]); els.fileInput.value = ''; });
+els.input.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+// Files dropped anywhere on the thread are attached to the message being written.
+const stage = document.querySelector('.stage');
+const carriesFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files') && !els.composer.hidden;
+stage.addEventListener('dragover', (e) => { if (carriesFiles(e)) { e.preventDefault(); stage.classList.add('is-dropping'); } });
+stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) stage.classList.remove('is-dropping'); });
+stage.addEventListener('drop', (e) => {
+  stage.classList.remove('is-dropping');
+  if (!carriesFiles(e)) return;
+  e.preventDefault();
+  addFiles([...e.dataTransfer.files]);
+});
 els.openScratch.addEventListener('click', () => openPad());
 $('new-thread').addEventListener('click', () => openNew());
 els.tabQueue.addEventListener('click', () => setTab('queue'));
