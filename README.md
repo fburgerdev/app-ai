@@ -136,16 +136,14 @@ These two buttons are the only things in the app that write the vault, and they 
 
 ## Projects and areas
 
-The right side lists every project from `Brain/Projects/Projects Index.md`, and under them the areas. It shows projects, not threads.
+The outline on the right is an overview of projects and areas, read from the vault. It shows no threads; those are in the inbox.
 
-- **Order:** the project you dealt with most recently is on top. "Dealt with" is your latest message in one of its threads, or the last change to its note in the vault.
-- **Paused projects** (`Status: paused` or `blocked` in the project's note) are grey and at the bottom, in the same order. To pause one, say so in a thread and update the brain.
-- **A dot** marks a project that has open threads. Nothing shows whether Claude is working on them.
-- **Areas** follow, those without a project grey and last.
-- **Click** a project or area to see its open threads, start a new one, or read its note. On an area, "+ New project?" starts a thread in which Claude proposes projects for it.
-- **Drop a thread** on a project or area to file it there.
-- **Start threads**, at the bottom: one thread on every active project (where it stands, the next step, what Claude could do now), on every paused project (has what it waits for happened?), or per area about new projects. Each asks once more before it starts, and skips what already has an open thread.
-- When the window is too narrow (and on the phone), this is the **Folders** tab in the inbox.
+- **Projects**, most recently dealt with first (your latest message in one of its threads, or the last change to its note). Paused and blocked projects (`Status:` in the project's note) are grey and at the bottom, in the same order.
+- **Areas** the same way; an area with no project right now is grey.
+- A dot after a name means it has open threads. The project of the open thread is highlighted. A long name runs onto a second line; the full name is in the tooltip.
+- Hover a row for **+**: a new thread on that project or area, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
+- Next to the headings: **+ active** and **+ paused** start one thread on every active or paused project. **+ project ideas** starts one per area about which project to start there. Each asks once more, and skips what already has an open thread.
+- When the window is too narrow for the outline (and on the phone), it is the **Folders** tab in the inbox.
 
 ## Scratchpad
 
