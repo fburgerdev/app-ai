@@ -20,6 +20,7 @@ const COMMANDS = [
   ['send', /^(send|send it|send that|send this|senden|abschicken|schick es ab|schicken)$/],
   ['repeat', /^(repeat|repeat that|again|say that again|say again|nochmal|noch mal|wiederholen|wiederhole)$/],
   ['later', /^(later|skip|skip it|skip this|next|next one|next thread|später|weiter|überspringen|nächster|nächstes)$/],
+  ['more', /^(more|read (it )?all|read the whole (thing|reply)|the whole thing|in full|mehr|alles vorlesen|ganz vorlesen)$/],
   ['done', /^(done|mark (it |that |this )?(as )?done|close it|close this|erledigt)$/],
   ['cancel', /^(cancel|scratch that|start over|delete that|abbrechen|verwerfen|lösch das)$/],
   ['new', /^((start |create |open |make )?(a )?new (thread|chat|conversation)|neuer (thread|chat)|neuen (thread|chat)( starten| anfangen)?)$/],

@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#1b1d2a">
-  <title>Walk mode</title>
+  <title>Talk</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/fonts/instrument-sans/wght.css">
@@ -14,35 +14,102 @@
 </head>
 <body>
   <main class="walk">
-    <header class="walk-head">
-      <a href="/" class="back">Back to the inbox</a>
-      <label class="lang">Language
+    <header class="bar">
+      <a href="/" class="back" aria-label="Back to the inbox">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>Inbox
+      </a>
+      <span id="state" class="chip">Connecting</span>
+      <button id="open-settings" class="icon" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+      </button>
+    </header>
+
+    <section class="now" aria-live="polite">
+      <span class="now-label">Open thread</span>
+      <strong id="now-title" class="now-title">None</strong>
+      <span id="now-counts" class="now-counts"></span>
+    </section>
+
+    <div id="log" class="log" aria-live="polite"></div>
+    <p id="live" class="live" hidden></p>
+
+    <div class="chips" aria-label="Quick commands">
+      <button type="button" data-say="next">Next</button>
+      <button type="button" data-say="done">Done</button>
+      <button type="button" data-say="repeat">Repeat</button>
+      <button type="button" data-say="more">Read all</button>
+      <button type="button" data-say="new thread">New thread</button>
+    </div>
+
+    <form id="type" class="type" autocomplete="off">
+      <input id="typed" type="text" placeholder="Or type to the host…" aria-label="Type to the host" enterkeyhint="send">
+      <button type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+
+    <div class="dock">
+      <button id="mic" class="mic" type="button" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
+        <span id="mic-label">Talk</span>
+      </button>
+      <button id="lock" class="lock" type="button">Lock for the pocket</button>
+    </div>
+    <p id="note" class="note" hidden></p>
+  </main>
+
+  <dialog id="settings" class="sheet">
+    <form method="dialog" class="sheet-head">
+      <h2>Voice settings</h2>
+      <button class="icon" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </form>
+    <div class="sheet-body">
+      <label class="row">I speak
         <select id="lang">
           <option value="en-US">English</option>
+          <option value="en-GB">English (UK)</option>
           <option value="de-DE">Deutsch</option>
         </select>
       </label>
-    </header>
-
-    <p id="state" class="state">Tap to start</p>
-    <p id="said" class="said"></p>
-    <p id="heard" class="heard"></p>
-
-    <button id="talk" class="talk" type="button">Start</button>
-
-    <div class="keys">
-      <button type="button" data-say="send">Send</button>
-      <button type="button" data-say="repeat">Repeat</button>
-      <button type="button" data-say="later">Later</button>
-      <button type="button" data-say="done">Done</button>
-      <button type="button" data-say="cancel">Cancel</button>
-      <button type="button" id="lock">Lock for the pocket</button>
+      <label class="row">Take what I said after a pause of
+        <select id="pause">
+          <option value="1500">1.5 seconds</option>
+          <option value="2500">2.5 seconds</option>
+          <option value="4000">4 seconds</option>
+          <option value="6000">6 seconds</option>
+        </select>
+      </label>
+      <label class="row">Read answers aloud
+        <input id="aloud" type="checkbox" checked>
+      </label>
+      <label class="row">Voice
+        <select id="voice"></select>
+      </label>
+      <label class="row">Speed
+        <input id="rate" type="range" min="0.8" max="1.5" step="0.05" value="1.05">
+      </label>
+      <label class="row">Sounds when something is taken
+        <input id="sounds" type="checkbox" checked>
+      </label>
+      <label class="row">I am wearing headphones
+        <input id="headphones" type="checkbox">
+      </label>
+      <p class="hint">With headphones the app keeps listening while it speaks, so you can talk over it to stop it. Without them it would hear itself.</p>
+      <label class="col">Names and words I use
+        <textarea id="words" rows="4" placeholder="KStW, Studierendenwerk, Lutz…" spellcheck="false"></textarea>
+      </label>
+      <p class="hint">One per line or separated by commas. The host uses them to repair what the phone mishears. Your project names are included by themselves.</p>
+      <button id="fresh" class="plain" type="button">Start a new conversation with the host</button>
+      <details class="details">
+        <summary>What happened (for finding problems)</summary>
+        <pre id="events"></pre>
+        <button id="copy-events" class="plain" type="button">Copy</button>
+      </details>
     </div>
-    <p id="note" class="note"></p>
-  </main>
+  </dialog>
 
   <div id="shield" class="shield" hidden>
-    <p>Locked. You can keep talking.</p>
+    <p id="shield-state">Locked. You can keep talking.</p>
     <button id="unlock" type="button">Hold to unlock</button>
   </div>
 

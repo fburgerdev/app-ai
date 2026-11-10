@@ -285,11 +285,23 @@ test('walk mode: the host on the page, with a screen to tell and a connection th
   const seen = one.heard.findLast((m) => m.type === 'text').seq;
   one.ws.close();
   await sleep(100);
-  const two = await connect({ resume: true, seen: seen - 1 });
+  const two = await connect({ resume: true, sid: first.sid, seen: seen - 1 });
   const again = await until(async () => two.heard.find((m) => m.type === 'text'), 'what was missed is said again');
   assert.equal(again.seq, seen);
   assert.match(again.token, /Noted/);
   assert.ok(!two.heard.some((m) => m.type === 'text' && /waiting\./.test(m.token)), 'no second greeting');
+
+  // A page opened anew is shown the last thing said, marked as not to be read out.
+  const three = await connect({ resume: true });
+  const shown = await until(async () => three.heard.find((m) => m.type === 'text'), 'last line shown');
+  assert.equal(shown.replay, true);
+  assert.equal(shown.seq, seen);
+  three.ws.close();
+  await sleep(100);
+  const four = await connect({ resume: true, sid: first.sid, seen });
+  two.ws.close();
+  two.ws = four.ws;
+  two.heard = four.heard;
 
   two.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'goodbye', last: true }));
   await until(async () => two.heard.find((m) => m.type === 'end'), 'conversation ended');

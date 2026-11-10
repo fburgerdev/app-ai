@@ -218,18 +218,26 @@ export function attachVoice(server, cfg, allowedHosts) {
         walk.send = send;
         walk.lostAt = 0;
         walk.session.setLanguage(lang);
-        for (const item of walk.outbox) if (item.seq > (Number(msg.seen) || 0)) send({ type: 'text', token: item.token, last: true, seq: item.seq });
+        // A page that knows this conversation gets what it missed, to be read out. A page
+        // that does not (opened anew) gets the last thing said, to show where things are.
+        const seen = msg.sid === walk.sid && Number.isFinite(msg.seen) ? msg.seen : null;
+        if (seen === null) {
+          const lastSaid = walk.outbox.at(-1);
+          if (lastSaid) send({ type: 'text', token: lastSaid.token, last: true, seq: lastSaid.seq, sid: walk.sid, replay: true });
+        } else {
+          for (const item of walk.outbox) if (item.seq > seen) send({ type: 'text', token: item.token, last: true, seq: item.seq, sid: walk.sid });
+        }
         walk.session.status();
         return walk.session;
       }
       if (walk) { walk.session.ended = true; sessions.delete(walk.session); }
-      const mine = { session: null, outbox: [], seq: 0, send, lostAt: 0 };
+      const mine = { session: null, outbox: [], seq: 0, send, lostAt: 0, sid: crypto.randomBytes(6).toString('hex') };
       mine.session = new HostSession({
         say: (text) => {
           mine.seq += 1;
           mine.outbox.push({ seq: mine.seq, token: text });
           if (mine.outbox.length > 30) mine.outbox.shift();
-          mine.send({ type: 'text', token: text, last: true, seq: mine.seq });
+          mine.send({ type: 'text', token: text, last: true, seq: mine.seq, sid: mine.sid });
         },
         hangUp: () => setTimeout(() => mine.send({ type: 'end' }), 400),
         notify: (message) => mine.send(message),
