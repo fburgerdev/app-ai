@@ -1,0 +1,9 @@
+[Unit]
+Description=Check GitHub for a new version of the inbox app
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

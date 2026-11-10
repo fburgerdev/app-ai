@@ -1,0 +1,6 @@
+[Unit]
+Description=Update the inbox app from GitHub
+
+[Service]
+Type=oneshot
+ExecStart=%h/app-ai/deploy/update.sh

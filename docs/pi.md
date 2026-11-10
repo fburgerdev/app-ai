@@ -74,7 +74,27 @@ sudo loginctl enable-linger $USER
 
 The last line lets it run without you being logged in, and start after a reboot. `systemctl --user status app-ai` shows whether it runs; `journalctl --user -u app-ai -f` shows its log.
 
-### 6. Open it
+### 6. Let it update itself
+
+So that a change pushed to GitHub reaches the Pi without you:
+
+```
+chmod +x ~/app-ai/deploy/update.sh
+cp ~/app-ai/deploy/app-ai-update.service ~/app-ai/deploy/app-ai-update.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now app-ai-update.timer
+```
+
+Every five minutes the Pi asks GitHub whether there is something new. If there is, it waits until Claude is not working on anything (an hour at most), pulls, installs and restarts the app. If the new version does not start, it goes back to the one that ran before and leaves the new one alone until GitHub changes again.
+
+- What it did: `cat ~/.local/state/app-ai-update/update.log`
+- Which version runs: **Connections** in the app shows it.
+- Update right now: `systemctl --user start app-ai-update`
+- Switch it off: `systemctl --user disable --now app-ai-update.timer`
+
+It needs the Pi's copy of the app to be untouched: do not edit files in `~/app-ai` on the Pi. Your settings live in `~/.local/share/app-ai`, outside it.
+
+### 7. Open it
 
 On the laptop or phone: the address from step 3. Install it as an app from the browser menu (on the phone: "Add to Home Screen").
 
@@ -88,4 +108,4 @@ Walk mode needs the app reachable from your phone over https. The Tailscale part
 - **Gmail and Calendar** need the Pi's address as a second redirect URI and one more "Connect Google", done from the Pi's address (docs/google.md, step 5).
 - **Your threads so far stay on the laptop.** To take them along, copy the `threads` and `extractions` folders from the laptop's data folder (`%LOCALAPPDATA%\app-ai`) to `~/.local/share/app-ai/` before the first start. Claude's own session files do not move with them; each thread then carries on from the app's transcript the first time you reply.
 - **Run it in one place.** Stop using the laptop's copy once the Pi runs, or the two will hold different threads. The brain itself is safe either way, since both only push through GitHub.
-- **Updating the app:** `cd ~/app-ai && git pull && npm install && systemctl --user restart app-ai`.
+- **Updating the app:** by itself, once step 6 is done. By hand: `cd ~/app-ai && git pull && npm install && systemctl --user restart app-ai`.

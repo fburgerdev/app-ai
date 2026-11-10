@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import express from 'express';
 import { loadConfig, log, DATA_DIR } from './config.js';
 import * as brain from './brain.js';
@@ -97,8 +97,22 @@ function connections(req) {
     voice: voiceStatus(config),
     remote: { local: isLocal(req), allowedHosts: config.allowedHosts || [] },
     data: datasync.dataSyncStatus(),
+    app: version,
   };
 }
+
+// Which version runs and whether Claude is in the middle of something. The Pi's update
+// script asks this before it restarts the app.
+const version = (() => {
+  try {
+    const out = execFileSync('git', ['log', '-1', '--format=%h|%cI|%s'], { cwd: ROOT, encoding: 'utf8', windowsHide: true }).trim().split('|');
+    return { commit: out[0], date: out[1], subject: out.slice(2).join('|') };
+  } catch {
+    return { commit: '', date: '', subject: '' };
+  }
+})();
+const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running;
+app.get('/api/health', (req, res) => res.json({ ok: true, busy: Boolean(isBusy()), version: version.commit }));
 
 app.get('/api/state', (req, res) => {
   cards.maybeMakeCards();

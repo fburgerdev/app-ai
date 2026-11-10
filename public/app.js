@@ -1030,6 +1030,11 @@ async function showConnections() {
       ? `Threads, water levels, pads, the mood line and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
       : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
+  if (c.app?.commit) {
+    body.append(block('App version', { text: c.app.commit },
+      note(`${c.app.subject}${c.app.date ? ` (${stamp(Date.parse(c.app.date))})` : ''}.`)));
+  }
+
   const v = c.voice;
   body.append(block('Calling the inbox', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
     note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
