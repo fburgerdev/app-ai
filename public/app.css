@@ -140,13 +140,13 @@ kbd {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 0px minmax(0, 1fr) 0% var(--tree-w, 236px);
+  grid-template-columns: 0px minmax(0, 1fr) 0% var(--tree-w, 264px);
   grid-template-areas: 'rail stage panel tree';
   transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
 }
-.app.has-panel { grid-template-columns: 0px minmax(0, 1fr) 44% var(--tree-w, 236px); }
-.app.rail-pinned { grid-template-columns: 292px minmax(0, 1fr) 0% var(--tree-w, 236px); }
-.app.rail-pinned.has-panel { grid-template-columns: 292px minmax(0, 1fr) 44% var(--tree-w, 236px); }
+.app.has-panel { grid-template-columns: 0px minmax(0, 1fr) 44% var(--tree-w, 264px); }
+.app.rail-pinned { grid-template-columns: 292px minmax(0, 1fr) 0% var(--tree-w, 264px); }
+.app.rail-pinned.has-panel { grid-template-columns: 292px minmax(0, 1fr) 44% var(--tree-w, 264px); }
 .stage { grid-area: stage; }
 .panel { grid-area: panel; }
 .tree { grid-area: tree; }
@@ -856,56 +856,73 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
   border-left: 1px solid var(--line);
   padding: 4px 8px 24px;
 }
-.tree-label { margin: 14px 8px 6px; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.tree-head { display: flex; align-items: center; gap: 4px; margin: 14px 4px 6px 8px; }
+.tree-label { flex: 1; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
 .tree-note { margin: 2px 8px; color: var(--faint); font-size: 12.5px; }
+.out-start {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  font: 600 11.5px/1.2 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.out-start:hover { color: var(--text); border-color: var(--line); }
+.out-start:disabled { opacity: 0.4; cursor: default; border-color: transparent; color: var(--faint); }
+.out-start.is-armed { color: var(--you-ink); background: var(--you); border-color: var(--you); }
+
+/* The list hangs on one rail at the left, with a tick for every entry. */
+.out-list { --guide: #454b6b; margin-left: 10px; }
+.out { position: relative; padding-left: 14px; }
+.out::before { content: ''; position: absolute; left: 0; top: 0; width: 9px; height: 15px; border-left: 1px solid var(--guide); border-bottom: 1px solid var(--guide); }
+.out:not(:last-child)::after { content: ''; position: absolute; left: 0; top: 15px; bottom: 0; border-left: 1px solid var(--guide); }
 .out-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
-  padding: 3px 8px;
+  min-height: 30px;
+  padding: 6px 40px 6px 7px;
   border: 0;
   border-radius: 6px;
   background: none;
   color: var(--text);
   font-size: 13.5px;
+  line-height: 1.3;
   text-align: left;
   cursor: pointer;
 }
-.out-row:hover, .out.is-open > .out-row { background: var(--panel); }
-.out-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; }
-.out-mark.has-open { background: var(--you); }
-.out-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.out-when { flex: none; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.out:hover > .out-row { background: var(--panel); }
+/* A long name runs onto a second line and is cut after that; the full name is in the tooltip. */
+.out-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.out-mark { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--you); vertical-align: 2px; }
+.out-when { position: absolute; right: 7px; top: 8px; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.out-plus {
+  position: absolute;
+  right: 4px; top: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px; height: 22px;
+  padding: 0 0 1px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+  font: 500 15px/1 var(--sans);
+  cursor: pointer;
+  opacity: 0;
+}
+.out:hover > .out-plus, .out-plus:focus-visible { opacity: 1; }
+.out:hover > .out-row .out-when { visibility: hidden; }
+.out-plus:hover { background: var(--you); border-color: var(--you); color: var(--you-ink); }
 .out.is-grey > .out-row { color: var(--faint); }
-.out.is-grey .out-when { opacity: 0.7; }
-.out.is-here > .out-row { color: var(--bright); font-weight: 600; box-shadow: inset 2px 0 0 var(--you); }
+.out.is-grey .out-mark { opacity: 0.6; }
+.out.is-here > .out-row { color: var(--you); font-weight: 600; }
 .out.is-drop > .out-row { background: rgba(245, 183, 92, 0.12); box-shadow: inset 0 0 0 1.5px var(--you); color: var(--bright); }
-.out-body { margin: 1px 0 6px 11px; padding: 2px 0 2px 10px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
-.out-about { margin: 2px 6px 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
-.out-thread {
-  width: 100%;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 5px;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.out-thread:hover { background: var(--panel); color: var(--text); }
-.out-thread.is-current { color: var(--bright); background: var(--raised); }
-.out-acts, .out-bulk { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 4px 6px; font-size: 12.5px; }
-.out-bulk { flex-direction: column; gap: 6px; padding: 0 8px; }
-.out-acts .link, .out-bulk .link { color: var(--muted); text-decoration: none; }
-.out-acts .link:hover, .out-bulk .link:hover { color: var(--text); text-decoration: underline; }
-.out-bulk .link:disabled { color: var(--faint); opacity: 0.5; cursor: default; text-decoration: none; }
-.out-bulk .link.is-armed { color: var(--you); font-weight: 600; }
+@media (hover: none) { .out-plus { opacity: 1; } .out-row .out-when { visibility: hidden; } }
 .rail-lists .tree { border: 0; background: none; padding: 0 0 12px; overflow: visible; }
 
 /* ---------- the thread's place, under its name ---------- */
@@ -1026,6 +1043,63 @@ a.chip:hover { border-color: var(--muted); }
 .btn-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .stage.is-dropping { outline: 2px dashed var(--you); outline-offset: -8px; }
 
+/* ---------- a proposal's brief: formatted to read, plain to edit ---------- */
+
+.brief {
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--quote);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: 14.5px/1.5 var(--sans);
+  cursor: text;
+}
+.brief:hover, .brief:focus-visible { border-color: var(--muted); border-left-color: var(--quote); outline: none; }
+.brief, .brief * { font-family: var(--sans); font-size: 14.5px; line-height: 1.5; }
+.brief * { margin: 0; max-width: 62ch; }
+.brief > * > * + *, .brief > * + * { margin-top: 8px; }
+.brief strong { color: var(--bright); font-weight: 600; }
+.brief ul, .brief ol { padding-left: 18px; color: var(--muted); }
+.brief li + li { margin-top: 3px; }
+.brief li::marker { color: var(--faint); }
+.card-text.is-brief { font: 14.5px/1.5 var(--sans); }
+.card-text[hidden], .brief[hidden] { display: none; }
+
+/* ---------- the brain button, with the app's mark ---------- */
+
+.mark { display: block; width: 26px; height: 26px; flex: none; }
+.brain-go {
+  --mark-ground: #171924;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 14px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--sunken);
+  color: var(--bright);
+  font: 650 14px/1 var(--sans);
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+.brain-go { --mark-ground: var(--sunken); }
+.brain-go:hover:not(:disabled) { border-color: var(--quote); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(195, 166, 255, 0.16); }
+.brain-go:hover:not(:disabled) .mark circle { animation: fire 900ms ease-in-out infinite; }
+.brain-go:active:not(:disabled) { transform: none; }
+.brain-go:disabled { color: var(--faint); cursor: default; }
+.brain-go:disabled .mark { filter: saturate(0.15); opacity: 0.55; }
+.mark-live { display: inline-block; margin-right: 8px; vertical-align: -7px; --mark-ground: var(--rail); }
+.mark-live .mark circle { animation: fire 900ms ease-in-out infinite; }
+.mark circle { transform-box: fill-box; transform-origin: center; }
+.mark circle:nth-of-type(2) { animation-delay: 100ms; } .mark circle:nth-of-type(3) { animation-delay: 200ms; }
+.mark circle:nth-of-type(4) { animation-delay: 300ms; } .mark circle:nth-of-type(5) { animation-delay: 400ms; }
+.mark circle:nth-of-type(6) { animation-delay: 500ms; } .mark circle:nth-of-type(7) { animation-delay: 600ms; }
+.mark circle:nth-of-type(8) { animation-delay: 700ms; } .mark circle:nth-of-type(9) { animation-delay: 800ms; }
+@keyframes fire { 0%, 60%, 100% { transform: scale(1); } 30% { transform: scale(1.35); } }
+.brain-btns { align-items: center; }
+
 /* ---------- a card's reason line, the brain footer's buttons ---------- */
 
 .card-reason {
@@ -1081,9 +1155,11 @@ a.chip:hover { border-color: var(--muted); }
   #rail-pin { display: none; }
   .rail-close { display: inline; margin-left: auto; font-size: 14px; padding: 6px 2px; }
   .item { padding: 11px 8px; }
-  .out-row { min-height: 42px; font-size: 15px; }
-  .out-thread { padding: 9px 6px; font-size: 14.5px; }
-  .out-acts, .out-bulk { font-size: 14px; gap: 10px 18px; }
+  .out-row { min-height: 42px; font-size: 15px; padding-top: 11px; padding-bottom: 11px; }
+  .out::before { height: 21px; }
+  .out:not(:last-child)::after { top: 21px; }
+  .out-plus { width: 30px; height: 30px; top: 6px; font-size: 18px; }
+  .out-start { font-size: 13px; padding: 6px 9px; }
 
   .thread-head { padding: 8px 14px; min-height: 0; gap: 2px 10px; }
   .thread-title { flex-basis: 100%; font-size: 16px; }

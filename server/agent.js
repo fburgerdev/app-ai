@@ -411,7 +411,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       type: 'proposal', channel: 'thread', key: 'proposal:example-motion:timeline',
       title: 'Work out the motion\'s timeline', why: 'The motion has had no activity for two weeks and the session date is close.',
       project: someProject,
-      text: 'Work out a timeline for the motion: who has to be asked by when, counted back from the session date in the project note. Hand back a one-page plan and the first two mails as drafts.',
+      text: '**Work out a timeline for the motion, counted back from the session date.**\n\n- You get: a one-page plan and the first two mails as drafts\n- From: the project note and Waiting For',
     }));
     if (/The calendar is connected/.test(userPrompt)) {
       fs.writeFileSync(path.join(artifactsDir, 'four.json'), JSON.stringify({

@@ -263,7 +263,7 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   assert.equal(took.started.title, proposal.title);
   const work = await ready(took.started.id);
   assert.equal(work.messages[0].auto, true, 'the brief is the app\'s message, not something Florian said');
-  assert.match(work.messages[0].text, /^Florian accepted this proposal of yours, after editing it\. Do the work:\n\nWork out a timeline.*Keep it to one page\.$/s);
+  assert.match(work.messages[0].text, /^Florian accepted this proposal of yours, after editing it\. Do the work:\n\n\*\*Work out a timeline.*Keep it to one page\.$/s);
 
   // Something in the calendar for tomorrow: no card to decide, a thread that prepares him.
   const prep = (await state()).threads.find((t) => t.kind === 'prep');

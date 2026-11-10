@@ -198,6 +198,8 @@ function queueLists() {
 // ---------- the folder outline: areas, projects, and the threads in them ----------
 
 const svg = (markup) => { const t = document.createElement('template'); t.innerHTML = markup.trim(); return t.content.firstChild; };
+// The app's mark: the icon's graph without its tile.
+const MARK = '<svg class="mark" viewBox="16 18 68 66" aria-hidden="true"><g stroke-width="3.2" stroke-linecap="butt"><line x1="29" y1="59" x2="26.5" y2="50.5" stroke="#8fd0a8"/><line x1="26.5" y1="50.5" x2="24" y2="42" stroke="#7aa8ff"/><line x1="24" y1="42" x2="30.5" y2="35.5" stroke="#7aa8ff"/><line x1="30.5" y1="35.5" x2="37" y2="29" stroke="#7aa8ff"/><line x1="37" y1="29" x2="46.5" y2="27.5" stroke="#7aa8ff"/><line x1="46.5" y1="27.5" x2="56" y2="26" stroke="#c3a6ff"/><line x1="56" y1="26" x2="64.5" y2="31" stroke="#c3a6ff"/><line x1="64.5" y1="31" x2="73" y2="36" stroke="#c3a6ff"/><line x1="73" y1="36" x2="74" y2="45" stroke="#c3a6ff"/><line x1="74" y1="45" x2="75" y2="54" stroke="#f5b75c"/><line x1="75" y1="54" x2="66.5" y2="58" stroke="#f5b75c"/><line x1="66.5" y1="58" x2="58" y2="62" stroke="#f5b75c"/><line x1="58" y1="62" x2="43.5" y2="60.5" stroke="#f5b75c"/><line x1="43.5" y1="60.5" x2="29" y2="59" stroke="#8fd0a8"/><line x1="47" y1="45" x2="35.5" y2="43.5" stroke="#f5b75c"/><line x1="35.5" y1="43.5" x2="24" y2="42" stroke="#7aa8ff"/><line x1="47" y1="45" x2="42" y2="37" stroke="#f5b75c"/><line x1="42" y1="37" x2="37" y2="29" stroke="#7aa8ff"/><line x1="47" y1="45" x2="60" y2="40.5" stroke="#f5b75c"/><line x1="60" y1="40.5" x2="73" y2="36" stroke="#c3a6ff"/><line x1="47" y1="45" x2="52.5" y2="53.5" stroke="#f5b75c"/><line x1="52.5" y1="53.5" x2="58" y2="62" stroke="#f5b75c"/><line x1="58" y1="62" x2="59" y2="68.5" stroke="#f5b75c"/><line x1="59" y1="68.5" x2="60" y2="75" stroke="#f5b75c"/></g><circle cx="29" cy="59" r="3.6" fill="var(--mark-ground, #171924)" stroke="#8fd0a8" stroke-width="3.2"/><circle cx="24" cy="42" r="3.6" fill="var(--mark-ground, #171924)" stroke="#7aa8ff" stroke-width="3.2"/><circle cx="37" cy="29" r="3.6" fill="var(--mark-ground, #171924)" stroke="#7aa8ff" stroke-width="3.2"/><circle cx="56" cy="26" r="3.6" fill="var(--mark-ground, #171924)" stroke="#c3a6ff" stroke-width="3.2"/><circle cx="73" cy="36" r="3.6" fill="var(--mark-ground, #171924)" stroke="#c3a6ff" stroke-width="3.2"/><circle cx="75" cy="54" r="3.6" fill="var(--mark-ground, #171924)" stroke="#f5b75c" stroke-width="3.2"/><circle cx="58" cy="62" r="3.6" fill="var(--mark-ground, #171924)" stroke="#f5b75c" stroke-width="3.2"/><circle cx="47" cy="45" r="5.6" fill="#f5b75c"/><circle cx="60" cy="75" r="3.6" fill="var(--mark-ground, #171924)" stroke="#f5b75c" stroke-width="3.2"/></svg>';
 
 const wide = window.matchMedia('(min-width: 1100px)');
 const tree = { open: '' }; // the one project or area that is expanded
@@ -221,31 +223,15 @@ function pathOf(project) {
 // threads and what can be done there. Drop a thread on one to file it.
 
 function outlineRow({ name, project, about, touched, open, grey, isArea, hereName }) {
-  const key = `${isArea ? 'a' : 'p'}:${name}`;
-  const isOpen = tree.open === key;
-  const current = S.current ? S.threads.get(S.current) : null;
-  const canMove = current && current.kind !== 'card' && (current.project || '') !== project;
-  const row = h('button', {
-    class: 'out-row', type: 'button', title: about || name, dataset: { key },
-    onclick: () => { tree.open = isOpen ? '' : key; renderTree(); },
-  },
-  h('span', { class: `out-mark${open ? ' has-open' : ''}`, title: open ? `${open} open ${open === 1 ? 'thread' : 'threads'}` : null }),
-  h('span', { class: 'out-name' }, name),
-  touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null);
-  let body = null;
-  if (isOpen) {
-    const mine = threadsIn(project).filter((t) => t.state !== 'done').sort((a, b) => b.updatedAt - a.updatedAt);
-    body = h('div', { class: 'out-body' },
-      about ? h('p', { class: 'out-about' }, about) : null,
-      ...mine.map((t) => h('button', { class: `out-thread${t.id === S.current ? ' is-current' : ''}`, type: 'button', title: t.title, dataset: { id: t.id }, onclick: () => openThread(t.id) }, t.title)),
-      h('div', { class: 'out-acts' },
-        project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, '+ New thread') : null,
-        isArea ? h('button', { class: 'link', type: 'button', onclick: () => startThreads('areas', name) }, '+ New project?') : null,
-        canMove ? h('button', { class: 'link', type: 'button', onclick: () => moveToProject(current.id, project) }, 'Move this thread here') : null,
-        project ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
-      ));
-  }
-  return h('div', { class: `out${grey ? ' is-grey' : ''}${hereName === project ? ' is-here' : ''}${isOpen ? ' is-open' : ''}`, dataset: { drop: 'folder', project } }, row, body);
+  return h('div', { class: `out${grey ? ' is-grey' : ''}${hereName === project ? ' is-here' : ''}`, dataset: { drop: 'folder', project } },
+    h('button', {
+      class: 'out-row', type: 'button',
+      title: `${name}${about ? `\n${about}` : ''}${open ? `\n${open} open ${open === 1 ? 'thread' : 'threads'}` : ''}\nClick to read its note`,
+      onclick: () => openPanel({ kind: 'note', link: project }),
+    },
+    h('span', { class: 'out-name' }, name, open ? h('span', { class: 'out-mark', 'aria-label': 'has open threads' }) : null),
+    touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null),
+    h('button', { class: 'out-plus', type: 'button', title: `New thread ${isArea ? 'in' : 'on'} ${name}`, 'aria-label': `New thread on ${name}`, onclick: () => openNew(project) }, '+'));
 }
 
 // Starts threads on many projects or areas at once. Asks once more, in place.
@@ -258,26 +244,25 @@ async function startThreads(which, name = '') {
       : out.skipped ? 'Each of them already has an open thread.' : 'There is nothing to start a thread on.');
   } catch (err) { toast(err.message); }
 }
-function bulkButton(which, label, count) {
+function bulkButton(which, label, count, title) {
   const armed = armedStart === which;
   return h('button', {
-    class: `link${armed ? ' is-armed' : ''}`, type: 'button', disabled: !count,
-    title: 'One thread each, for those that have no open thread yet',
+    class: `out-start${armed ? ' is-armed' : ''}`, type: 'button', disabled: !count, title,
     onclick: () => {
       if (!armed) { armedStart = which; renderTree(); setTimeout(() => { if (armedStart === which) { armedStart = ''; renderTree(); } }, 4000); return; }
       armedStart = '';
       renderTree();
       startThreads(which);
     },
-  }, armed ? `Start ${count} ${count === 1 ? 'thread' : 'threads'}?` : label);
+  }, armed ? `Start ${count}?` : label);
 }
 
 function treeNodes() {
   const t = S.projects;
   if (!t) return [h('p', { class: 'tree-note' }, 'Reading the vault…')];
   if (t.missing) return [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')];
-  const hereName = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
-  // Counted here, from the threads the page has, so the dots are always current.
+  const hereName = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || null) : S.pad ? null : S.newProject || null;
+  // Counted here, from the threads the page has, so the marks are always current.
   const openIn = (name) => threadsIn(name).filter((x) => x.state !== 'done').length;
   const dealt = (name, vault) => Math.max(vault || 0, ...threadsIn(name).map((x) => x.lastUserTs || 0));
   const byRecent = (a, b) => b.touched - a.touched || a.name.localeCompare(b.name);
@@ -290,21 +275,16 @@ function treeNodes() {
     touched: Math.max(dealt(g.name, g.touched), ...g.projects.map((p) => dealt(p.name, p.touched))),
   }));
   const row = (x, grey) => outlineRow({ ...x, grey, hereName });
-  const loose = openIn('');
+  const each = 'One thread each, for those without an open thread';
   return [
-    h('p', { class: 'tree-label' }, 'Projects'),
-    ...active.map((p) => row(p, false)),
-    ...paused.map((p) => row(p, true)),
+    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Projects'),
+      bulkButton('active', '+ active', active.length, `Start a check-in thread on every active project. ${each}.`),
+      bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`)),
+    h('div', { class: 'out-list' }, ...active.map((p) => row(p, false)), ...paused.map((p) => row(p, true))),
     !projects.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
-    outlineRow({ name: 'No project', project: '', about: 'Threads that belong to no project', touched: 0, open: loose, grey: !loose, hereName }),
-    h('p', { class: 'tree-label' }, 'Areas'),
-    ...areas.filter((a) => !a.empty).sort(byRecent).map((a) => row(a, false)),
-    ...areas.filter((a) => a.empty).sort(byRecent).map((a) => row(a, true)),
-    h('p', { class: 'tree-label' }, 'Start threads'),
-    h('div', { class: 'out-bulk' },
-      bulkButton('active', 'On every active project', active.length),
-      bulkButton('paused', 'On every paused project', paused.length),
-      bulkButton('areas', 'New project ideas, per area', areas.length)),
+    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Areas'),
+      bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
+    h('div', { class: 'out-list' }, ...areas.filter((a) => !a.empty).sort(byRecent).map((a) => row(a, false)), ...areas.filter((a) => a.empty).sort(byRecent).map((a) => row(a, true))),
   ].filter(Boolean);
 }
 
@@ -385,7 +365,13 @@ els.railClose.addEventListener('click', () => setRail(false));
 els.backdrop.addEventListener('click', () => setRail(false));
 els.openInbox.addEventListener('click', () => {
   if (els.app.classList.contains('rail-pinned') && !phone.matches) setPinned(false);
-  else setRail(!els.app.classList.contains('rail-open'));
+  else {
+    const opening = !els.app.classList.contains('rail-open');
+    setRail(opening);
+    // Opening the inbox also opens what is first in the queue.
+    const first = inbox()[0];
+    if (opening && first && first.id !== S.current) openThread(first.id, { byQueue: true }).then(() => { if (!phone.matches) setRail(true); });
+  }
 });
 try { setPinned(localStorage.getItem('rail-pinned') === '1'); } catch { setPinned(false); }
 wide.addEventListener('change', () => { if (wide.matches) S.tab = 'queue'; renderRail(); renderTree(); });
@@ -529,7 +515,7 @@ function renderBrain() {
     rows.push(h('p', { class: 'brain-line is-error' }, b.brain.error || 'Cloning the brain…'));
     if (b.brain.error) rows.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', '/api/brain/refresh', {}).then(setBrain).catch((e) => toast(e.message)) }, 'Try again'));
   } else if (b.running) {
-    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'pulse' }), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'));
+    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'mark-live' }, svg(MARK)), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'));
     rows.push(h('p', { class: 'brain-sub' }, b.step || 'Starting'));
   } else {
     const bits = [];
@@ -538,7 +524,8 @@ function renderBrain() {
     if (b.cards) bits.push(`${b.cards} ${b.cards === 1 ? 'card' : 'cards'}`);
     rows.push(h('p', { class: 'brain-line' }, bits.length ? `Not in the brain yet: ${bits.join(', ')}` : 'Nothing new to file in the brain'));
     rows.push(h('div', { class: 'brain-btns' },
-      h('button', { class: 'btn btn-brain', type: 'button', disabled: !bits.length && !b.mail, title: 'Files what is new in the threads, the cards you decided and new mail', onclick: () => updateBrain() }, 'Update brain ', kbd('Alt U')),
+      h('button', { class: 'brain-go', type: 'button', disabled: !bits.length && !b.mail, title: 'Files what is new in the threads, the cards you decided and new mail (Alt U)', onclick: () => updateBrain() },
+        svg(MARK), h('span', { class: 'brain-go-text' }, 'Update brain')),
       h('button', { class: 'btn', type: 'button', disabled: !b.mail, title: b.mail ? 'Takes in the mail that arrived and went out since the last time, and nothing else' : 'Connect Gmail in the settings first', onclick: () => updateBrain('mail') }, 'Update Gmail'),
     ));
     if (b.mail) rows.push(h('p', { class: 'brain-sub' }, b.mailLevel ? `Mail is taken in up to ${stamp(b.mailLevel)}` : 'No mail taken in yet; the first time looks back one day'));
@@ -936,6 +923,16 @@ function restoreDraft() {
 
 // ---------- an opportunity or chase card ----------
 
+// A brief written as one block of prose is shown as a lead sentence and points, so it
+// can be taken in at a glance. One that already has its own lines or list is left alone.
+function briefMarkdown(text) {
+  const t = text.trim();
+  if (/\n\s*[-*\d]|\n\n/.test(t)) return t;
+  const parts = t.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g)?.map((x) => x.trim()).filter(Boolean) || [t];
+  if (parts.length < 2) return t;
+  return `**${parts[0]}**\n\n${parts.slice(1).map((x) => `- ${x}`).join('\n')}`;
+}
+
 async function renderCard(t) {
   const info = S.view.artifacts.find((a) => a.name === 'Message.md');
   const raw = await (await fetch(`/api/threads/${t.id}/artifact?name=Message.md`)).text();
@@ -976,7 +973,7 @@ async function renderCard(t) {
   if (parseMail(raw)) {
     bodyEl = mailCard(t.id, 'Message.md', raw, info, { onDecided: () => advance(t.id), reason: () => reason.value });
   } else {
-    area = h('textarea', { class: 'card-text', spellcheck: 'true', disabled: decided, 'aria-label': 'The message. Edit it here.' });
+    area = h('textarea', { class: `card-text${work ? ' is-brief' : ''}`, spellcheck: 'true', disabled: decided, 'aria-label': work ? 'The brief. Edit it here.' : 'The message. Edit it here.' });
     area.value = raw.trim();
     let dirty = false;
     flush = async () => {
@@ -988,6 +985,19 @@ async function renderCard(t) {
     area.addEventListener('input', () => { dirty = true; grow(area); soon(); });
     bodyEl = area;
     requestAnimationFrame(() => grow(area));
+    if (work) {
+      // A brief is read far more often than it is changed: show it formatted, and turn
+      // it into the editable text on a click.
+      const view = h('div', { class: 'brief', tabindex: decided ? null : '0', title: decided ? null : 'Click to edit' });
+      const show = () => { view.replaceChildren(renderMarkdown(briefMarkdown(area.value))); };
+      const edit = () => { if (decided) return; view.hidden = true; area.hidden = false; grow(area); area.focus(); };
+      area.hidden = true;
+      area.addEventListener('blur', () => { show(); area.hidden = true; view.hidden = false; });
+      view.addEventListener('click', edit);
+      view.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); edit(); } });
+      show();
+      bodyEl = h('div', {}, view, area);
+    }
   }
   const buttons = decided ? h('p', { class: 'card-done' }, `You ${card.outcome || 'decided'} this${card.how ? ` (${card.how})` : ''}.${card.reason ? ` You wrote: “${card.reason}”` : ''}`)
     : h('div', { class: 'card-actions' },

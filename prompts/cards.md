@@ -24,7 +24,18 @@ A proposal is a piece of work you would do yourself in a new thread, for one of 
 
 - Propose what moves a project toward its stated goal or unblocks its next action. Read the project notes and `Brain/Next Actions.md` for that. Favour projects that are stuck or have had no activity, and work he would otherwise have to remember to ask for.
 - Never propose work that is already under way in one of the open threads listed below, or that a note says he decided against.
-- `text` is the brief for the thread that does the work, written so that accepted unchanged it is a complete instruction: what to do, from which notes, and what he gets back. Three or four sentences. He may edit it before accepting.
+- `title` names the work in at most seven words. `why` is one sentence of at most fifteen words.
+- `text` is the brief for the thread that does the work. He reads it in three seconds and decides, so it is short and has exactly this shape, in Markdown, at most 50 words in all:
+
+  ```
+  **One sentence: what you will do.**
+
+  - You get: what he has in hand at the end
+  - From: the notes or sources you will use (only if not obvious)
+  - Not: what you leave out or will not decide for him (only if needed)
+  ```
+
+  No background, no reasons (that is `why`), no steps. The thread that does the work reads the project's notes itself. He may edit the brief before accepting.
 - `type` is `proposal`, `channel` is `thread`, and `project` names the project or area note.
 
 Open threads right now (do not duplicate these):
