@@ -2,6 +2,8 @@
 
 You call a phone number; the app reads you the thread that has waited longest; you answer out loud; it moves to the next one. Claude starts working on your answer while the call goes on.
 
+**There is a free alternative: walk mode.** It is the same conversation from your phone's browser, with the phone's own speech recognition and voice (see the README). What follows is for a real phone number, which costs about $0.08 a minute at Twilio.
+
 This part is built and tested against a simulated call, but it has never taken a real one: a Twilio account is needed for that, and only you can open one. Expect to adjust a detail or two on the first try.
 
 ## What a call is like

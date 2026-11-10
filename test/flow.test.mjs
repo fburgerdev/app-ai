@@ -14,12 +14,14 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-test-'));
 const remote = path.join(dir, 'vault.git');
 const seed = path.join(dir, 'seed');
 const data = path.join(dir, 'data');
+const dataRemote = path.join(dir, 'app-data.git');
 const port = 4400 + Math.floor(Math.random() * 400);
 const base = `http://localhost:${port}`;
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 git(dir, 'init', '--bare', '-b', 'main', remote);
+git(dir, 'init', '--bare', '-b', 'main', dataRemote);
 git(dir, 'clone', remote, seed);
 for (const d of ['Brain', 'Claude', '.obsidian', 'For Claude/processed']) fs.mkdirSync(path.join(seed, d), { recursive: true });
 fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
@@ -34,8 +36,10 @@ git(seed, 'add', '-A');
 git(seed, 'commit', '-m', 'seed');
 git(seed, 'push', 'origin', 'main');
 
+fs.mkdirSync(data, { recursive: true });
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ cards: { auto: false } }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
-  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_BRAIN_REPO: remote, APP_AI_PORT: String(port) },
+  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_DATA_REPO: dataRemote, APP_AI_BRAIN_REPO: remote, APP_AI_PORT: String(port) },
   stdio: 'ignore',
 });
 test.after(() => { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -95,6 +99,7 @@ test('feedback makes a second version and the first one stays readable', async (
   const name = encodeURIComponent(t.artifacts[0].name);
   const v1 = await (await fetch(`${base}/api/threads/${mailThread}/artifact?name=${name}&v=1`)).text();
   const v2 = await (await fetch(`${base}/api/threads/${mailThread}/artifact?name=${name}&v=2`)).text();
+  assert.match(v1, /^---\ntype: mail\nto: office@example.org/);
   assert.match(v1, /vielen Dank/);
   assert.match(v2, /Donnerstag/);
   const missing = await fetch(`${base}/api/threads/${mailThread}/artifact?name=${encodeURIComponent('../thread.json')}`);
@@ -106,8 +111,7 @@ test('later moves a thread to the back; done closes it', async () => {
   await ready(other);
   await call('POST', `/api/threads/${mailThread}/skip`, {});
   const state = (await call('GET', '/api/state')).data;
-  const order = state.threads.filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt).map((t) => t.id);
-  assert.deepEqual(order, [other, mailThread]);
+  assert.deepEqual(state.queue.order, [other, mailThread], 'a requeued thread goes behind the others');
   const closed = await call('POST', `/api/threads/${other}/state`, { state: 'done' });
   assert.equal(closed.data.thread.state, 'done');
 });

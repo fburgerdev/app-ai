@@ -14,6 +14,8 @@ import { DATA_DIR, log } from './config.js';
 import * as google from './google.js';
 import { logRead, logToolRead } from './reads.js';
 import { messageText, readPrompt, todayLine, dateTimeDMY } from './util.js';
+import { getState } from './state.js';
+import { projectContext } from './projects.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -34,10 +36,11 @@ export function titleFrom(text) {
 }
 
 // Florian sends a message. Returns the stored message.
-export function sendMessage(threadId, text) {
+// `auto` marks a message the app wrote itself to start a thread (a mail to answer).
+export function sendMessage(threadId, text, { auto = false } = {}) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
-  const message = store.appendMessage(threadId, { role: 'user', text });
+  const message = store.appendMessage(threadId, auto ? { role: 'user', text, auto: true } : { role: 'user', text });
   if (thread.state === 'working') {
     // Claude is still on the previous message: this one goes in as soon as that turn ends.
     store.updateThread(threadId, { pending: [...(thread.pending || []), text] });
@@ -86,12 +89,22 @@ function threadInstructions(thread) {
       ].join('\n')
     : '';
   for (const f of preload) logRead({ by: 'preload', threadId: thread.id, path: f.path });
+  const project = projectContext(thread.project);
+  const projectText = project.length
+    ? [
+        `## This thread belongs to "${thread.project}"`,
+        '',
+        `Its notes are included here in full, current as of this turn, so do not read them again: ${project.map((f) => `\`${f.path}\``).join(', ')}. Work from them; they are where this project's state lives.`,
+        '',
+        ...project.map((f) => `<vault-file path="${f.path}">\n${f.text.trim()}\n</vault-file>`),
+      ].join('\n')
+    : '';
   const g = google.googleStatus();
   return readPrompt('thread.md', {
     today: todayLine(),
     artifactsDir: store.artifactsDir(thread.id),
     mail: g.connected ? readPrompt('mail-connected.md', { email: g.email || 'his Gmail account' }) : readPrompt('mail-offline.md').trim(),
-    preload: preloadText,
+    preload: [projectText, preloadText].filter(Boolean).join('\n\n'),
   });
 }
 
@@ -157,7 +170,8 @@ async function runTurn(threadId, prompt) {
     const base = {
       cwd: brain.brainDir(),
       systemAppend: threadInstructions(thread),
-      model: config.model,
+      model: getState().model,
+      effort: getState().effort,
       mode: 'thread',
       artifactsDir: store.artifactsDir(threadId),
       protectedPaths: config.protectedPaths,
@@ -192,12 +206,15 @@ async function runTurn(threadId, prompt) {
       store.updateThread(threadId, { pending: [] });
       startTurn(threadId, pending.join('\n\n'));
     } else {
+      const lastText = parts.filter((p) => p.type === 'text').at(-1)?.text || '';
       store.updateThread(threadId, {
         state: 'ready',
         queuedAt: Date.now(),
+        requeuedAt: 0,
         activity: '',
         pending: [],
         error: result.error || '',
+        gist: lastText.replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(-220),
       });
       if (config.voice.enabled) spokenDigest(threadId).catch(() => {});
     }

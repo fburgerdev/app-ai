@@ -54,9 +54,35 @@ const DEFAULTS = {
   // Paths left out of the app's clone altogether, so Claude cannot even read them.
   hiddenPaths: ['Scratchpad.md', '.obsidian', 'For Claude/processed'],
 
-  // Model for threads and for brain updates. Empty means Claude Code's default.
-  model: '',
-  extractModel: '',
+  // The model and effort for threads and brain updates are chosen in the app itself
+  // (next to the reply box) and kept with the app's state, not here.
+
+  // Where the app's own state is saved: threads, water levels, pads, the queue's
+  // learning. The data folder is a git repository that is committed and pushed to this
+  // repo every few minutes. Empty: the state stays on this computer only.
+  dataRepo: 'https://github.com/fburgerdev/app-ai-data.git',
+  dataBranch: 'main',
+  dataSyncMinutes: 5,
+
+  // Recording what gets read from the vault (reads.jsonl). Off for now.
+  readLog: false,
+
+  // The queue: a small model decides what you see next, from what is waiting, your mood
+  // line and what it has learned from your choices.
+  queue: {
+    pickModel: 'haiku', // ranks what is waiting
+    learnModel: 'sonnet', // rewrites the learned profile from your choices
+    learnEvery: 30, // after this many new choices, the profile is rewritten
+    requeueMinutes: 20, // a requeued thread stays at the back this long
+  },
+
+  // Opportunity and chase cards, made in the background while you work the queue.
+  cards: {
+    auto: true, // make new ones by itself when few are left
+    keepReady: 3, // how many unseen cards to keep in stock
+    perRun: 3, // how many one run may make
+    pauseMinutes: 45, // shortest time between two runs
+  },
 
   // Whether Claude may run shell commands inside threads. Off: threads can read the
   // vault, search the web and write artifacts, nothing else.
@@ -108,9 +134,10 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
   if (process.env.APP_AI_BRAIN_REPO) config.brainRepo = process.env.APP_AI_BRAIN_REPO;
+  if (process.env.APP_AI_DATA_REPO !== undefined) config.dataRepo = process.env.APP_AI_DATA_REPO;
   if (!config.brainDir) config.brainDir = path.join(DATA_DIR, 'brain');
   config.brainDir = path.resolve(config.brainDir);
   config.fake = process.env.APP_AI_FAKE === '1';

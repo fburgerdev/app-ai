@@ -78,6 +78,10 @@ The last line lets it run without you being logged in, and start after a reboot.
 
 On the laptop or phone: the address from step 3. Install it as an app from the browser menu (on the phone: "Add to Home Screen").
 
+## Without a Pi: reaching the laptop from the phone
+
+Walk mode needs the app reachable from your phone over https. The Tailscale part alone does that for a laptop: install Tailscale on the laptop and the phone, run `tailscale serve --bg 4317` on the laptop, put the address it prints into `allowedHosts`, restart the app, and open that address on the phone. It works while the laptop is awake.
+
 ## What is different on the Pi
 
 - **Files open by download.** "Open in app" would start a program on the Pi, so it is not offered; use Download.

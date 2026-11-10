@@ -105,10 +105,12 @@ fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({
   port,
   brainRepo: remote,
   allowedHosts: ['pi.example.ts.net'],
+  readLog: true,
+  cards: { auto: false },
   voice: { enabled: true, publicUrl: base, authToken: 'twilio-secret', allowedCallers: ['+49 170 1234567'] },
 }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
-  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data },
+  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_DATA_REPO: '' },
   stdio: 'ignore',
 });
 test.after(() => { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); });

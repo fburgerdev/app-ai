@@ -23,6 +23,12 @@ fs.writeFileSync(path.join(seed, 'Brain', 'Next Actions.md'), '# Next Actions\n\
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Thinking With Me.md'), '# Thinking With Me\n');
 fs.writeFileSync(path.join(seed, 'Scratchpad.md'), 'never read by the app\n');
+fs.mkdirSync(path.join(seed, 'Brain', 'Projects'), { recursive: true });
+fs.mkdirSync(path.join(seed, 'Brain', 'Areas'), { recursive: true });
+fs.writeFileSync(path.join(seed, 'Brain', 'Areas', 'Example Campaign.md'), '# Example Campaign\n\ngoal: an example area\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Example Motion.md'), '# Example Motion\n\nStatus: active\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Example Grant.md'), '# Example Grant\n\nStatus: active\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Example Campaign]]\n\n- [[Example Motion]] — a motion in the example parliament\n\n## No area\n\n- [[Example Grant]] — applying for an example grant\n');
 git(seed, 'checkout', '-B', 'main');
 git(seed, 'add', '-A');
 git(seed, 'commit', '-m', 'demo vault');
@@ -36,6 +42,7 @@ spawn(process.execPath, [path.join(root, 'server', 'index.js'), '--open'], {
     APP_AI_FAKE: '1',
     APP_AI_DATA: path.join(dir, 'data'),
     APP_AI_BRAIN_REPO: remote,
+    APP_AI_DATA_REPO: '',
     APP_AI_PORT: process.env.APP_AI_PORT || '4399',
   },
 });

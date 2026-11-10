@@ -250,6 +250,40 @@ export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, b
   return { draftId: draft.id, replaced: Boolean(draftId) };
 }
 
+// Sends a mail. Only ever called from the Send button in the app, after Florian confirms;
+// no tool Claude has leads here.
+export async function gmailSend({ draftId, replyToThreadId, from, to, cc, bcc, subject, body }) {
+  if (!String(to || '').trim()) throw new Error('The mail has no recipient.');
+  const saved = await gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body });
+  const sent = await api(`${GMAIL}/drafts/send`, { method: 'POST', body: { id: saved.draftId } });
+  return { messageId: sent.id, threadId: sent.threadId };
+}
+
+// Mail that arrived or went out after a moment, newest last, grouped by conversation.
+// This is what the brain update reads; drafts, spam and promotions are left out.
+export async function gmailSince(sinceMs, { max = 60 } = {}) {
+  const q = `after:${Math.floor(sinceMs / 1000)} -in:drafts -in:spam -in:trash -category:promotions -category:social`;
+  const list = await api(`${GMAIL}/messages?${new URLSearchParams({ q, maxResults: String(max) })}`);
+  const threads = new Map();
+  for (const { id } of (list.messages || []).reverse()) {
+    const m = await api(`${GMAIL}/messages/${id}?format=full`);
+    if (Number(m.internalDate) <= sinceMs) continue;
+    let text = bodyText(m.payload);
+    if (text.length > 8000) text = `${text.slice(0, 8000)}\n[cut: the message is longer]`;
+    const entry = threads.get(m.threadId) || { threadId: m.threadId, subject: header(m, 'Subject'), messages: [] };
+    entry.messages.push({
+      sent: (m.labelIds || []).includes('SENT'),
+      date: header(m, 'Date'),
+      from: header(m, 'From'),
+      to: header(m, 'To'),
+      cc: header(m, 'Cc') || '',
+      text,
+    });
+    threads.set(m.threadId, entry);
+  }
+  return [...threads.values()];
+}
+
 // ---------- calendar ----------
 
 const eventLine = (e) => ({
@@ -302,23 +336,12 @@ export async function buildGoogleServer() {
   return createSdkMcpServer({
     name: 'google',
     version: '1.0.0',
-    instructions: 'Florian\'s Gmail and Google Calendar. Mail can be read and drafted, never sent: he sends drafts himself.',
+    instructions: 'Florian\'s Gmail and Google Calendar. Mail can be searched and read here. A mail to send is written as a file; Florian puts it into Gmail or sends it himself with the buttons on that file.',
     tools: [
       tool('gmail_search', 'Search Florian\'s mail with Gmail search syntax (from:, to:, subject:, newer_than:7d, in:sent, is:unread …). Returns the newest matching messages with their thread ids.',
         { query: z.string(), max: z.number().int().min(1).max(25).optional() }, guarded(gmailSearch)),
       tool('gmail_read_thread', 'Read every message of one mail thread, oldest first.',
         { threadId: z.string() }, guarded(gmailReadThread)),
-      tool('gmail_save_draft', 'Save a mail as a draft in Florian\'s Gmail. He sends it himself. Pass draftId to replace a draft saved earlier in this thread instead of making a second one. Pass replyToThreadId to make it a reply in that mail thread. Plain text body.',
-        {
-          to: z.string().describe('Recipients, comma separated'),
-          subject: z.string(),
-          body: z.string(),
-          cc: z.string().optional(),
-          bcc: z.string().optional(),
-          from: z.string().optional().describe('Only to send from another of his own addresses set up in Gmail'),
-          replyToThreadId: z.string().optional(),
-          draftId: z.string().optional(),
-        }, guarded(gmailSaveDraft)),
       tool('calendar_list', 'List the entries in Florian\'s calendar between two moments (ISO 8601).',
         { from: z.string(), to: z.string(), query: z.string().optional(), max: z.number().int().min(1).max(100).optional() }, guarded(calendarList)),
       tool('calendar_create', 'Add an entry to Florian\'s own calendar. It cannot invite anyone. For allDay give dates (YYYY-MM-DD) with the end date being the day after the last day.',

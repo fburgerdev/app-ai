@@ -1,0 +1,28 @@
+:root { color-scheme: dark; --ground: #1b1d2a; --panel: #232638; --line: #3a3f5a; --text: #dfe1ee; --muted: #949ab7; --you: #f5b75c; --work: #7aa8ff; --done: #8fd0a8; --bad: #ff8f8f; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--text); font: 16px/1.45 'Instrument Sans Variable', system-ui, sans-serif; overscroll-behavior: none; }
+.walk { min-height: 100%; display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 22px; max-width: 34rem; margin: 0 auto; }
+.walk-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.back { color: var(--muted); }
+.lang { color: var(--muted); display: flex; gap: 8px; align-items: center; }
+select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; }
+.state { margin: 10px 0 0; font-weight: 650; font-size: 18px; color: var(--you); }
+.state.is-listening { color: var(--done); }
+.state.is-speaking { color: var(--work); }
+.state.is-error { color: var(--bad); }
+.said { margin: 0; font: 19px/1.5 'Literata Variable', Georgia, serif; flex: 1; overflow-y: auto; min-height: 6rem; }
+.heard { margin: 0; color: var(--muted); min-height: 3em; font-size: 15px; }
+.talk {
+  width: 100%; min-height: 28vh; border: 0; border-radius: 22px; cursor: pointer;
+  background: var(--you); color: #2a1f08; font: 700 26px/1 'Instrument Sans Variable', system-ui, sans-serif;
+  touch-action: manipulation;
+}
+.talk.is-on { background: var(--panel); color: var(--text); border: 2px solid var(--done); }
+.keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.keys button { font: inherit; font-weight: 600; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 6px; cursor: pointer; touch-action: manipulation; }
+.keys button:active { background: var(--line); }
+.note { margin: 0; color: var(--muted); font-size: 13.5px; }
+.shield { position: fixed; inset: 0; background: #0d0e15; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 18px; padding: 0 20px 12vh; color: #565c7c; z-index: 10; touch-action: none; }
+.shield[hidden] { display: none; }
+.shield button { font: inherit; color: #6b7192; background: none; border: 1px solid #2a2e45; border-radius: 12px; padding: 18px 26px; }

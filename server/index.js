@@ -11,7 +11,14 @@ import * as store from './store.js';
 import * as runner from './runner.js';
 import * as extraction from './extract.js';
 import * as google from './google.js';
-import { logRead } from './reads.js';
+import { initReads, logRead } from './reads.js';
+import * as queue from './queue.js';
+import * as cards from './cards.js';
+import * as projects from './projects.js';
+import * as datasync from './datasync.js';
+import { parseMail } from './mail.js';
+import { getState, setState, readPad, writePad, MODELS, EFFORTS } from './state.js';
+import { dateTimeDMY } from './util.js';
 import { answerCall, attachVoice, voiceStatus } from './voice.js';
 import { ROOT } from './util.js';
 
@@ -23,6 +30,11 @@ brain.initBrain(config);
 runner.initRunner(config);
 extraction.initExtraction(config);
 google.initGoogle(config);
+initReads(config);
+queue.initQueue(config);
+cards.initCards(config);
+await datasync.initDataSync(config);
+// Threads are loaded after the data repo had its chance to restore them.
 store.loadThreads();
 
 const app = express();
@@ -68,6 +80,8 @@ vendor('/vendor/highlight', '@highlightjs/cdn-assets');
 vendor('/vendor/fonts/literata', '@fontsource-variable/literata');
 vendor('/vendor/fonts/instrument-sans', '@fontsource-variable/instrument-sans');
 vendor('/vendor/fonts/jetbrains-mono', '@fontsource-variable/jetbrains-mono');
+// The mail file format is the same code on both sides.
+app.get('/mail.js', (req, res) => res.type('text/javascript').sendFile(path.join(ROOT, 'server', 'mail.js')));
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'] }));
 
 // ---------- state and live updates ----------
@@ -82,12 +96,43 @@ function connections(req) {
     google: google.googleStatus(),
     voice: voiceStatus(config),
     remote: { local: isLocal(req), allowedHosts: config.allowedHosts || [] },
+    data: datasync.dataSyncStatus(),
   };
 }
 
 app.get('/api/state', (req, res) => {
-  res.json({ threads: store.listThreads(), brain: extraction.extractionStatus(), config: publicConfig(req), connections: connections(req) });
+  cards.maybeMakeCards();
+  res.json({
+    threads: store.listThreads(),
+    brain: extraction.extractionStatus(),
+    config: publicConfig(req),
+    connections: connections(req),
+    settings: { ...getState(), models: MODELS, efforts: EFFORTS },
+    queue: queue.queueStatus(),
+    cards: cards.cardsStatus(),
+  });
 });
+
+// The mood line, the model and the effort. Saved as you change them; nothing is sent.
+app.put('/api/settings', (req, res) => {
+  const { mood, model, effort } = req.body || {};
+  res.json(setState({ mood, model, effort }));
+});
+
+// Pads: the scratchpad, notes for Claude, and the queue's learned profile.
+app.get('/api/pads/:name', (req, res) => {
+  const text = readPad(req.params.name);
+  if (text === null) return res.status(404).json({ error: 'No such pad' });
+  res.json({ text });
+});
+
+app.put('/api/pads/:name', (req, res) => {
+  if (!writePad(req.params.name, String(req.body.text ?? ''))) return res.status(404).json({ error: 'No such pad' });
+  if (req.params.name === 'notes') store.events.emit('brain', extraction.extractionStatus());
+  res.json({ ok: true });
+});
+
+app.get('/api/projects', (req, res) => res.json(projects.projectTree()));
 
 app.get('/api/connections', (req, res) => res.json(connections(req)));
 
@@ -128,6 +173,9 @@ app.get('/api/events', (req, res) => {
     thread: send('thread'),
     message: send('message'),
     live: send('live'),
+    state: send('state'),
+    queue: send('queue'),
+    cards: send('cards'),
     artifacts: send('artifacts'),
     brain: send('brain'),
     connections: send('connections'),
@@ -152,8 +200,10 @@ const cleanText = (value) => String(value ?? '').replace(/\r\n/g, '\n').trim();
 app.post('/api/threads', (req, res) => {
   const text = cleanText(req.body.text);
   if (!text) return res.status(400).json({ error: 'Write a message first.' });
-  const thread = store.createThread({ title: runner.titleFrom(text) });
+  const project = String(req.body.project || '');
+  const thread = store.createThread({ title: runner.titleFrom(text), project: projects.isKnownProject(project) ? project : '' });
   runner.sendMessage(thread.id, text);
+  cards.maybeMakeCards();
   res.json({ thread: store.getThread(thread.id) });
 });
 
@@ -173,8 +223,11 @@ app.post('/api/threads/:id/messages', (req, res) => {
   if (!thread) return;
   const text = cleanText(req.body.text);
   if (!text) return res.status(400).json({ error: 'Write a message first.' });
+  if (thread.kind === 'card') return res.status(409).json({ error: 'A card takes no reply. Edit its text, then accept or decline.' });
   if (thread.state === 'done') store.updateThread(thread.id, { state: 'ready' });
+  queue.recordDecision('replied', thread);
   const message = runner.sendMessage(thread.id, text);
+  cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
 });
 
@@ -183,17 +236,39 @@ app.post('/api/threads/:id/state', (req, res) => {
   if (!thread) return;
   if (thread.state === 'working') return res.status(409).json({ error: 'Claude is still working on this thread.' });
   const { state } = req.body;
-  if (state === 'done') store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), error: '' });
+  if (state === 'done') {
+    queue.recordDecision('done', thread);
+    store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), error: '' });
+    cards.maybeMakeCards();
+  }
   else if (state === 'ready') store.updateThread(thread.id, { state: 'ready', queuedAt: Date.now(), archived: false });
   else return res.status(400).json({ error: 'Unknown state' });
   res.json({ thread: store.getThread(thread.id) });
 });
 
-// "Later": the thread stays in the inbox but goes to the back of it.
+// Requeue: not now. The thread stays waiting but goes to the back for a while, and the
+// queue learns from it.
 app.post('/api/threads/:id/skip', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
-  res.json({ thread: store.updateThread(thread.id, { queuedAt: Date.now() }) });
+  queue.recordDecision('requeued', thread);
+  cards.maybeMakeCards();
+  res.json({ thread: store.updateThread(thread.id, { requeuedAt: Date.now() }) });
+});
+
+// Florian opened a waiting thread by hand instead of the one the queue offered.
+app.post('/api/queue/opened', (req, res) => {
+  const thread = store.getThread(String(req.body.id || ''));
+  if (thread && thread.state === 'ready' && queue.queueOrder()[0] !== thread.id) queue.recordDecision('opened', thread);
+  res.json({ ok: true });
+});
+
+app.post('/api/threads/:id/project', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const project = String(req.body.project || '');
+  if (project && !projects.isKnownProject(project)) return res.status(400).json({ error: 'That project is not in the vault\'s Projects Index.' });
+  res.json({ thread: store.updateThread(thread.id, { project }) });
 });
 
 app.post('/api/threads/:id/title', (req, res) => {
@@ -253,6 +328,87 @@ app.post('/api/threads/:id/artifact/open', (req, res) => {
   res.json({ ok: true });
 });
 
+// Florian's own edit of a file or of a card's text.
+app.post('/api/threads/:id/artifact/save', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const name = String(req.body.name || '');
+  const info = store.listArtifacts(thread.id).find((a) => a.name === name);
+  if (!info) return res.status(404).json({ error: 'No such file' });
+  if (info.mail?.sentAt) return res.status(409).json({ error: 'This mail has been sent and can no longer be changed.' });
+  res.json({ artifact: store.saveArtifact(thread.id, name, String(req.body.content ?? '')) });
+});
+
+// ---------- mail: the two buttons ----------
+//
+// These are the only places in the app that put anything into Gmail, and both run only
+// on Florian's click. Claude has no tool that reaches them.
+function mailFor(req, res) {
+  const thread = need(req, res);
+  if (!thread) return null;
+  const name = String(req.body.name || '');
+  const info = store.listArtifacts(thread.id).find((a) => a.name === name);
+  const mail = info ? parseMail(store.readArtifactText(thread.id, name)) : null;
+  if (!mail) { res.status(404).json({ error: 'That file is not a mail.' }); return null; }
+  if (info.mail?.sentAt) { res.status(409).json({ error: 'This mail has already been sent.' }); return null; }
+  if (!config.fake && !google.googleConnected()) { res.status(409).json({ error: 'Gmail is not connected. Connect it under Connections.' }); return null; }
+  return { thread, name, info, mail, version: info.versions.at(-1).v };
+}
+
+app.post('/api/threads/:id/mail/draft', async (req, res) => {
+  const m = mailFor(req, res);
+  if (!m) return;
+  try {
+    const out = config.fake ? { draftId: m.info.mail?.draftId || 'stand-in-draft' } : await google.gmailSaveDraft({ draftId: m.info.mail?.draftId, ...m.mail });
+    store.setMailInfo(m.thread.id, m.name, { draftId: out.draftId, draftVersion: m.version, draftAt: Date.now() });
+    if (m.thread.kind === 'card' && m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'put in Gmail as a draft');
+    res.json({ ok: true, thread: store.getThread(m.thread.id) });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post('/api/threads/:id/mail/send', async (req, res) => {
+  const m = mailFor(req, res);
+  if (!m) return;
+  if (!m.mail.to.trim()) return res.status(400).json({ error: 'The mail has no recipient.' });
+  try {
+    const out = config.fake ? { messageId: 'stand-in-message' } : await google.gmailSend({ draftId: m.info.mail?.draftId, ...m.mail });
+    const sentAt = Date.now();
+    store.setMailInfo(m.thread.id, m.name, { sentAt, sentVersion: m.version, messageId: out.messageId, draftId: null });
+    if (m.thread.kind === 'card') {
+      if (m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'sent');
+    } else {
+      // A note in the thread, so Claude and the next brain update know it went out.
+      store.appendMessage(m.thread.id, {
+        role: 'user',
+        event: true,
+        text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.mail.to}. Subject: ${m.mail.subject}.]`,
+      });
+    }
+    res.json({ ok: true, thread: store.getThread(m.thread.id) });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ---------- cards ----------
+app.post('/api/threads/:id/card', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  if (thread.kind !== 'card' || thread.state !== 'ready') return res.status(409).json({ error: 'This card has already been decided.' });
+  const outcome = req.body.outcome === 'accepted' ? 'accepted' : req.body.outcome === 'declined' ? 'declined' : null;
+  if (!outcome) return res.status(400).json({ error: 'Accept or decline.' });
+  cards.decideCard(thread, outcome, outcome === 'accepted' ? 'copied' : '');
+  res.json({ thread: store.getThread(thread.id) });
+});
+
+app.post('/api/cards/make', (req, res) => {
+  if (!brain.brainStatus().ready) return res.status(409).json({ error: 'The brain is not cloned yet.' });
+  cards.makeCards().catch(() => {});
+  res.json(cards.cardsStatus());
+});
+
 // ---------- the brain ----------
 app.post('/api/brain/extract', (req, res) => {
   res.json(extraction.startExtraction());
@@ -299,7 +455,9 @@ const server = app.listen(config.port, '127.0.0.1', () => {
   brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()));
 });
 
-attachVoice(server, config);
+attachVoice(server, config, allowedHosts);
+datasync.startDataSync();
+store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

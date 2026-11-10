@@ -78,7 +78,7 @@ export function isUnfiled(thread) {
   return (thread.lastUserAt || 0) > (thread.extractedCount || 0);
 }
 
-export function createThread({ title, kind = 'chat', sessionId = null }) {
+export function createThread({ title, kind = 'chat', sessionId = null, project = '', card = null }) {
   const id = newId();
   const now = Date.now();
   const meta = {
@@ -97,6 +97,10 @@ export function createThread({ title, kind = 'chat', sessionId = null }) {
     error: '',
     activity: '', // what Claude is doing right now, while working
     pending: [], // messages sent while Claude was still working
+    project, // the vault project or area this thread belongs to, by note name
+    card, // for an opportunity or chase card: what it is about
+    requeuedAt: 0,
+    gist: '', // one line of what is waiting, for the queue
   };
   fs.mkdirSync(artifactsDir(id), { recursive: true });
   fs.mkdirSync(versionsDir(id), { recursive: true });
@@ -123,7 +127,8 @@ export function appendMessage(id, message) {
   fs.appendFileSync(messagesFile(id), JSON.stringify(full) + '\n');
   meta.messageCount += 1;
   meta.updatedAt = full.ts;
-  if (full.role === 'user') meta.lastUserAt = meta.messageCount;
+  // A message the app wrote to start a thread is not something Florian said.
+  if (full.role === 'user' && !full.auto) meta.lastUserAt = meta.messageCount;
   writeJson(metaFile(id), meta);
   events.emit('message', { threadId: id, message: full });
   events.emit('thread', meta);
@@ -166,13 +171,13 @@ function versionFile(id, name, v) {
 export function listArtifacts(id) {
   const index = readJson(artifactIndexFile(id), {});
   return Object.entries(index)
-    .map(([name, info]) => ({ name, versions: info.versions }))
+    .map(([name, info]) => ({ name, versions: info.versions, mail: info.mail || null }))
     .sort((a, b) => b.versions.at(-1).ts - a.versions.at(-1).ts);
 }
 
 // Compares the artifacts folder with the last recorded versions and records a new
 // version for every file that is new or changed. Returns what changed.
-export function scanArtifacts(id) {
+export function scanArtifacts(id, by = 'claude') {
   const dir = artifactsDir(id);
   const index = readJson(artifactIndexFile(id), {});
   const changed = [];
@@ -191,7 +196,7 @@ export function scanArtifacts(id) {
     const v = (last ? last.v : 0) + 1;
     fs.mkdirSync(versionsDir(id), { recursive: true });
     fs.writeFileSync(versionFile(id, name, v), data);
-    entry.versions.push({ v, ts: Date.now(), hash, size: data.length });
+    entry.versions.push({ v, ts: Date.now(), hash, size: data.length, by });
     index[name] = entry;
     changed.push({ name, v });
   }
@@ -220,4 +225,30 @@ export function artifactLivePath(id, name) {
   if (!index[name]) return null;
   const file = path.join(artifactsDir(id), ...name.split('/'));
   return fs.existsSync(file) ? file : null;
+}
+
+// Florian's own edit of a file Claude made (or of a card's text). It becomes a version
+// like any other, marked as his.
+export function saveArtifact(id, name, content) {
+  const index = readJson(artifactIndexFile(id), {});
+  if (!index[name]) return null;
+  const file = path.join(artifactsDir(id), ...name.split('/'));
+  fs.writeFileSync(file, String(content));
+  scanArtifacts(id, 'you');
+  return listArtifacts(id).find((a) => a.name === name) || null;
+}
+
+// What the app knows about a mail file beyond its text: its Gmail draft, when it was sent.
+export function setMailInfo(id, name, patch) {
+  const index = readJson(artifactIndexFile(id), {});
+  if (!index[name]) return null;
+  index[name].mail = { ...(index[name].mail || {}), ...patch };
+  writeJson(artifactIndexFile(id), index);
+  events.emit('artifacts', { threadId: id, changed: [] });
+  return index[name].mail;
+}
+
+export function readArtifactText(id, name, v) {
+  const file = artifactPath(id, name, v);
+  return file ? fs.readFileSync(file, 'utf8') : null;
 }

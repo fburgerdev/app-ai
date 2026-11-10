@@ -1,22 +1,30 @@
-// The brain update: files what Florian said in his threads into the brain vault.
+// The brain update: files what happened in the app into the brain vault.
 //
-// It runs only when he asks for it (the "Update brain" button). One run covers every
-// thread that changed since the last one. It is the only thing in the app that writes
-// the vault, and only one can run at a time:
+// Think of every thread as having a water level: everything above it is in the brain.
+// "Update brain" raises the level, in every thread at once, to where the thread stood at
+// the moment of the press. Florian can keep working while the update runs; what he
+// writes after pressing waits for the next update.
 //
-//   1. bring the clone up to GitHub's state
-//   2. write each changed thread out as a transcript, old part and new part marked
-//   3. let Claude file the new parts under the vault's own rules
-//   4. commit once, push
-//   5. if Claude has questions, put them into the inbox as a thread
+// The same press also covers, each with its own level:
+//   - the mailbox: mail received and sent since the last update (when Gmail is connected)
+//   - the "Notes for Claude" pad, which is emptied once filed
+//   - the cards he accepted or declined
+//
+// It runs only when he asks, it is the only thing in the app that writes the vault, and
+// only one can run at a time. It ends in one commit and a push.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent } from './agent.js';
 import * as brain from './brain.js';
+import * as google from './google.js';
+import * as runner from './runner.js';
 import * as store from './store.js';
 import { EXTRACTIONS_DIR, log } from './config.js';
 import { logToolRead } from './reads.js';
+import { readCardLog } from './cards.js';
+import { saveNow } from './datasync.js';
+import { getState, readPad, setState, writePad } from './state.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
@@ -31,16 +39,9 @@ function setStep(step) {
   store.events.emit('brain', extractionStatus());
 }
 
-// Threads with something Florian said that no brain update has seen yet.
-function changedThreads() {
-  const out = [];
-  for (const thread of store.listThreads()) {
-    if (thread.state === 'working') continue;
-    if (!store.isUnfiled(thread)) continue;
-    out.push({ thread, messages: store.readMessages(thread.id) });
-  }
-  return out;
-}
+// Threads with something Florian said or did that no brain update has seen yet.
+// Cards are not conversations; their outcomes are filed from the card log.
+const unfiledThreads = () => store.listThreads().filter((t) => t.kind !== 'card' && store.isUnfiled(t));
 
 export function lastRuns(limit = 15) {
   if (!fs.existsSync(EXTRACTIONS_DIR)) return [];
@@ -60,25 +61,33 @@ export function lastRuns(limit = 15) {
 }
 
 export function extractionStatus() {
+  const state = getState();
   return {
     running: Boolean(current),
     step: current?.step || '',
     startedAt: current?.startedAt || 0,
-    waiting: store.listThreads().filter((t) => t.state !== 'working' && store.isUnfiled(t)).length, // threads not yet in the brain
+    waiting: unfiledThreads().length, // threads not yet in the brain
+    notes: Boolean((readPad('notes') || '').trim()),
+    cards: readCardLog().filter((e) => e.ts > state.cardsLevel).length,
+    mail: google.googleConnected(),
+    mailLevel: state.mailLevel,
     last: lastRuns(1)[0] || null,
     brain: brain.brainStatus(),
   };
 }
 
-function writeTranscripts(runDir, changed) {
-  const dir = path.join(runDir, 'transcripts');
-  fs.mkdirSync(dir, { recursive: true });
-  changed.forEach(({ thread, messages }, i) => {
+function speaker(m) {
+  if (m.role !== 'user') return 'Claude';
+  if (m.auto) return 'The app (automatic, not Florian)';
+  return 'Florian';
+}
+
+function writeThreads(dir, changed) {
+  changed.forEach(({ thread, messages, count }, i) => {
     const n = String(i + 1).padStart(2, '0');
-    const artifacts = store.listArtifacts(thread.id);
     const filesDir = path.join(dir, `${n} files`);
     const artifactLines = [];
-    for (const artifact of artifacts) {
+    for (const artifact of store.listArtifacts(thread.id)) {
       for (const version of artifact.versions) {
         const src = store.artifactPath(thread.id, artifact.name, version.v);
         if (!src) continue;
@@ -87,26 +96,28 @@ function writeTranscripts(runDir, changed) {
         const base = safeFileName(artifact.name.slice(0, artifact.name.length - ext.length).replace(/\//g, ' - '));
         const dest = path.join(filesDir, `${base} (v${version.v})${ext}`);
         fs.copyFileSync(src, dest);
-        artifactLines.push(`- "${artifact.name}" version ${version.v}, saved ${dateTimeDMY(version.ts)}: \`${dest}\``);
+        const who = version.by === 'you' ? 'edited by Florian' : 'written by Claude';
+        const sent = artifact.mail?.sentVersion === version.v ? `, SENT by Florian ${dateTimeDMY(artifact.mail.sentAt)}` : '';
+        artifactLines.push(`- "${artifact.name}" version ${version.v}, ${who}, ${dateTimeDMY(version.ts)}${sent}: \`${dest}\``);
       }
     }
-
-    const render = (m) => `### ${m.role === 'user' ? 'Florian' : 'Claude'}, ${dateTimeDMY(m.ts)}\n\n${messageText(m) || '(no text)'}`;
-    let earlier = messages.slice(0, thread.extractedCount).map(render).join('\n\n');
+    const render = (m) => `### ${speaker(m)}, ${dateTimeDMY(m.ts)}\n\n${messageText(m) || '(no text)'}`;
+    const upTo = messages.slice(0, count);
+    let earlier = upTo.slice(0, thread.extractedCount).map(render).join('\n\n');
     if (earlier.length > 40_000) earlier = `(the beginning is cut)\n\n${earlier.slice(-40_000)}`;
-    const fresh = messages.slice(thread.extractedCount).map(render).join('\n\n');
-
+    const fresh = upTo.slice(thread.extractedCount).map(render).join('\n\n');
     const text = [
       `# Thread: ${thread.title}`,
       '',
       `Started: ${dateTimeDMY(thread.createdAt)}`,
+      `Project or area: ${thread.project || 'none named'}`,
       `Closed by Florian: ${thread.state === 'done' ? 'yes' : 'no, still open'}`,
       '',
       '## Files Claude made in this thread',
       '',
       artifactLines.length ? artifactLines.join('\n') : 'None.',
       '',
-      '## Earlier (seen by a previous brain update; context only, do not file again)',
+      '## Earlier (filed by a previous brain update; context only, do not file again)',
       '',
       earlier || 'Nothing.',
       '',
@@ -115,9 +126,44 @@ function writeTranscripts(runDir, changed) {
       fresh,
       '',
     ].join('\n');
-    fs.writeFileSync(path.join(dir, `${n} ${safeFileName(thread.title, 60)}.md`), text);
+    fs.writeFileSync(path.join(dir, `Thread ${n} ${safeFileName(thread.title, 60)}.md`), text);
   });
-  return dir;
+}
+
+function writeCards(dir, cards) {
+  const blocks = cards.map((c) => [
+    `## ${c.outcome === 'accepted' ? 'Accepted' : 'Declined'}: ${c.title}`,
+    '',
+    `- Kind: ${c.type}, by ${c.channel}`,
+    `- To: ${c.to || 'not named'}`,
+    `- Project or area: ${c.project || 'none named'}`,
+    `- Decided: ${dateTimeDMY(c.ts)}${c.how ? ` (${c.how})` : ''}`,
+    `- Id: ${c.key}`,
+    '',
+    '### As proposed',
+    '',
+    c.proposed,
+    ...(c.outcome === 'accepted' ? ['', `### As Florian took it${c.edited ? ' (he edited it)' : ' (unchanged)'}`, '', c.final] : []),
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'Cards.md'), `# Cards Florian decided since the last brain update\n\n${blocks.join('\n\n')}\n`);
+}
+
+function writeMail(dir, threads, since) {
+  const blocks = threads.map((t) => [
+    `## ${t.subject || '(no subject)'}`,
+    '',
+    `Gmail thread id: ${t.threadId}`,
+    '',
+    ...t.messages.map((m) => [
+      `### ${m.sent ? 'SENT by Florian' : 'RECEIVED'}, ${m.date}`,
+      '',
+      `From: ${m.from}`,
+      `To: ${m.to}${m.cc ? `\nCc: ${m.cc}` : ''}`,
+      '',
+      m.text || '(no text)',
+    ].join('\n')),
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'Mail.md'), `# Mail since ${dateTimeDMY(since)}\n\nOnly the messages that are new since then; earlier messages of a conversation are in Gmail.\n\n${blocks.join('\n\n')}\n`);
 }
 
 // Splits Claude's final message into the parts the app needs.
@@ -131,30 +177,47 @@ export function parseReport(text) {
     .replace(/^STATUS:.*$/m, '')
     .replace(/^COMMIT:.*$/m, '')
     .trim();
-  const qIndex = body.search(/^## Questions\s*$/m);
-  const questions = qIndex >= 0 ? body.slice(qIndex).replace(/^## Questions\s*$/m, '').trim() : '';
-  const written = (qIndex >= 0 ? body.slice(0, qIndex) : body).trim();
-  return { status, subject, written, questions };
+  const sections = {};
+  let name = 'written';
+  for (const line of body.split('\n')) {
+    const head = /^## (Written|Questions|Mail to answer)\s*$/i.exec(line);
+    if (head) { name = head[1].toLowerCase(); continue; }
+    sections[name] = `${sections[name] || ''}${line}\n`;
+  }
+  const mail = (sections['mail to answer'] || '')
+    .split('\n')
+    .map((l) => /^[-*]\s*([^|]+)\|([^|]*)\|?(.*)$/.exec(l))
+    .filter(Boolean)
+    .map((m) => ({ threadId: m[1].trim(), subject: m[2].trim(), why: m[3].trim() }))
+    .filter((m) => m.threadId);
+  return { status, subject, written: (sections.written || '').trim(), questions: (sections.questions || '').trim(), mail };
 }
 
 // What changed in the vault, for display. Session files in Artifacts/Thinking hold what
 // Claude read into a session; the vault says those are never shown to Florian.
-function visibleChanges(changes) {
-  return changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/'));
-}
+const visibleChanges = (changes) => changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/'));
 
 export function startExtraction() {
   if (current) return { started: false, reason: 'A brain update is already running.' };
   if (!brain.brainStatus().ready) return { started: false, reason: brain.brainStatus().error || 'The brain is not cloned yet.' };
-  const changed = changedThreads();
-  if (!changed.length) return { started: false, reason: 'Nothing new to file: every thread is already in the brain.' };
+  const status = extractionStatus();
+  if (!status.waiting && !status.notes && !status.cards && !status.mail) {
+    return { started: false, reason: 'Nothing new to file: everything is already in the brain.' };
+  }
 
   const id = new Date().toISOString().replace(/[:.]/g, '-');
-  current = { id, startedAt: Date.now(), step: 'Starting', threads: changed.map((c) => c.thread.title) };
-  runExtraction(id, changed)
+  // The press fixes the level: each thread as it stands right now, and this moment for
+  // mail and cards. Whatever comes after waits for the next update.
+  const pressedAt = Date.now();
+  const changed = unfiledThreads().map((thread) => {
+    const messages = store.readMessages(thread.id);
+    return { thread: { ...thread }, messages, count: messages.length };
+  });
+  current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title) };
+  runExtraction(id, changed, pressedAt)
     .catch((err) => {
       log(`brain update failed: ${err.stack || err.message}`);
-      return { id, startedAt: current.startedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads };
+      return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads };
     })
     .then(async (record) => {
       if (record.status === 'failed') await brain.discardChanges();
@@ -163,33 +226,95 @@ export function startExtraction() {
       fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(record, null, 2));
       current = null;
       store.events.emit('brain', extractionStatus());
+      saveNow('brain update').catch(() => {});
     });
   store.events.emit('brain', extractionStatus());
   return { started: true, threads: current.threads };
 }
 
-async function runExtraction(id, changed) {
-  const startedAt = current.startedAt;
+async function runExtraction(id, changed, pressedAt) {
   const runDir = path.join(EXTRACTIONS_DIR, id);
-  fs.mkdirSync(runDir, { recursive: true });
-  // How far each thread had got when the run started: later messages wait for the next run.
-  const seen = changed.map(({ thread, messages }) => ({ id: thread.id, title: thread.title, count: messages.length }));
+  const dir = path.join(runDir, 'transcripts');
+  fs.mkdirSync(dir, { recursive: true });
+  const state = getState();
 
   return brain.withWriter('brain update', async () => {
     setStep('Getting the vault up to date');
     await brain.pullForWriting();
 
-    setStep(`Reading ${changed.length} ${changed.length === 1 ? 'thread' : 'threads'}`);
-    const transcriptsDir = writeTranscripts(runDir, changed);
+    const material = [];
+    if (changed.length) {
+      writeThreads(dir, changed);
+      material.push(`- ${changed.length} thread file${changed.length === 1 ? '' : 's'} ("Thread NN ….md"), each with its files in a folder next to it`);
+    }
 
+    const notes = (readPad('notes') || '');
+    if (notes.trim()) {
+      fs.writeFileSync(path.join(dir, 'Notes for Claude.md'), `# Notes for Claude\n\nWritten by Florian in the app, up to ${dateTimeDMY(pressedAt)}.\n\n${notes.trim()}\n`);
+      material.push('- `Notes for Claude.md`');
+    }
+
+    const cards = readCardLog().filter((e) => e.ts > state.cardsLevel && e.ts <= pressedAt);
+    if (cards.length) {
+      writeCards(dir, cards);
+      material.push('- `Cards.md`');
+    }
+
+    let mailThreads = [];
+    let mailError = '';
+    let mailRead = false;
+    if (google.googleConnected()) {
+      setStep('Reading new mail');
+      // The first time, look back one day.
+      const since = state.mailLevel || pressedAt - 24 * 3600_000;
+      try {
+        mailThreads = await google.gmailSince(since);
+        mailRead = true;
+        if (mailThreads.length) {
+          writeMail(dir, mailThreads, since);
+          material.push('- `Mail.md`');
+        }
+      } catch (err) {
+        mailError = err.message;
+        log(`brain update: mail could not be read: ${err.message}`);
+      }
+    }
+
+    const finishLevels = () => {
+      for (const c of changed) {
+        const thread = store.getThread(c.thread.id);
+        if (!thread) continue;
+        const patch = { extractedCount: c.count, extractedAt: pressedAt };
+        if (thread.state === 'done' && thread.messageCount <= c.count) patch.archived = true;
+        store.updateThread(c.thread.id, patch);
+      }
+      const levels = { cardsLevel: pressedAt };
+      if (mailRead) levels.mailLevel = pressedAt;
+      setState(levels);
+      // The notes pad is emptied of what was filed; anything typed since stays.
+      if (notes.trim()) {
+        const now = readPad('notes') || '';
+        writePad('notes', now.startsWith(notes) ? now.slice(notes.length).replace(/^\s+/, '') : now);
+      }
+    };
+
+    const base = { id, startedAt: pressedAt, threads: changed.map((c) => c.thread.title), mailCount: mailThreads.length, mailError, notes: Boolean(notes.trim()), cardCount: cards.length };
+
+    if (!material.length) {
+      finishLevels();
+      return { ...base, finishedAt: Date.now(), status: 'nothing', written: '', changes: [], pushed: true, replyThreads: [] };
+    }
+
+    setStep('Reading what is new');
     const result = await runAgent({
-      prompt: readPrompt('extract.md', { today: todayLine(), transcriptsDir }),
+      prompt: readPrompt('extract.md', { today: todayLine(), transcriptsDir: dir, material: material.join('\n') }),
       cwd: brain.brainDir(),
       systemAppend: 'You are running inside Florian\'s inbox app as its brain update. The run\'s instructions are in the user message.',
-      model: config.extractModel || config.model,
+      model: state.model,
+      effort: state.effort,
       mode: 'extract',
       artifactsDir: null,
-      readDirs: [transcriptsDir],
+      readDirs: [dir],
       protectedPaths: config.protectedPaths,
       title: `Brain update ${dateDMY()}`,
       fake: config.fake,
@@ -203,18 +328,12 @@ async function runExtraction(id, changed) {
 
     const report = parseReport(result.finalText || result.text);
     setStep('Committing and pushing');
+    const subject = report.subject || `thinking: the app, ${dateDMY()}`;
     const committed = await brain.commitAndPush({
-      subject: report.subject || `thinking: threads from the app, ${dateDMY()}`,
+      subject,
       body: `Co-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: app-ai brain update ${id}`,
     });
-
-    for (const s of seen) {
-      const thread = store.getThread(s.id);
-      if (!thread) continue;
-      const patch = { extractedCount: s.count };
-      if (thread.state === 'done' && thread.messageCount <= s.count) patch.archived = true;
-      store.updateThread(s.id, patch);
-    }
+    finishLevels();
 
     let questionsThread = null;
     if (report.questions) {
@@ -227,24 +346,39 @@ async function runExtraction(id, changed) {
         role: 'assistant',
         parts: [{
           type: 'text',
-          text: `These came up while filing your threads into the brain. Nothing below has been written yet. Answer here, then update the brain again.\n\n${report.questions}`,
+          text: `These came up while filing into the brain. Nothing below has been written yet. Answer here, then update the brain again.\n\n${report.questions}`,
         }],
       });
-      store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now() });
+      store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'Questions from the brain update' });
       questionsThread = thread.id;
     }
 
+    // Mail that needs an answer: one thread each, with Claude already drafting the reply.
+    const replyThreads = [];
+    for (const m of report.mail.slice(0, 8)) {
+      const thread = store.createThread({ title: `Reply: ${m.subject || 'a mail'}`.slice(0, 100), kind: 'mail-reply' });
+      runner.sendMessage(thread.id, [
+        'A mail arrived that needs an answer from Florian. The brain update noticed it; he has not seen it yet.',
+        '',
+        `Gmail thread id: ${m.threadId}`,
+        `Subject: ${m.subject}`,
+        `What it is about: ${m.why}`,
+        '',
+        'Read the conversation with the mail tools and the notes in the vault that it concerns. Then draft the reply as a mail file, with this thread id in `reply-to-thread:`. In your message, tell Florian in two or three sentences who wrote and what they want, say that a draft is ready, and ask the one thing you need from him, if any.',
+      ].join('\n'), { auto: true });
+      replyThreads.push(thread.id);
+    }
+
     return {
-      id,
-      startedAt,
+      ...base,
       finishedAt: Date.now(),
       status: committed ? 'updated' : 'nothing',
-      threads: seen.map((s) => s.title),
       written: report.written,
       hasQuestions: Boolean(report.questions),
       questionsThread,
+      replyThreads,
       commit: committed?.commit || '',
-      subject: committed ? report.subject || `thinking: threads from the app, ${dateDMY()}` : '',
+      subject: committed ? subject : '',
       pushed: committed ? committed.pushed : true,
       pushError: committed?.pushError || '',
       changes: committed ? visibleChanges(committed.changes) : [],

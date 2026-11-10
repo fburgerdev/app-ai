@@ -115,7 +115,6 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
-    case 'mcp__google__gmail_save_draft': return `${input.draftId ? 'Updated the' : 'Saved a'} Gmail draft to ${clip(input.to, 60)}`;
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
     case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}`;
     case 'TodoWrite':
@@ -158,7 +157,7 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers }) {
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers }) {
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -199,6 +198,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifac
   if (resume) options.resume = resume;
   else if (title && !plain) options.title = title;
   if (model) options.model = model;
+  if (effort && !plain) options.effort = effort;
 
   // The permission callback needs the streaming form of the prompt.
   async function* input() {
@@ -267,7 +267,9 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifac
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, signal, onEvent }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode, artifactsDir, readDirs, signal, onEvent }) {
+  // In the no-tools mode the instructions are the system prompt; the stand-in reads both.
+  const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
   const sessionId = resume || `fake-${Date.now().toString(36)}`;
   onEvent?.({ type: 'session', sessionId });
   const speed = Number(process.env.APP_AI_FAKE_SPEED || 1);
@@ -281,8 +283,21 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
     return full;
   };
 
+  if (mode === 'plain' && /PICK-NEXT/.test(prompt)) {
+    // A stand-in picker: whatever matches a word of the mood line comes first.
+    const mood = (/^Mood line: (.*)$/m.exec(prompt)?.[1] || '').toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+    const items = [...(prompt.split('\nWaiting:\n')[1] || '').matchAll(/^(\d+)\. (.*)$/gm)].map((m) => ({ n: Number(m[1]), line: m[2].toLowerCase() }));
+    const hits = items.filter((i) => mood.some((w) => i.line.includes(w)));
+    const order = [...hits, ...items.filter((i) => !hits.includes(i))].map((i) => i.n);
+    const out = JSON.stringify({ order, why: hits.length ? 'matches your mood line' : 'oldest first' });
+    return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
+  }
+  if (mode === 'plain' && /LEARN-PROFILE/.test(prompt)) {
+    const out = '- Stand-in profile: accepts short messages, requeues long reads.';
+    return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
+  }
   if (mode === 'plain') {
-    const source = prompt.split('---').pop().replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+    const source = userPrompt.split('---').pop().replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
     const digest = source.length > 260 ? `${source.slice(0, 260)}…` : source;
     return { sessionId: null, text: digest, finalText: digest, error: '', aborted: false };
   }
@@ -300,6 +315,7 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
       .filter((name) => name.endsWith('.md'))
       .map((name) => fs.readFileSync(path.join(dir, name), 'utf8')));
     const wantsQuestions = transcripts.some((t) => /QUESTION-TEST/.test(t.split('## New')[1] || ''));
+    const wantsReply = transcripts.some((t) => /MAIL-TEST/.test(t));
     const report = [
       wantsQuestions ? 'STATUS: questions' : 'STATUS: updated',
       'COMMIT: thinking: stand-in brain update from the app',
@@ -307,9 +323,29 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
       '## Written',
       '- Brain/App Test.md — one test line',
       ...(wantsQuestions ? ['', '## Questions', '**App test**', '1. Add "Call the office" to Next Actions?'] : []),
+      ...(wantsReply ? ['', '## Mail to answer', '- T-EXAMPLE | Terminvorschlag | asks for a date'] : []),
     ].join('\n');
     await say(report);
     return { sessionId, text: report, finalText: report, error: '', aborted: false };
+  }
+
+  if (/CARDS-RUN/.test(prompt)) {
+    // A stand-in card run: one opportunity and one chase card.
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    const stamp = Date.now().toString(36);
+    fs.writeFileSync(path.join(artifactsDir, 'one.json'), JSON.stringify({
+      type: 'opportunity', channel: 'linkedin', key: `opp:example-person:${stamp}`,
+      title: 'Connect with an example person', why: 'Runs catering at an example Studierendenwerk; no contact yet.',
+      project: '', to: 'Example Person', link: 'https://www.linkedin.com/in/example',
+      text: 'Hallo Frau Beispiel,\n\nich arbeite mit einem Studierendenwerk an pflanzlicher Hochschulgastronomie und würde mich gern mit Ihnen vernetzen.\n\nDieser zweite Absatz ist vielleicht zu viel.\n\nViele Grüße\nFlorian',
+    }));
+    fs.writeFileSync(path.join(artifactsDir, 'two.json'), JSON.stringify({
+      type: 'chase', channel: 'mail', key: `chase:example-office:${stamp}`,
+      title: 'Chase the example office', why: 'Waiting since 02-11 for their answer; chase date reached.',
+      project: '', to: 'office@example.org', subject: 'Kurze Nachfrage',
+      text: 'Hallo Frau Beispiel,\n\nich wollte kurz nachfragen, ob es schon Neuigkeiten gibt.\n\nViele Grüße\nFlorian',
+    }));
+    return { sessionId, text: 'Made 2 cards.', finalText: 'Made 2 cards.', error: '', aborted: false };
   }
 
   if (/FAIL-TEST/.test(prompt)) {
@@ -332,8 +368,8 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
     const file = path.join(artifactsDir, 'Mail an das Büro.md');
     const round = fs.existsSync(file) ? 2 : 1;
     const body = round === 1
-      ? '# Mail an das Büro\n\n**Betreff:** Konzept, nächste Schritte\n\nHallo Frau Beispiel,\n\nvielen Dank für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nIch schlage vor, dass wir die offenen Punkte in der kommenden Woche besprechen.\n\nViele Grüße\nFlorian\n'
-      : '# Mail an das Büro\n\n**Betreff:** Konzept, nächste Schritte\n\nHallo Frau Beispiel,\n\ndanke für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nPasst Ihnen Donnerstag, 14 Uhr, um die offenen Punkte durchzugehen?\n\nViele Grüße\nFlorian\n';
+      ? '---\ntype: mail\nto: office@example.org\nsubject: Konzept, nächste Schritte\n---\nHallo Frau Beispiel,\n\nvielen Dank für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nIch schlage vor, dass wir die offenen Punkte in der kommenden Woche besprechen.\n\nViele Grüße\nFlorian\n'
+      : '---\ntype: mail\nto: office@example.org\nsubject: Konzept, nächste Schritte\n---\nHallo Frau Beispiel,\n\ndanke für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nPasst Ihnen Donnerstag, 14 Uhr, um die offenen Punkte durchzugehen?\n\nViele Grüße\nFlorian\n';
     fs.writeFileSync(file, body);
     onEvent?.({ type: 'tool', name: 'Write', summary: 'Wrote Mail an das Büro.md' });
     await sleep(200 * speed);

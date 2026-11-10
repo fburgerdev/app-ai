@@ -305,7 +305,7 @@ input.thread-title:hover { background: var(--panel); }
 }
 .composer textarea::placeholder { color: var(--faint); }
 .composer textarea:focus { outline: none; border-color: var(--you); }
-.composer-foot { display: flex; align-items: center; gap: 12px; margin-top: 9px; }
+.composer-foot { display: flex; align-items: center; gap: 14px; margin-top: 9px; }
 .hint { color: var(--faint); font-size: 12.5px; }
 .btn-send {
   margin-left: auto;
@@ -369,7 +369,7 @@ input.thread-title:hover { background: var(--panel); }
 .panel-body.is-frame { padding: 0; }
 .panel-note { margin: 0; color: var(--muted); }
 .panel-body > .btn { align-self: flex-start; }
-.has-panel .hint { display: none; }
+.has-panel .pick { font-size: 0; gap: 0; }
 .frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .image { max-width: 100%; border-radius: 6px; }
 .plain-file { margin: 0; font: 13px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -531,6 +531,158 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 
 .msg-you .md blockquote { font-size: 14px; }
 
+/* ---------- mood line, tabs, model ---------- */
+
+.mood {
+  width: 100%;
+  margin-top: 10px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 11px;
+  color: var(--quote);
+}
+.mood::placeholder { color: var(--faint); }
+.mood:focus { outline: none; border-color: var(--quote); }
+.tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+.tab {
+  border: 0; background: none; cursor: pointer;
+  padding: 6px 10px 8px;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab.is-on { color: var(--bright); border-bottom-color: var(--you); }
+.pick { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: 12.5px; }
+.pick .select { margin: 0; padding: 4px 6px; font-size: 13px; color: var(--muted); background: transparent; }
+.project-pick { max-width: 13rem; margin: 0 6px 0 0; color: var(--muted); background: transparent; font-size: 13px; }
+.composer[hidden] { display: none; }
+
+.tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(195, 166, 255, 0.16);
+  color: var(--quote);
+  font-size: 11.5px;
+}
+.group-note { margin: 0 8px 4px; color: var(--quote); font-size: 12.5px; }
+.group-foot { margin: 8px 8px 0; font-size: 12.5px; }
+.looking { display: inline-flex; align-items: center; color: var(--work); }
+
+/* ---------- projects ---------- */
+
+.proj-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0; background: none; cursor: pointer;
+  padding: 7px 8px 7px 20px;
+  border-radius: 8px;
+  text-align: left;
+}
+.proj-row:hover { background: var(--panel); }
+.proj.is-open > .proj-row { background: var(--raised); }
+.proj.is-area > .proj-row { padding-left: 8px; }
+.proj.is-area .proj-name { color: var(--head); font-weight: 650; }
+.proj-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-meta { flex: none; color: var(--faint); font-size: 12px; }
+.proj-meta.has-open { color: var(--you); }
+.proj-body { padding: 4px 0 8px 12px; animation: swap 160ms ease-out; }
+.proj-about { margin: 2px 8px 6px; color: var(--muted); font-size: 12.5px; }
+.proj-actions { display: flex; flex-wrap: wrap; }
+
+/* ---------- the water level ---------- */
+
+.level {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -8px 0;
+  color: var(--work);
+  font-size: 12.5px;
+  animation: swap 300ms ease-out;
+}
+.level::before, .level::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(122, 168, 255, 0.55)); }
+.level::after { transform: scaleX(-1); }
+
+.msg-event { margin: 0; color: var(--done); font-size: 13.5px; text-align: center; }
+.msg-auto { color: var(--faint); font-size: 13px; }
+.msg-auto summary { cursor: pointer; width: fit-content; }
+.msg-auto .md { font: 14px/1.5 var(--sans); color: var(--muted); margin-top: 8px; }
+
+/* ---------- a mail you can edit and send ---------- */
+
+.mail {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--head);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mail.is-sent { border-left-color: var(--done); }
+.mail-field { display: flex; align-items: baseline; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+.mail-field span { flex: none; width: 3.6em; color: var(--faint); font-size: 12.5px; }
+.mail-field input { flex: 1; min-width: 0; border: 0; background: none; padding: 9px 0; color: var(--bright); font-weight: 550; }
+.mail-field input:focus, .mail-body:focus, .card-text:focus, .pad:focus { outline: none; }
+.mail-body, .card-text {
+  display: block;
+  width: 100%;
+  border: 0;
+  resize: none;
+  overflow: hidden;
+  background: none;
+  padding: 14px;
+  font: 16px/1.62 var(--serif);
+  color: var(--read);
+}
+.mail-body:focus, .card-text:focus { background: rgba(255, 255, 255, 0.025); }
+.mail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.mail-status { margin-left: auto; color: var(--faint); font-size: 12.5px; }
+.mail-confirm { color: var(--you); margin-right: 6px; }
+.mail-sent { color: var(--done); padding: 4px 2px; }
+.mail-plain { margin: 0; white-space: pre-wrap; font: 16px/1.62 var(--serif); color: var(--read); }
+
+/* ---------- an opportunity or chase card ---------- */
+
+.card { display: flex; flex-direction: column; gap: 14px; margin-top: 4vh; }
+.card-why { margin: 0 0 6px; font: 500 19px/1.4 var(--serif); color: var(--read); }
+.card-to { margin: 0; color: var(--muted); }
+.card-to strong { color: var(--bright); }
+.card-to a { color: var(--link); }
+.card > .card-text { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--quote); border-radius: 8px; }
+.card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.card-actions .btn-send { margin-left: 0; max-width: none; display: inline-flex; }
+.card-actions .btn-send kbd { color: var(--you-ink); border-color: rgba(42, 31, 8, 0.4); }
+.card-hint { color: var(--faint); font-size: 12.5px; }
+.card-done { margin: 0; color: var(--done); }
+
+/* ---------- pads ---------- */
+
+.messages.is-pad { max-width: 52rem; height: 100%; gap: 12px; padding-bottom: 20px; }
+.pad-about { margin: 0; color: var(--muted); font-size: 13.5px; max-width: 44rem; }
+.pad {
+  flex: 1;
+  min-height: 50vh;
+  width: 100%;
+  resize: none;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  font: 16px/1.6 var(--mono);
+  font-variant-ligatures: none;
+  color: var(--text);
+}
+.pad:focus { border-color: var(--line); }
+
 /* ---------- connections ---------- */
 
 .conn { padding: 4px 0 18px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
@@ -538,7 +690,7 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .conn-title { margin: 0; font: 650 15px/1.3 var(--sans); color: var(--bright); display: flex; gap: 12px; align-items: baseline; }
 .conn-state { font-weight: 400; font-size: 13px; color: var(--muted); }
 .conn-state.is-on { color: var(--done); }
-.foot-links { display: flex; gap: 16px; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 
 /* ---------- motion ----------
    Everything here answers something you did: a thread opening, a panel sliding, a

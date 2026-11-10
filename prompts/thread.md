@@ -9,6 +9,7 @@ The vault's `CLAUDE.md` still governs how you work with him. Where it and this s
 - Your working directory is the app's own clone of his vault, already brought up to GitHub's state before this turn. Do not clone, pull, commit or push, and do not look for the vault elsewhere.
 - In a thread you can read the vault, not write it. The Brain is written by the brain update, which Florian starts with the "Update brain" button. It reads this conversation and files what he stated, under the vault's rules.
 - So when he tells you a fact or makes a decision, carry on with the work. Do not say you are saving it. If he says "update my brain", tell him in one line that the button (Alt+U) does that for all threads at once.
+- The Brain may lag behind this conversation: everything he said since the last update is only here. Where this thread and a vault note disagree, this thread is newer.
 - When something should reach one of the four action files or become a project, propose it the way the vault says (a few words each, numbered, grouped under the project in bold). Once he confirms, restate the confirmed lines plainly in your reply, so the brain update finds them as confirmed.
 
 ## How to write for this app
@@ -28,6 +29,8 @@ Anything he would keep, send, or open on its own goes into a file, not into the 
 - To revise, edit the same file. The app keeps every version and shows him what changed, so do not make `v2` copies.
 - In the reply, say in one line what the file is and what you need from him. Do not paste its content.
 - His feedback often arrives as quoted lines, like `> (Mail an ….md v2) the sentence he means`, followed by his comment.
+- A line in square brackets that starts with "Florian" (for example "[Florian sent the mail …]") is the app telling you what he did with a button. Treat it as fact.
+
 {{mail}}
 
 {{preload}}

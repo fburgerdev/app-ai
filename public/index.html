@@ -20,6 +20,12 @@
     <nav class="rail" aria-label="Threads">
       <div class="rail-top">
         <button id="new-thread" class="btn btn-new" type="button">New thread <kbd>Alt N</kbd></button>
+        <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
+               placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
+        <div class="tabs" role="tablist">
+          <button id="tab-queue" class="tab is-on" type="button" role="tab">Queue</button>
+          <button id="tab-projects" class="tab" type="button" role="tab">Projects</button>
+        </div>
       </div>
       <div id="rail-lists" class="rail-lists"></div>
       <div id="brain" class="brain"></div>
@@ -33,7 +39,12 @@
       <form id="composer" class="composer" autocomplete="off">
         <textarea id="input" rows="1" placeholder="Reply…" aria-label="Your message"></textarea>
         <div class="composer-foot">
-          <span id="composer-hint" class="hint"></span>
+          <label class="pick">Model
+            <select id="model" class="select"></select>
+          </label>
+          <label class="pick">Effort
+            <select id="effort" class="select"></select>
+          </label>
           <button id="send" class="btn btn-send" type="submit">Send</button>
         </div>
       </form>

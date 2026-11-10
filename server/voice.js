@@ -18,6 +18,7 @@ import { WebSocketServer } from 'ws';
 import { log } from './config.js';
 import * as store from './store.js';
 import * as runner from './runner.js';
+import { queueOrder, recordDecision } from './queue.js';
 
 const DICTATED = '[Dictated on a phone call; may contain transcription errors.]';
 
@@ -178,18 +179,20 @@ export class CallSession {
 
 // ---------- the app, as a call sees it ----------
 
+// A call or a walk goes through the conversations in the queue's order. Cards are left
+// to the screen: they are for reading and editing, not for listening.
 const app = {
-  inbox: () => store.listThreads().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt),
+  inbox: () => queueOrder().map((id) => store.getThread(id)).filter((t) => t && t.kind !== 'card'),
   workingCount: () => store.listThreads().filter((t) => t.state === 'working').length,
   thread: (id) => store.getThread(id),
   digest: (id) => runner.spokenDigest(id),
-  reply: (id, text) => runner.sendMessage(id, text),
+  reply: (id, text) => { recordDecision('replied', store.getThread(id), { by: 'voice' }); runner.sendMessage(id, text); },
   create: (text) => {
     const thread = store.createThread({ title: runner.titleFrom(text) });
     runner.sendMessage(thread.id, text);
   },
-  later: (id) => store.updateThread(id, { queuedAt: Date.now() }),
-  done: (id) => store.updateThread(id, { state: 'done', doneAt: Date.now(), error: '' }),
+  later: (id) => { recordDecision('requeued', store.getThread(id), { by: 'voice' }); store.updateThread(id, { requeuedAt: Date.now() }); },
+  done: (id) => { recordDecision('done', store.getThread(id), { by: 'voice' }); store.updateThread(id, { state: 'done', doneAt: Date.now(), error: '' }); },
 };
 
 // ---------- Twilio ----------
@@ -255,16 +258,28 @@ function redeem(token) {
   return Boolean(expires && expires > Date.now());
 }
 
-// Accepts the audio connection Twilio opens for a call.
-export function attachVoice(server, config) {
+// Accepts the audio connection Twilio opens for a call, and the connection the app's own
+// walk mode opens from the phone's browser. Both speak the same few messages; they
+// differ in who is let in. A call must present Twilio's one-time token. Walk mode must
+// come from one of the app's own pages, under an address the app answers to.
+export function attachVoice(server, config, allowedHosts) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const pathname = (req.url || '').split('?')[0];
-    if (pathname !== '/voice/ws' || !voiceStatus(config).ready) { socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
+    if (pathname === '/voice/ws' && voiceStatus(config).ready) {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, false));
+      return;
+    }
+    const host = String(req.headers.host || '').toLowerCase();
+    const origin = String(req.headers.origin || '').replace(/^https?:\/\//, '').toLowerCase();
+    if (pathname === '/walk/ws' && allowedHosts.has(host) && origin === host) {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, true));
+      return;
+    }
+    socket.destroy();
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, trusted) => {
     let session = null;
     const send = (message) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message)); };
     // A connection that does not identify itself at once is not Twilio.
@@ -275,9 +290,9 @@ export function attachVoice(server, config) {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (!session) {
-        if (msg.type !== 'setup' || !redeem(msg.customParameters?.token)) { ws.close(1008, 'not allowed'); return; }
+        if (msg.type !== 'setup' || !(trusted || redeem(msg.customParameters?.token))) { ws.close(1008, 'not allowed'); return; }
         clearTimeout(deadline);
-        log(`voice: call from ${msg.from} connected`);
+        log(trusted ? 'voice: walk mode connected' : `voice: call from ${msg.from} connected`);
         session = new CallSession({
           say: (text) => send({ type: 'text', token: text, last: true }),
           hangUp: () => setTimeout(() => send({ type: 'end' }), 2500),

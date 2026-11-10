@@ -26,7 +26,15 @@ function vaultPath(vaultDir, file) {
   return rel.split(path.sep).join('/');
 }
 
+let enabled = false;
+
+// The log is off unless config.json says readLog: true.
+export function initReads(cfg) {
+  enabled = Boolean(cfg.readLog);
+}
+
 function write(entry) {
+  if (!enabled) return;
   try {
     fs.appendFileSync(READS_FILE, JSON.stringify({ ts: Date.now(), ...entry }) + '\n');
   } catch {

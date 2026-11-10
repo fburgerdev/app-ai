@@ -4,11 +4,11 @@ The app signs in to Google as you, through a Google Cloud project that belongs t
 
 ## What threads can do afterwards
 
-- Search and read your mail.
-- Save drafts in Gmail, and update a draft when you ask for changes. You send them yourself.
-- Read your calendar, and add an entry to it.
+- Threads can search and read your mail, read your calendar, and add an entry to it.
+- A mail Claude writes gets two buttons: **Put in Gmail** (a draft) and **Send** (after one confirmation). Only your click uses them.
+- "Update brain" also reads the mail that arrived and went out since the last update.
 
-There is no tool for sending mail, deleting anything or inviting people, so a thread cannot do those. (Google has no "drafts only" permission: the permission that allows drafts would also allow sending. The app simply contains no code that sends.)
+Claude has no tool for saving drafts, sending mail, deleting anything or inviting people, so a thread cannot do those, whatever it is told. Sending exists only behind the Send button.
 
 ## Steps
 
@@ -31,5 +31,5 @@ Connections now shows "connected". Every new turn in every thread can use mail a
 ## Good to know
 
 - The sign-in is kept in `google-token.json` in the app's data folder. "Disconnect" in Connections deletes it. To withdraw access on Google's side as well: https://myaccount.google.com/permissions.
-- A mail draft is still written as a file in the thread, so you can read it beside the chat, quote from it and see what changed between versions. The Gmail draft is the copy you send.
+- A mail is a file in its thread. You can edit it there, and every version is kept, yours and Claude's.
 - If a thread reports that Google refused the sign-in, connect again in Connections.

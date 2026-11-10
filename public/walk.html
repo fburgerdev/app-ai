@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#1b1d2a">
+  <title>Walk mode</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/fonts/instrument-sans/wght.css">
+  <link rel="stylesheet" href="/vendor/fonts/literata/wght.css">
+  <link rel="stylesheet" href="/walk.css">
+</head>
+<body>
+  <main class="walk">
+    <header class="walk-head">
+      <a href="/" class="back">Back to the inbox</a>
+      <label class="lang">Language
+        <select id="lang">
+          <option value="en-US">English</option>
+          <option value="de-DE">Deutsch</option>
+        </select>
+      </label>
+    </header>
+
+    <p id="state" class="state">Tap to start</p>
+    <p id="said" class="said"></p>
+    <p id="heard" class="heard"></p>
+
+    <button id="talk" class="talk" type="button">Start</button>
+
+    <div class="keys">
+      <button type="button" data-say="send">Send</button>
+      <button type="button" data-say="repeat">Repeat</button>
+      <button type="button" data-say="later">Later</button>
+      <button type="button" data-say="done">Done</button>
+      <button type="button" data-say="cancel">Cancel</button>
+      <button type="button" id="lock">Lock for the pocket</button>
+    </div>
+    <p id="note" class="note"></p>
+  </main>
+
+  <div id="shield" class="shield" hidden>
+    <p>Locked. You can keep talking.</p>
+    <button id="unlock" type="button">Hold to unlock</button>
+  </div>
+
+  <script type="module" src="/walk.js"></script>
+</body>
+</html>
