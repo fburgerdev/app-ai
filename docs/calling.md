@@ -2,24 +2,25 @@
 
 You call a phone number; the app reads you the thread that has waited longest; you answer out loud; it moves to the next one. Claude starts working on your answer while the call goes on.
 
-**There is a free alternative: walk mode.** It is the same conversation from your phone's browser, with the phone's own speech recognition and voice (see the README). What follows is for a real phone number, which costs about $0.08 a minute at Twilio.
+**There is a free alternative: the Talk page.** It is the same conversation from your phone's browser, with the phone's own speech recognition and voice (see the README). What follows is for a real phone number, which costs about $0.08 a minute at Twilio.
 
 This part is built and tested against a simulated call, but it has never taken a real one: a Twilio account is needed for that, and only you can open one. Expect to adjust a detail or two on the first try.
 
 ## What a call is like
 
 - The app says how many threads are waiting, then the first one's name and a spoken summary of Claude's reply (prepared when the thread became ready, so there is no waiting).
-- Speak your reply. You can pause; everything you say is collected until you say **send**. Ending a sentence with "…and send it" works too.
+- Speak your reply. The host (see "Talk" in the README) decides where it goes: to the thread you just heard, to a new thread, or it answers you itself. Twilio hands over what you said after a pause of 2.5 seconds (`speechTimeoutMs`).
 - When nothing is waiting, the app stays on the line and tells you when Claude finishes a thread.
 
 | Say | or press | |
 |---|---|---|
-| send | 1 | Send what you dictated, go to the next thread |
+| (your reply) | | Goes to the thread you just heard; the next one is read out |
+| …and send it | 1 | Sends what you said to the open thread as it is, without the host deciding |
 | repeat | 2 | Hear the thread again |
-| later / skip | 3 | Put the thread at the back |
+| next / later / skip | 3 | Put the thread at the back |
 | done | 4 | Close the thread |
-| new thread | 5 | Dictate a new thread, then "send" |
-| cancel | 0 | Drop what you dictated |
+| new thread | 5 | The next thing you say starts a new thread |
+| cancel | 0 | Drop what the host is holding |
 | goodbye | 9 | End the call |
 
 A reply sent by phone is marked as dictated, so Claude reads past transcription errors.

@@ -26,13 +26,17 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 ## The queue
 
-The left side shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from three things.
+The thread list is out of the way until you want it: move the pointer to the right edge of the window and it slides in; move away and it leaves. The small tab on that edge shows how many threads wait. Alt+L shows it from the keyboard, and "Keep open" at its top makes it a fixed column again. On a phone it is behind the **Threads** button.
 
-- **The mood line** at the top left. Type what you feel like ("maths", "research, no mails"). It saves as you type and nothing is sent; the queue reorders within a few seconds. Empty it to go back to normal.
+It shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from three things.
+
+- **The mood line** at the top of the list (Alt+M). Type what you feel like ("maths", "research, no mails"). It saves as you type and nothing is sent; the queue reorders within a few seconds. Empty it to go back to normal.
 - **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, open by hand instead of what was offered, and which cards you accept or decline. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Notes for Claude → "What the queue has learned". Your own lines are kept.
 - **Otherwise:** things with a date or that block others first, then what has waited longest, kinds mixed.
 
 The order is worked out in the background, so moving on never waits for a model. Under the heading you see in a few words why the first one is first. You can always click any thread yourself.
+
+**Drag a thread** to where you want it (with a finger: press and hold, then move). It stays at that place until you have dealt with it, whatever the model thinks; the rest is ordered around it. The drag is recorded as a choice the queue learns from.
 
 **Requeue** (Alt+S) means "not now": the thread goes to the back for 20 minutes and you get the next one.
 
@@ -47,6 +51,7 @@ The order is worked out in the background, so moving on never waits for a model.
 | Alt+J / Alt+K | Next / previous thread in the list |
 | Alt+A | Show or hide the files Claude made in this thread |
 | Alt+U | Update the brain |
+| Alt+L | Show or hide the thread list |
 | Alt+M | Jump to the mood line |
 | Alt+P | Scratchpad |
 | Esc | Close the side panel |
@@ -89,7 +94,7 @@ Every thread has a line: **In the brain up to here**. Everything above it has be
 The same press also takes in:
 
 - **New mail.** With Gmail connected, everything received and sent since the last update. What matters is filed. A mail that needs your answer becomes a thread in the queue, with Claude already drafting the reply.
-- **Notes for Claude.** A page (bottom left) for half-sentences, updated facts and nudges about how Claude works. The update files them and empties the page, so an empty page means they went in.
+- **Notes for Claude.** A page (at the bottom of the thread list) for half-sentences, updated facts and nudges about how Claude works. The update files them and empties the page, so an empty page means they went in.
 - **Cards you decided**, so sent messages and their Waiting For rows land in the vault.
 
 Then the app makes one `thinking:` commit and pushes. What the vault says needs your confirmation is not written; it comes back as a thread called "Brain update …: questions".
@@ -108,15 +113,40 @@ The **Projects** tab shows the vault's areas and projects, read from `Brain/Proj
 
 A page to write in, like the one in Obsidian (Alt+P). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
 
-## Walk mode
+## Talk: the host
 
-`/walk`, or "Walk mode" at the bottom left: the queue by voice, from your phone's browser, free of charge. The phone turns your speech into text and reads replies aloud. The app reads you a spoken summary of what is waiting, collects what you say until you say **send**, and moves on. Also: repeat, later, done, new thread, cancel, goodbye, each with a button.
+`/walk`, "Talk" at the bottom of the thread list, or the **Talk** button on the phone. You speak or type to the **host**, a small model (Haiku) that sits between you and the threads. For everything you say it decides where it goes:
 
-- It needs Chrome on Android and the app reachable from the phone over https: [docs/pi.md](docs/pi.md) (the Tailscale part works for a laptop too).
+- **To the open thread.** After a thread has been read to you, what you say is your reply to it. It is sent, and the next thread is read out. No closing keyword is needed.
+- **To a new thread**, when it is a new piece of work for Claude ("ask Claude to find out when the board meets").
+- **To the app**, when it is a command: next, done, repeat, read all, new thread, cancel, goodbye. A thread by name works too ("open the grant one"), and so do "my mood is …" and "note for Claude: …".
+- **Nowhere: it answers itself.** Ask what is waiting, what a thread said, or anything a chatbot can answer. Questions that need more (something current from the web, careful thought) go to a stronger model (Sonnet), which may search the web. The host keeps the conversation in mind, so you can ask follow-ups, and "make that a thread" turns the conversation into one.
+
+The short commands and "…and send it" at the end of a sentence work without the model, at once. If the model fails, nothing is lost: say "send" to give what you said to the open thread as it is.
+
+How it listens and speaks, with nothing but the phone's own speech recognition and voice:
+
+- **Pauses.** The phone stops listening after every sentence. The page joins the pieces and hands them on only after a pause (2.5 seconds; settable), so a thought with a breath in it stays one message. A bar under the text shows the pause running. If you break off mid-thought, the host holds it and adds what comes next.
+- **Mistakes.** The host gets the phone's other guesses along with its first one, and the names you use: your project names, plus any you list under "Names and words I use" in the settings. It repairs clear mishearings and leaves the rest as you said it. A reply sent by voice is marked as dictated.
+- **Reading aloud** goes sentence by sentence in a voice you can choose, at a speed you can set. Tap the big button, or use a chip, to interrupt. With "I am wearing headphones" on, the page keeps listening while it speaks and you can talk over it.
+- **Sounds.** A short tone tells you that something was taken, and another where it went, so you do not have to look.
+- **The screen** shows the conversation, the open thread and, under everything you said, where it went.
+- **A dropped connection** (a tunnel, a dead spot) is picked up again by itself. What you said meanwhile is delivered then, and what the host said meanwhile is read out then.
+- **English and German.** Set what you speak in the settings; the host and the summaries of the threads follow.
+- "What happened" in the settings lists the page's last steps, with a Copy button, for when something does not work.
+
+Good to know:
+
+- Speaking needs Chrome (Android or computer) and, on the phone, the app reachable over https: [docs/pi.md](docs/pi.md) (the Tailscale part works for a laptop too). Typing works everywhere.
 - Chrome stops listening when the screen goes off. The page keeps the screen on; "Lock for the pocket" covers it with a dark shield that ignores touches.
-- Cards are left out of walk mode; they are for reading and editing.
+- Cards are left out; they are for reading and editing.
+- Every thing you say costs one small Haiku request. The conversation with the host itself is not kept and does not go into the brain; only what it passes to a thread, the mood line or the notes does.
 
 A real phone number does the same through Twilio, for a per-minute price: [docs/calling.md](docs/calling.md).
+
+## On the phone
+
+The whole app works in the phone's browser under the same address as Talk. One column: the thread on top, the reply box at the bottom, the thread list behind **Threads**. On a card, swipe right to accept and left to decline, or use the buttons; the text is edited in place. "Add to Home screen" in the browser's menu makes it open like an app.
 
 ## How the brain is handled
 
@@ -164,7 +194,7 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `maxParallel` | `4` | Threads worked on at once. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |
 | `google` | empty | Client id and secret of your Google Cloud project. |
-| `voice` | off | Calling through Twilio. |
+| `voice` | off | Calling through Twilio. Also `hostModel` (`haiku`) and `thinkModel` (`sonnet`): the host you talk to and the model it hands harder questions to. |
 | `readLog` | `false` | Recording what is read from the vault (`reads.jsonl`, `npm run reads`). Off for now. |
 
 ## Tests
@@ -177,4 +207,4 @@ Runs the whole app against throwaway repos with the stand-in Claude.
 
 ## Not built yet
 
-Threads that wait for a mail reply and wake up when it arrives. Standing project threads with spin-offs. Reordering by hand. Nothing acts on the read log.
+Threads that wait for a mail reply and wake up when it arrives. Standing project threads with spin-offs. A desktop app of its own (it is a page in the browser). The host's conversations are not kept. Nothing acts on the read log.

@@ -69,21 +69,109 @@ kbd {
 
 .app {
   display: grid;
-  grid-template-columns: 292px 1fr 0%;
+  grid-template-columns: 1fr 0%;
   height: 100vh;
+  height: 100dvh;
   transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
 }
-.app.has-panel { grid-template-columns: 292px 1fr 44%; }
+.app.has-panel { grid-template-columns: 1fr 44%; }
+/* Kept open, the thread list is a column of its own at the right. */
+.app.rail-pinned { grid-template-columns: 1fr 0% 292px; }
+.app.rail-pinned.has-panel { grid-template-columns: 1fr 44% 292px; }
 
-/* ---------- rail ---------- */
+/* ---------- rail: the thread list ----------
+   Out of the way by default. It slides in from the right edge when the pointer touches
+   that edge, and leaves when the pointer does. "Keep open" makes it a fixed column. */
 
 .rail {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: 308px;
+  max-width: 92vw;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: var(--rail);
-  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  transform: translateX(102%);
+  visibility: hidden;
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 220ms, box-shadow 220ms ease;
 }
+.app.rail-open .rail, .rail:has(:focus-visible) {
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+  box-shadow: -22px 0 48px rgba(8, 9, 16, 0.55);
+}
+.app.rail-pinned .rail {
+  position: static;
+  order: 3;
+  width: auto;
+  max-width: none;
+  transform: none;
+  visibility: visible;
+  box-shadow: none;
+}
+.rail-edge {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  /* Narrow, so the page's scrollbar under it can still be grabbed. With the window
+     maximised the pointer stops at the screen edge, which is all it takes. */
+  width: 6px;
+  z-index: 19;
+  padding: 0;
+  border: 0;
+  background: rgba(245, 183, 92, 0.14);
+  cursor: pointer;
+}
+.rail-edge:hover { background: rgba(245, 183, 92, 0.4); }
+.edge-count {
+  position: absolute;
+  right: 0; top: 50%;
+  transform: translateY(-50%);
+  min-width: 22px;
+  padding: 10px 5px 10px 7px;
+  border-radius: 10px 0 0 10px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-right: 0;
+  color: var(--muted);
+  font: 650 12.5px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.edge-count.has-ready { background: var(--you); color: var(--you-ink); border-color: var(--you); }
+.edge-count.is-working::after {
+  content: '';
+  display: block;
+  width: 6px; height: 6px;
+  margin: 6px auto 0;
+  border-radius: 50%;
+  background: var(--work);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.app.rail-pinned ~ .rail-edge { display: none; }
+.rail-backdrop { display: none; }
+.rail-bar { display: flex; justify-content: space-between; margin: -4px 0 8px; font-size: 12.5px; }
+.rail-close { display: none; }
+.phone-bar { display: none; }
+
+/* Dragging a waiting thread to another place in the queue. */
+.item[data-drag] { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.item.is-dragging {
+  position: relative;
+  z-index: 3;
+  background: var(--raised);
+  box-shadow: 0 10px 26px rgba(8, 9, 16, 0.6);
+  cursor: grabbing;
+  transition: none !important;
+}
+.rail-lists.is-dragging .item { transition: box-shadow 80ms ease; }
+.item.drop-before { box-shadow: 0 -2px 0 var(--you); }
+.item.drop-after { box-shadow: 0 2px 0 var(--you); }
+.rail-lists.is-dragging { user-select: none; cursor: grabbing; }
+
 .rail-top { padding: 14px 14px 6px; }
 .is-fake .rail-top::after {
   content: 'Stand-in Claude: canned answers, for trying the app';
@@ -722,8 +810,79 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 /* ---------- small screens ---------- */
 
 @media (max-width: 900px) {
-  .app, .app.has-panel { grid-template-columns: 220px 1fr 0%; }
-  .panel { position: fixed; inset: 0 0 0 0; z-index: 10; }
+  .panel { position: fixed; inset: 0 0 0 0; z-index: 30; }
   .thread-head { flex-wrap: wrap; padding: 10px 16px; }
   .messages, .composer { padding-left: 16px; padding-right: 16px; }
 }
+
+/* ---------- the phone ----------
+   One column. The thread list is a drawer behind the "Threads" button, the reply box
+   stays at the bottom, and buttons are big enough for a thumb. */
+
+@media (max-width: 700px) {
+  body { font-size: 15px; }
+  kbd { display: none; }
+  .app, .app.has-panel, .app.rail-pinned, .app.rail-pinned.has-panel { grid-template-columns: 1fr 0%; }
+  .app.rail-pinned .rail { position: fixed; order: 0; width: min(92vw, 360px); transform: translateX(102%); visibility: hidden; }
+  .app.rail-open .rail, .app.rail-pinned.rail-open .rail { transform: none; visibility: visible; box-shadow: -22px 0 48px rgba(8, 9, 16, 0.55); }
+  .rail { width: min(92vw, 360px); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .rail:has(:focus-visible) { transform: translateX(102%); visibility: hidden; box-shadow: none; }
+  .app.rail-open .rail:has(:focus-visible) { transform: none; visibility: visible; box-shadow: -22px 0 48px rgba(8, 9, 16, 0.55); }
+  .rail-edge { display: none; }
+  .rail-backdrop { display: block; position: fixed; inset: 0; z-index: 18; background: rgba(8, 9, 14, 0.6); animation: fade 160ms ease-out; }
+  .rail-backdrop[hidden] { display: none; }
+  #rail-pin { display: none; }
+  .rail-close { display: inline; margin-left: auto; font-size: 14px; padding: 6px 2px; }
+  .item { padding: 11px 8px; }
+  .mood { font-size: 16px; }
+
+  .phone-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+    border-bottom: 1px solid var(--line);
+    background: var(--rail);
+  }
+  .phone-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    min-height: 40px; padding: 0 14px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel); color: var(--text);
+    font: 600 14.5px/1 var(--sans); text-decoration: none; cursor: pointer;
+  }
+  .phone-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .phone-talk { color: var(--you); border-color: rgba(245, 183, 92, 0.45); }
+  .phone-threads { margin-left: auto; }
+  .phone-count { min-width: 20px; padding: 3px 6px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 12.5px; text-align: center; }
+  .phone-count.has-ready { background: var(--you); color: var(--you-ink); }
+  .phone-count:empty { display: none; }
+
+  .thread-head { padding: 8px 14px; min-height: 0; gap: 2px 10px; }
+  .thread-title { flex-basis: 100%; font-size: 16px; }
+  .head-actions { margin-left: 0; flex: 1; overflow-x: auto; scrollbar-width: none; }
+  .head-actions::-webkit-scrollbar { display: none; }
+  .head-actions .btn { min-height: 36px; }
+  .messages { padding: 18px 14px 28px; gap: 20px; }
+  .empty { margin-top: 8vh; }
+  .composer { padding: 0 12px max(10px, env(safe-area-inset-bottom)); }
+  .composer textarea { font-size: 16px; padding: 12px 14px; max-height: 40dvh; }
+  .composer-foot { gap: 8px; }
+  .composer-foot .pick { font-size: 0; gap: 0; flex: none; }
+  .composer-foot .select { min-height: 42px; font-size: 14px; padding: 4px 2px 4px 6px; border: 1px solid var(--line); border-radius: 9px; }
+  .btn-send { min-height: 42px; flex: 1; min-width: 0; max-width: none; display: block; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+  .head-actions .select { max-width: 8.5rem; }
+
+  .card { margin-top: 1vh; touch-action: pan-y; will-change: transform; }
+  .card-actions { position: sticky; bottom: 0; padding: 10px 0; background: linear-gradient(to top, var(--ground) 70%, transparent); }
+  .card-actions .btn { min-height: 46px; flex: 1; justify-content: center; }
+  .card-hint { flex-basis: 100%; }
+  .mail-body, .card-text { font-size: 16px; }
+  .panel-body { padding: 16px 16px 30px; }
+  .toast { top: auto; bottom: 86px; }
+}
+.card.is-swiping { transition: none; }
+.card.is-returning { transition: transform 200ms cubic-bezier(.2, .8, .2, 1), opacity 200ms ease; }
+.card[data-swipe=accept] { box-shadow: inset 4px 0 0 var(--done); }
+.card[data-swipe=decline] { box-shadow: inset -4px 0 0 var(--bad); }
+@keyframes fade { from { opacity: 0; } }

@@ -135,6 +135,20 @@ test('the mood line reorders the queue; requeue puts a thread behind the others'
   assert.match(moody.queue.why, /mood/);
   await call('POST', `/api/threads/${second}/skip`, {});
   assert.deepEqual((await state()).queue.order, [top, second], 'requeued: behind the other, whatever the mood says');
+
+  // Dragged by hand: it stays where it was put, whatever the mood line or the model says.
+  const moved = await call('POST', '/api/queue/move', { id: second, index: 0 });
+  assert.deepEqual(moved.data.order, [second, top]);
+  await call('PUT', '/api/settings', { mood: `feeling like ${word === 'mail' ? 'motion' : 'mail'} today` });
+  await sleep(1800);
+  const held = await until(async () => { const s = await state(); return !s.queue.ranking ? s : null; }, 'ranked again');
+  assert.deepEqual(held.queue.order, [second, top], 'the model orders around what was dragged');
+  const lines = fs.readFileSync(path.join(data, 'queue', 'decisions.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(lines.find((l) => l.action === 'moved').to, 1, 'the drag is a choice the queue learns from');
+  assert.equal((await call('POST', '/api/queue/move', { id: 'nope', index: 0 })).status, 409);
+  // Putting it off lets go of the place.
+  await call('POST', `/api/threads/${second}/skip`, {});
+  assert.deepEqual((await state()).queue.order, [top, second]);
   await call('PUT', '/api/settings', { mood: '' });
 });
 

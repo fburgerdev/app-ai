@@ -270,6 +270,13 @@ app.post('/api/threads/:id/skip', (req, res) => {
   res.json({ thread: store.updateThread(thread.id, { requeuedAt: Date.now() }) });
 });
 
+// Florian dragged a waiting thread to another place in the queue.
+app.post('/api/queue/move', (req, res) => {
+  const thread = store.getThread(String(req.body.id || ''));
+  if (!thread || thread.state !== 'ready') return res.status(409).json({ error: 'Only a waiting thread can be moved.' });
+  res.json(queue.moveTo(thread, req.body.index));
+});
+
 // Florian opened a waiting thread by hand instead of the one the queue offered.
 app.post('/api/queue/opened', (req, res) => {
   const thread = store.getThread(String(req.body.id || ''));

@@ -23,7 +23,7 @@ Claude has no tool for saving drafts, sending mail, deleting anything or invitin
    ```json
    "google": { "clientId": "….apps.googleusercontent.com", "clientSecret": "…" }
    ```
-7. Restart the app. Open **Connections** (bottom left) and press **Connect Google**. Sign in with the account that holds your mail (the personal one; PBU mail is forwarded into it).
+7. Restart the app. Open **Connections** (at the bottom of the thread list) and press **Connect Google**. Sign in with the account that holds your mail (the personal one; PBU mail is forwarded into it).
 8. Google shows a warning that the app is not verified. That is expected for your own project: choose "Advanced" → "Go to … (unsafe)", then allow the three permissions.
 
 Connections now shows "connected". Every new turn in every thread can use mail and calendar.

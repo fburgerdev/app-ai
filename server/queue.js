@@ -5,6 +5,9 @@
 // his earlier choices. The order is worked out in the background whenever something
 // changes, so "next" never waits for a model.
 //
+// He can also drag a thread to where he wants it. It then stays at that place until he
+// has dealt with it; the model orders the rest around it.
+//
 // Every choice he makes is written to queue/decisions.jsonl. Every so often a model
 // rewrites queue/profile.md from that log. He can read and correct the profile.
 
@@ -20,11 +23,13 @@ import { readPrompt } from './util.js';
 const DIR = path.join(DATA_DIR, 'queue');
 const DECISIONS = path.join(DIR, 'decisions.jsonl');
 const META = path.join(DIR, 'meta.json');
+const PINS = path.join(DIR, 'pins.json');
 
 let config;
 let order = []; // thread ids, best first
 let why = '';
 let lastKey = '';
+let pins = new Map(); // thread id -> the place Florian dragged it to (0 is first)
 let ranking = false;
 let again = false;
 let timer = null;
@@ -33,24 +38,52 @@ let learning = false;
 export function initQueue(cfg) {
   config = cfg;
   fs.mkdirSync(DIR, { recursive: true });
-  store.events.on('thread', (t) => { if (t.state === 'ready' || order.includes(t.id)) schedule(); });
+  try { pins = new Map(Object.entries(JSON.parse(fs.readFileSync(PINS, 'utf8')))); } catch { pins = new Map(); }
+  store.events.on('thread', (t) => {
+    // A thread he answered, closed or put off is no longer held in its place.
+    if (pins.has(t.id) && (t.state !== 'ready' || requeuedLately(t))) { pins.delete(t.id); savePins(); }
+    if (t.state === 'ready' || order.includes(t.id)) schedule();
+  });
   store.events.on('state', () => schedule());
 }
 
 const waiting = () => store.listThreads().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt);
 
+const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
+
+function savePins() {
+  try { fs.writeFileSync(PINS, JSON.stringify(Object.fromEntries(pins))); } catch { /* never in the way */ }
+}
+
 // The order to show: the model's ranking where it has one, new arrivals behind it,
-// and anything requeued a moment ago at the very back.
+// anything requeued a moment ago at the very back, and what he dragged at the place
+// he dragged it to.
 export function queueOrder() {
   const ready = waiting();
   const byId = new Map(ready.map((t) => [t.id, t]));
   const ranked = order.filter((id) => byId.has(id)).map((id) => byId.get(id));
   const rest = ready.filter((t) => !order.includes(t.id));
   const all = [...ranked, ...rest];
-  const cutoff = Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
-  const fresh = all.filter((t) => !(t.requeuedAt > cutoff));
-  const requeued = all.filter((t) => t.requeuedAt > cutoff).sort((a, b) => a.requeuedAt - b.requeuedAt);
-  return [...fresh, ...requeued].map((t) => t.id);
+  const fresh = all.filter((t) => !requeuedLately(t));
+  const requeued = all.filter(requeuedLately).sort((a, b) => a.requeuedAt - b.requeuedAt);
+  const held = fresh.filter((t) => pins.has(t.id)).sort((a, b) => pins.get(a.id) - pins.get(b.id));
+  const ids = [...fresh.filter((t) => !pins.has(t.id)), ...requeued].map((t) => t.id);
+  for (const t of held) ids.splice(Math.min(pins.get(t.id), ids.length), 0, t.id);
+  return ids;
+}
+
+// He dragged a waiting thread to a place in the queue.
+export function moveTo(thread, index) {
+  const before = queueOrder();
+  const from = before.indexOf(thread.id);
+  const to = Math.max(0, Math.min(Number(index) || 0, before.length - 1));
+  if (from < 0 || from === to) return queueStatus();
+  recordDecision('moved', thread, { to: to + 1, ahead: before.slice(to, to + 1).map((id) => store.getThread(id)?.title || '')[0] || '' });
+  if (thread.requeuedAt) store.updateThread(thread.id, { requeuedAt: 0 });
+  pins.set(thread.id, to);
+  savePins();
+  store.events.emit('queue', queueStatus());
+  return queueStatus();
 }
 
 export function queueStatus() {
@@ -141,7 +174,7 @@ async function rank() {
 
 // ---------- learning ----------
 
-// One choice. `action` is replied | requeued | done | opened | accepted | declined.
+// One choice. `action` is replied | requeued | done | opened | moved | accepted | declined.
 export function recordDecision(action, thread, extra = {}) {
   const now = new Date();
   const entry = {
@@ -182,6 +215,7 @@ async function maybeLearn() {
       const bits = [`${d.weekday} ${d.hour}h`, d.action, d.kind, `"${d.title}"`];
       if (d.project) bits.push(`project ${d.project}`);
       if (d.position > 1) bits.push(`was offered as number ${d.position}`);
+      if (d.to) bits.push(`dragged by hand to place ${d.to}`);
       if (d.edited) bits.push(`edited before deciding: ${d.edited}`);
       if (d.mood) bits.push(`mood line "${d.mood}"`);
       return `- ${bits.join(', ')}`;

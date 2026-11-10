@@ -11,6 +11,8 @@ const els = {
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
   send: $('send'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   mood: $('mood'), model: $('model'), effort: $('effort'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
+  rail: document.querySelector('.rail'), edge: $('rail-edge'), edgeCount: $('edge-count'), backdrop: $('rail-backdrop'),
+  pin: $('rail-pin'), railClose: $('rail-close'), phoneThreads: $('phone-threads'), phoneCount: $('phone-count'), phoneNew: $('phone-new'),
 };
 
 const S = {
@@ -174,7 +176,7 @@ function queueLists() {
   const note = S.queue.ranking ? 'ordering…' : S.queue.why && ready.length > 1 ? `first because: ${S.queue.why}` : '';
   parts.push(section('Next up', ready.length, [
     note ? h('p', { class: 'group-note' }, note) : null,
-    ...(ready.length ? ready.map(railItem) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
+    ...(ready.length ? ready.map((t) => { const el = railItem(t); if (ready.length > 1) el.dataset.drag = '1'; return el; }) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
     h('p', { class: 'group-foot' }, S.cards.running
       ? h('span', { class: 'looking' }, h('span', { class: 'pulse' }), 'Looking for opportunities')
       : h('button', { class: 'link', type: 'button', onclick: () => api('POST', '/api/cards/make', {}).catch((e) => toast(e.message)) }, 'Look for opportunities')),
@@ -218,6 +220,8 @@ function projectLists() {
 }
 
 function renderRail() {
+  // While a thread is being dragged the list stays as it is; it is drawn afresh on the drop.
+  if (drag?.active) { drag.stale = true; return; }
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
   els.lists.replaceChildren(...(S.tab === 'queue' ? queueLists() : projectLists()));
   els.tabQueue.classList.toggle('is-on', S.tab === 'queue');
@@ -231,9 +235,135 @@ function renderRail() {
     }
   }
   const n = inbox().length;
+  const busy = working().length;
+  for (const el of [els.edgeCount, els.phoneCount]) {
+    el.textContent = n ? String(n) : '';
+    el.classList.toggle('has-ready', n > 0);
+    el.classList.toggle('is-working', busy > 0);
+  }
+  els.edge.title = `${n} waiting${busy ? `, Claude is working on ${busy}` : ''}. Move the pointer here to see the threads.`;
   document.title = n ? `(${n}) Inbox` : 'Inbox';
   if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
+
+// On a phone, putting the cursor in the reply box brings up the keyboard over what you
+// came to read. There the box is focused only when you tap it.
+const coarse = window.matchMedia('(pointer: coarse)');
+function focusInput() { if (!coarse.matches) els.input.focus(); }
+
+// ---------- the thread list: out of the way until the pointer is at the right edge ----------
+
+const phone = window.matchMedia('(max-width: 700px)');
+let railTimer = 0;
+
+function setRail(open) {
+  clearTimeout(railTimer);
+  els.app.classList.toggle('rail-open', open);
+  els.backdrop.hidden = !(open && phone.matches);
+}
+const closeRailSoon = (ms = 320) => { clearTimeout(railTimer); railTimer = setTimeout(() => { if (!drag?.active) setRail(false); }, ms); };
+
+function setPinned(pinned) {
+  els.app.classList.toggle('rail-pinned', pinned);
+  els.pin.textContent = pinned ? 'Hide when not in use' : 'Keep open';
+  els.pin.setAttribute('aria-pressed', String(pinned));
+  try { localStorage.setItem('rail-pinned', pinned ? '1' : ''); } catch { /* private mode */ }
+}
+
+// A short dwell, so a pointer passing over the edge on its way to the scrollbar does not open it.
+els.edge.addEventListener('mouseenter', () => { clearTimeout(railTimer); railTimer = setTimeout(() => setRail(true), 90); });
+els.edge.addEventListener('mouseleave', () => { if (!els.app.classList.contains('rail-open')) clearTimeout(railTimer); });
+els.edge.addEventListener('click', () => setRail(true));
+els.rail.addEventListener('mouseenter', () => clearTimeout(railTimer));
+els.rail.addEventListener('mouseleave', () => { if (!phone.matches) closeRailSoon(); });
+els.pin.addEventListener('click', () => setPinned(!els.app.classList.contains('rail-pinned')));
+els.railClose.addEventListener('click', () => setRail(false));
+els.backdrop.addEventListener('click', () => setRail(false));
+els.phoneThreads.addEventListener('click', () => setRail(!els.app.classList.contains('rail-open')));
+els.phoneNew.addEventListener('click', () => openNew());
+try { setPinned(localStorage.getItem('rail-pinned') === '1'); } catch { setPinned(false); }
+
+// ---------- dragging a waiting thread to another place in the queue ----------
+//
+// With a mouse: press and move. With a finger: press and hold, then move (a plain swipe
+// scrolls the list). The thread stays where it is dropped until it has been dealt with.
+
+let drag = null;
+
+function dragTargets() {
+  return [...els.lists.querySelectorAll('.item[data-drag]')].filter((el) => el !== drag.item);
+}
+
+function beginDrag() {
+  if (!drag || drag.active) return;
+  drag.active = true;
+  drag.item.classList.add('is-dragging');
+  els.lists.classList.add('is-dragging');
+  if (drag.touch) navigator.vibrate?.(12);
+}
+
+function moveDrag(y) {
+  drag.item.style.transform = `translateY(${y - drag.startY}px)`;
+  const others = dragTargets();
+  let index = others.findIndex((el) => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2; });
+  if (index < 0) index = others.length;
+  drag.index = index;
+  others.forEach((el, i) => {
+    el.classList.toggle('drop-before', i === index);
+    el.classList.toggle('drop-after', index === others.length && i === others.length - 1);
+  });
+}
+
+function endDrag(drop) {
+  const d = drag;
+  drag = null;
+  if (!d) return;
+  clearTimeout(d.timer);
+  d.item.classList.remove('is-dragging');
+  d.item.style.transform = '';
+  els.lists.classList.remove('is-dragging');
+  for (const el of els.lists.querySelectorAll('.drop-before, .drop-after')) el.classList.remove('drop-before', 'drop-after');
+  if (d.active) {
+    // The click that ends a drag must not open the thread.
+    const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+    window.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 80);
+  }
+  const from = inbox().findIndex((t) => t.id === d.id);
+  if (drop && d.active && d.index != null && d.index !== from) {
+    // Shown at once; the server's order follows a moment later.
+    const ids = inbox().map((t) => t.id).filter((id) => id !== d.id);
+    ids.splice(d.index, 0, d.id);
+    S.queue = { ...S.queue, order: ids };
+    api('POST', '/api/queue/move', { id: d.id, index: d.index }).then((q) => { S.queue = q; renderRail(); renderComposer(); }).catch((e) => toast(e.message));
+  }
+  if (d.active || d.stale) { renderRail(); renderComposer(); }
+  if (!els.rail.matches(':hover') && !phone.matches) closeRailSoon(600);
+}
+
+els.lists.addEventListener('pointerdown', (e) => {
+  const item = e.target.closest('.item[data-drag]');
+  if (!item || e.button > 0) return;
+  const touch = e.pointerType !== 'mouse';
+  drag = { item, id: item.dataset.id, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId, touch, active: false, index: null, timer: 0, stale: false };
+  if (touch) drag.timer = setTimeout(beginDrag, 380);
+});
+window.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const dx = e.clientX - drag.startX;
+  const dy = e.clientY - drag.startY;
+  if (!drag.active) {
+    if (drag.touch) { if (Math.hypot(dx, dy) > 10) endDrag(false); return; } // a swipe scrolls
+    if (Math.abs(dy) < 6) return;
+    beginDrag();
+  }
+  moveDrag(e.clientY);
+});
+window.addEventListener('pointerup', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
+window.addEventListener('pointercancel', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
+// Once a finger holds a thread, moving it must not scroll the list or open a menu.
+els.lists.addEventListener('touchmove', (e) => { if (drag?.active) e.preventDefault(); }, { passive: false });
+els.lists.addEventListener('contextmenu', (e) => { if (drag) e.preventDefault(); });
 
 const loadProjects = debounce(async () => {
   try {
@@ -283,7 +413,7 @@ function renderBrain() {
   rows.push(h('div', { class: 'foot-links' },
     link('Scratchpad', () => openPad('scratchpad')),
     link('Notes for Claude', () => openPad('notes')),
-    h('a', { class: 'link keys-link', href: '/walk' }, 'Walk mode'),
+    h('a', { class: 'link keys-link', href: '/walk' }, 'Talk'),
     link('Connections', () => openPanel({ kind: 'connections' })),
     link('Keys', () => openPanel({ kind: 'keys' })),
   ));
@@ -534,7 +664,7 @@ function renderHead() {
   const title = h('input', {
     class: 'thread-title', 'aria-label': 'Thread name', spellcheck: 'false',
     onchange: (e) => api('POST', `/api/threads/${t.id}/title`, { title: e.target.value }).catch((err) => toast(err.message)),
-    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); els.input.focus(); } },
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); focusInput(); } },
   });
   title.value = t.title;
   let status;
@@ -582,7 +712,7 @@ function renderEmpty() {
   let line = 'Nothing is waiting for you.';
   if (busy) line += ` Claude is working on ${busy} ${busy === 1 ? 'thread' : 'threads'}; the first one to finish opens here.`;
   els.messages.replaceChildren(h('div', { class: 'empty' },
-    h('p', { class: 'empty-lead' }, S.newProject ? `Start a thread on ${S.newProject}. Claude begins with the project’s notes loaded.` : ready ? 'Start something new, or pick a thread on the left.' : line),
+    h('p', { class: 'empty-lead' }, S.newProject ? `Start a thread on ${S.newProject}. Claude begins with the project’s notes loaded.` : ready ? 'Start something new, or pick a thread from the list at the right edge.' : line),
     h('p', { class: 'empty-sub' }, 'Each thread is its own conversation. Claude reads your brain before answering, and nothing reaches the brain until you update it.'),
   ));
 }
@@ -646,7 +776,7 @@ async function renderCard(t) {
     : h('div', { class: 'card-actions' },
       parseMail(raw) ? null : h('button', { class: 'btn btn-send', type: 'button', onclick: () => decide('accepted') }, 'Accept and copy ', kbd('Y')),
       h('button', { class: 'btn', type: 'button', onclick: () => decide('declined') }, 'Decline ', kbd('N')),
-      h('span', { class: 'card-hint' }, parseMail(raw) ? 'Putting it in Gmail or sending it accepts the card.' : 'Edit the text first if you like. While typing: Ctrl+Enter accepts.'),
+      h('span', { class: 'card-hint' }, parseMail(raw) ? 'Putting it in Gmail or sending it accepts the card.' : phone.matches ? 'Edit the text first if you like. Swipe right to accept, left to decline.' : 'Edit the text first if you like. While typing: Ctrl+Enter accepts.'),
     );
   S.cardDecide = decided ? null : decide;
   S.cardIsMail = Boolean(parseMail(raw));
@@ -662,6 +792,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   const meta = S.threads.get(id);
   if (!meta) return;
   saveDraft();
+  if (phone.matches) setRail(false);
   if (!byQueue && meta.state === 'ready' && inbox()[0]?.id !== id) api('POST', '/api/queue/opened', { id }).catch(() => {});
   const token = ++openToken;
   S.pad = null;
@@ -677,7 +808,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   restoreDraft();
   els.messages.replaceChildren();
   els.messages.className = 'messages quotable';
-  if (meta.kind !== 'card') els.input.focus();
+  if (meta.kind !== 'card') focusInput();
   else document.activeElement?.blur();
   let data;
   try {
@@ -705,6 +836,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
 
 function openNew(project = '') {
   saveDraft();
+  if (phone.matches) setRail(false);
   openToken += 1;
   S.pad = null;
   S.current = null;
@@ -721,7 +853,7 @@ function openNew(project = '') {
   els.messages.className = 'messages quotable';
   renderEmpty();
   enter(els.messages);
-  els.input.focus();
+  focusInput();
 }
 
 // A pad: a plain page to write in. It saves as you type.
@@ -733,6 +865,7 @@ const PADS = {
 
 async function openPad(name) {
   saveDraft();
+  if (phone.matches) setRail(false);
   const token = ++openToken;
   S.pad = name;
   S.current = null;
@@ -855,6 +988,7 @@ const TEXT_TYPES = ['md', 'txt', 'csv', 'json', 'js', 'mjs', 'ts', 'py', 'css', 
 const IMAGE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
 
 async function openPanel(panel) {
+  if (phone.matches) setRail(false);
   S.panel = panel;
   if (panel.kind === 'artifact') return showArtifact(panel);
   if (panel.kind === 'note') return showNote(panel);
@@ -1053,6 +1187,7 @@ function showKeys() {
     ['Enter', 'Send, then open what the queue puts next'],
     ['Shift Enter', 'New line'],
     ['Alt N', 'New thread'],
+    ['Alt L', 'Show or hide the thread list (or move the pointer to the right edge)'],
     ['Alt S', 'Requeue: not now, show me the next'],
     ['Alt X', 'Done: close this thread'],
     ['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)'],
@@ -1099,7 +1234,7 @@ function insertQuote() {
   autosize();
   hideQuote();
   window.getSelection().removeAllRanges();
-  els.input.focus();
+  focusInput();
   els.input.setSelectionRange(els.input.value.length, els.input.value.length);
 }
 
@@ -1130,7 +1265,7 @@ els.scroller.addEventListener('scroll', hideQuote, { passive: true });
 // The mood line saves as you type. Enter just puts you back in the reply box.
 const saveMood = debounce(() => api('PUT', '/api/settings', { mood: els.mood.value }).catch((e) => toast(e.message)), 500);
 els.mood.addEventListener('input', saveMood);
-els.mood.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); els.mood.blur(); if (!els.composer.hidden) els.input.focus(); } });
+els.mood.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); els.mood.blur(); if (!els.composer.hidden) focusInput(); } });
 els.model.addEventListener('change', () => api('PUT', '/api/settings', { model: els.model.value }).catch((e) => toast(e.message)));
 els.effort.addEventListener('change', () => api('PUT', '/api/settings', { effort: els.effort.value }).catch((e) => toast(e.message)));
 
@@ -1163,7 +1298,7 @@ let lastKeyAt = 0;
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!els.quote.hidden) { hideQuote(); return; }
-    if (S.panel) { closePanel(); if (!els.composer.hidden) els.input.focus(); return; }
+    if (S.panel) { closePanel(); if (!els.composer.hidden) focusInput(); return; }
     if (typing() && S.cardDecide) document.activeElement.blur();
     return;
   }
@@ -1185,7 +1320,8 @@ window.addEventListener('keydown', (e) => {
     KeyX: markDone,
     KeyU: updateBrain,
     KeyA: toggleFiles,
-    KeyM: () => { els.mood.focus(); els.mood.select(); },
+    KeyM: () => { setRail(true); els.mood.focus(); els.mood.select(); },
+    KeyL: () => setRail(!els.app.classList.contains('rail-open')),
     KeyP: () => openPad('scratchpad'),
     KeyJ: () => step(1),
     KeyK: () => step(-1),
@@ -1197,6 +1333,54 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   action();
 });
+
+// ---------- a card on the phone: swipe right to accept, left to decline ----------
+//
+// Only a clear sideways swipe that starts outside the text counts, and the card follows
+// the finger so it is plain what letting go will do.
+
+let swipe = null;
+els.messages.addEventListener('touchstart', (e) => {
+  const card = e.target.closest('.card');
+  if (!card || !S.cardDecide || e.touches.length !== 1 || e.target.closest('textarea, input, button, a, select')) return;
+  swipe = { card, x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, on: false };
+}, { passive: true });
+els.messages.addEventListener('touchmove', (e) => {
+  if (!swipe) return;
+  const dx = e.touches[0].clientX - swipe.x;
+  const dy = e.touches[0].clientY - swipe.y;
+  if (!swipe.on) {
+    if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; } // scrolling
+    if (Math.abs(dx) < 14) return;
+    swipe.on = true;
+    swipe.card.classList.add('is-swiping');
+  }
+  e.preventDefault();
+  swipe.dx = S.cardIsMail && dx > 0 ? 0 : dx; // a mail is accepted with its own buttons
+  swipe.card.style.transform = `translateX(${swipe.dx}px) rotate(${swipe.dx / 40}deg)`;
+  swipe.card.style.opacity = String(Math.max(0.35, 1 - Math.abs(swipe.dx) / 420));
+  if (Math.abs(swipe.dx) > 110) swipe.card.dataset.swipe = swipe.dx > 0 ? 'accept' : 'decline';
+  else delete swipe.card.dataset.swipe;
+}, { passive: false });
+function endSwipe(cancelled) {
+  const s = swipe;
+  swipe = null;
+  if (!s || !s.on) return;
+  const verdict = cancelled ? '' : s.card.dataset.swipe;
+  s.card.classList.remove('is-swiping');
+  s.card.classList.add('is-returning');
+  if (verdict && S.cardDecide) {
+    s.card.style.transform = `translateX(${s.dx > 0 ? 120 : -120}vw)`;
+    s.card.style.opacity = '0';
+    S.cardDecide(verdict === 'accept' ? 'accepted' : 'declined');
+  } else {
+    s.card.style.transform = '';
+    s.card.style.opacity = '';
+    delete s.card.dataset.swipe;
+  }
+}
+els.messages.addEventListener('touchend', () => endSwipe(false));
+els.messages.addEventListener('touchcancel', () => endSwipe(true));
 
 // ---------- events from the server ----------
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#1b1d2a">
   <title>Inbox</title>
@@ -19,6 +19,10 @@
   <div id="app" class="app">
     <nav class="rail" aria-label="Threads">
       <div class="rail-top">
+        <div class="rail-bar">
+          <button id="rail-pin" class="link" type="button" aria-pressed="false">Keep open</button>
+          <button id="rail-close" class="link rail-close" type="button">Close</button>
+        </div>
         <button id="new-thread" class="btn btn-new" type="button">New thread <kbd>Alt N</kbd></button>
         <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
                placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
@@ -32,6 +36,13 @@
     </nav>
 
     <main class="stage">
+      <div class="phone-bar">
+        <a class="phone-btn phone-talk" href="/walk">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>Talk
+        </a>
+        <button id="phone-new" class="phone-btn" type="button">New</button>
+        <button id="phone-threads" class="phone-btn phone-threads" type="button">Threads <span id="phone-count" class="phone-count"></span></button>
+      </div>
       <header id="thread-head" class="thread-head"></header>
       <div id="scroller" class="scroller">
         <div id="messages" class="messages quotable"></div>
@@ -52,6 +63,11 @@
 
     <aside id="panel" class="panel" hidden aria-label="Side panel"></aside>
   </div>
+
+  <button id="rail-edge" class="rail-edge" type="button" aria-label="Show the threads">
+    <span id="edge-count" class="edge-count"></span>
+  </button>
+  <div id="rail-backdrop" class="rail-backdrop" hidden></div>
 
   <button id="quote-btn" class="quote-btn" type="button" hidden>Quote in reply</button>
   <div id="toast" class="toast" role="status" hidden></div>
