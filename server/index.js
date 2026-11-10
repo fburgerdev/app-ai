@@ -16,11 +16,12 @@ import * as queue from './queue.js';
 import * as cards from './cards.js';
 import * as projects from './projects.js';
 import * as checkins from './checkins.js';
+import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import { parseMail } from './mail.js';
 import { getState, setState, readPad, writePad, MODELS, EFFORTS } from './state.js';
 import { dateTimeDMY } from './util.js';
-import { answerCall, attachVoice, voiceStatus } from './voice.js';
+import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
 
 const config = loadConfig();
@@ -32,6 +33,7 @@ runner.initRunner(config);
 extraction.initExtraction(config);
 google.initGoogle(config);
 initReads(config);
+speech.initSpeech(config);
 queue.initQueue(config);
 cards.initCards(config);
 await datasync.initDataSync(config);
@@ -72,8 +74,9 @@ app.use((req, res, next) => {
 });
 // Uploads carry a whole file and get a larger limit; everything else stays small.
 const smallJson = express.json({ limit: '5mb' });
+const BIG = new Set(['/api/uploads', '/api/speech/hear']);
 const uploadJson = express.json({ limit: '36mb' });
-app.use((req, res, next) => (req.path === '/api/uploads' ? uploadJson : smallJson)(req, res, next));
+app.use((req, res, next) => (BIG.has(req.path) ? uploadJson : smallJson)(req, res, next));
 
 // ---------- the interface and its libraries ----------
 const vendor = (route, dir) => app.use(route, express.static(path.join(ROOT, 'node_modules', dir), { maxAge: '1d' }));
@@ -148,6 +151,26 @@ app.put('/api/pads/:name', (req, res) => {
   if (!writePad(req.params.name, String(req.body.text ?? ''))) return res.status(404).json({ error: 'No such pad' });
   if (req.params.name === 'notes') store.events.emit('brain', extraction.extractionStatus());
   res.json({ ok: true });
+});
+
+// ---------- listening and speaking for the Talk page ----------
+app.get('/api/speech', (req, res) => res.json(speech.speechStatus()));
+
+app.post('/api/speech/hear', async (req, res) => {
+  try {
+    const audio = Buffer.from(String(req.body.audio || ''), 'base64');
+    if (audio.length < 200) return res.json({ text: '' });
+    res.json(await speech.hear({ audio, mime: String(req.body.mime || ''), lang: req.body.lang, words: voiceWords() }));
+  } catch (err) { res.status(502).json({ error: err.message }); }
+});
+
+app.post('/api/speech/say', async (req, res) => {
+  try {
+    const out = await speech.say({ text: req.body.text, lang: req.body.lang, engine: req.body.engine });
+    res.setHeader('Content-Type', out.type);
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(out.audio);
+  } catch (err) { res.status(502).json({ error: err.message }); }
 });
 
 app.get('/api/projects', (req, res) => res.json(projects.projectTree()));

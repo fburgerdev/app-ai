@@ -28,7 +28,7 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 - **The top bar** is always there: the inbox button with the number waiting, the mood line, Talk, Scratchpad and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
-- **The outline** on the right shows where the open thread sits: its area, its project and the threads beside it, joined by lines like a file tree (see Folders below).
+- **Projects and areas** on the right, most recently dealt with first (see below).
 - **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
 
 ## The queue
@@ -45,7 +45,7 @@ The order is worked out in the background, so moving on never waits for a model.
 
 - to another place in **Next up**. It stays there until you have dealt with it, whatever the model thinks; the rest is ordered around it.
 - onto **Done** to close it, and from Done back into Next up to reopen it.
-- onto a **folder** in the outline to file it under that project. A closed folder opens when the thread rests on it.
+- onto a **project or area** on the right to file it there.
 
 **Requeue** (Alt+S) means "not now": the thread goes to the back for 20 minutes and you get the next one.
 
@@ -134,14 +134,18 @@ Then the app makes one `thinking:` commit and pushes. What the vault says needs 
 
 These two buttons are the only things in the app that write the vault, and they run only when you press them.
 
-## Folders
+## Projects and areas
 
-The outline on the right shows where the open thread is, read from `Brain/Projects/Projects Index.md`: the area, under it the project, under that the threads in the same project, joined by lines. The thread's header shows the same path under its name. A thread without a project is shown under "No project" with the other loose threads.
+The right side lists every project from `Brain/Projects/Projects Index.md`, and under them the areas. It shows projects, not threads.
 
-- Click the project's name to read its note. "+ New thread" starts another thread there, with the project's note and its area's note already loaded.
-- **All folders**, underneath, opens the whole tree of areas and projects: rest the pointer on it, or click to keep it open. A folder in it opens while the pointer rests on it; a number says how many threads in it wait for you.
-- To file a thread somewhere else, drag it: the whole tree shows while a thread is being dragged. Or open the folder under All folders and use "Move this thread here".
-- When the window is too narrow for the outline (and on the phone), the whole tree is the **Folders** tab in the inbox.
+- **Order:** the project you dealt with most recently is on top. "Dealt with" is your latest message in one of its threads, or the last change to its note in the vault.
+- **Paused projects** (`Status: paused` or `blocked` in the project's note) are grey and at the bottom, in the same order. To pause one, say so in a thread and update the brain.
+- **A dot** marks a project that has open threads. Nothing shows whether Claude is working on them.
+- **Areas** follow, those without a project grey and last.
+- **Click** a project or area to see its open threads, start a new one, or read its note. On an area, "+ New project?" starts a thread in which Claude proposes projects for it.
+- **Drop a thread** on a project or area to file it there.
+- **Start threads**, at the bottom: one thread on every active project (where it stands, the next step, what Claude could do now), on every paused project (has what it waits for happened?), or per area about new projects. Each asks once more before it starts, and skips what already has an open thread.
+- When the window is too narrow (and on the phone), this is the **Folders** tab in the inbox.
 
 ## Scratchpad
 
@@ -158,7 +162,9 @@ A page to write in, like the one in Obsidian, one click away in the top bar (Alt
 
 The short commands and "…and send it" at the end of a sentence work without the model, at once. If the model fails, nothing is lost: say "send" to give what you said to the open thread as it is.
 
-How it listens and speaks, with nothing but the phone's own speech recognition and voice:
+**A better ear and voice.** By default the page uses the phone's own speech recognition and voice. With a Groq key the page records you itself and Groq's Whisper transcribes, which is far more accurate; with Piper installed the app speaks in its own voice, made on the machine it runs on. Both work from the Pi with the laptop off: [docs/voice.md](docs/voice.md).
+
+How it listens and speaks with the phone's own engines:
 
 - **Pauses.** The phone stops listening after every sentence. The page joins the pieces and hands them on only after a pause (2.5 seconds; settable), so a thought with a breath in it stays one message. A bar under the text shows the pause running. If you break off mid-thought, the host holds it and adds what comes next.
 - **Mistakes.** The host gets the phone's other guesses along with its first one, and the names you use: your project names, plus any you list under "Names and words I use" in the settings. It repairs clear mishearings and leaves the rest as you said it. A reply sent by voice is marked as dictated.
@@ -225,10 +231,10 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads. |
-| `maxParallel` | `4` | Threads worked on at once. |
+| `maxParallel` | `6` | Turns that run at once. Your own messages go first; work the app started by itself leaves one slot free for you. Use 3 on a Pi with 2 GB. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |
 | `google` | empty | Client id and secret of your Google Cloud project. |
-| `voice` | off | Calling through Twilio. Also `hostModel` (`haiku`) and `thinkModel` (`sonnet`): the host you talk to and the model it hands harder questions to. |
+| `voice` | off | `groqKey`, `speak`, `piper`, `openaiKey`: the Talk page's ear and voice (docs/voice.md). Calling through Twilio. Also `hostModel` (`haiku`) and `thinkModel` (`sonnet`): the host you talk to and the model it hands harder questions to. |
 | `readLog` | `false` | Recording what is read from the vault (`reads.jsonl`, `npm run reads`). Off for now. |
 
 ## Tests

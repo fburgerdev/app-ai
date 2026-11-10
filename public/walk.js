@@ -21,7 +21,7 @@ const els = {
   state: $('state'), nowTitle: $('now-title'), nowCounts: $('now-counts'), log: $('log'), live: $('live'),
   mic: $('mic'), micLabel: $('mic-label'), lock: $('lock'), note: $('note'), type: $('type'), typed: $('typed'),
   settings: $('settings'), openSettings: $('open-settings'), lang: $('lang'), pause: $('pause'), aloud: $('aloud'),
-  voice: $('voice'), rate: $('rate'), sounds: $('sounds'), headphones: $('headphones'), words: $('words'),
+  voice: $('voice'), engine: $('engine'), hears: $('hears'), rate: $('rate'), sounds: $('sounds'), headphones: $('headphones'), words: $('words'),
   fresh: $('fresh'), events: $('events'), copyEvents: $('copy-events'), shield: $('shield'), shieldState: $('shield-state'), unlock: $('unlock'),
 };
 
@@ -40,6 +40,13 @@ const settings = {
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const canSpeak = 'speechSynthesis' in window;
+// What the app's server offers instead of the phone's own engines: listening through
+// Groq's Whisper, and a voice made on the server (Piper or OpenAI).
+let server = { hear: 'device', voices: [], speak: 'device' };
+const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+const serverHears = () => server.hear === 'groq' && canRecord;
+const canListen = () => serverHears() || Boolean(Recognition);
+const engine = () => { const want = saved.get('engine', ''); return want === 'device' ? 'device' : server.voices.includes(want) ? want : server.speak; };
 
 // ---------- what happened, for finding problems ----------
 
@@ -252,10 +259,52 @@ function chunks(text) {
   return out.map((c) => c.trim()).filter(Boolean);
 }
 
+// One audio element, started once inside a tap so the page may play by itself afterwards.
+const player = new Audio();
+const fetchAudio = (text) => fetch('/api/speech/say', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang: settings.lang, engine: engine() }) })
+  .then(async (res) => { if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `voice ${res.status}`); return URL.createObjectURL(await res.blob()); });
+
 function speak(text, line) {
-  if (!on || !settings.aloud || !canSpeak) return;
-  for (const part of chunks(text)) toSpeak.push({ text: part, line });
+  if (!on || !settings.aloud) return;
+  const viaServer = engine() !== 'device';
+  if (!viaServer && !canSpeak) return;
+  for (const part of chunks(text)) toSpeak.push({ text: part, line, audio: null });
+  // The first sentence is asked for at once; each next one while the one before plays.
+  if (viaServer && toSpeak[0] && !toSpeak[0].audio) toSpeak[0].audio = fetchAudio(toSpeak[0].text);
   pump();
+}
+
+// Plays one sentence in the server's voice. Falls back to the phone's voice if that fails.
+function playServer(next, finish) {
+  if (!next.audio) next.audio = fetchAudio(next.text);
+  const after = toSpeak[0];
+  if (after && !after.audio) after.audio = fetchAudio(after.text);
+  const token = {};
+  current = token;
+  next.line?.classList.add('is-speaking');
+  const done = (why) => {
+    if (current !== token) return;
+    player.onended = null; player.onerror = null;
+    next.line?.classList.remove('is-speaking');
+    if (why) note(`speaking ended by ${why}`);
+    current = null;
+    finish();
+  };
+  next.audio.then((url) => {
+    if (current !== token) { URL.revokeObjectURL(url); return; }
+    player.src = url;
+    player.playbackRate = settings.rate;
+    player.onended = () => { URL.revokeObjectURL(url); done(''); };
+    player.onerror = () => done('audio error');
+    player.play().catch((err) => done(`play refused: ${err.message}`));
+  }).catch((err) => {
+    if (current !== token) return;
+    note(`server voice failed (${err.message}); using the phone's voice`);
+    current = null;
+    next.line?.classList.remove('is-speaking');
+    if (canSpeak) { next.viaDevice = true; toSpeak.unshift(next); }
+    finish();
+  });
 }
 
 function pump() {
@@ -271,6 +320,7 @@ function pump() {
     if (!settings.headphones) stopListening();
     paint();
   }
+  if (engine() !== 'device' && !next.viaDevice) { playServer(next, pump); return; }
   current = next;
   next.line?.classList.add('is-speaking');
   const u = new SpeechSynthesisUtterance(next.text);
@@ -303,6 +353,8 @@ function pump() {
 
 function shutUp() {
   toSpeak.length = 0;
+  try { player.pause(); player.removeAttribute('src'); } catch { /* nothing playing */ }
+  if (current && !(current instanceof Object && 'text' in current)) { current = null; setTimeout(pump, 0); }
   if (canSpeak) { try { speechSynthesis.cancel(); } catch { /* nothing to cancel */ } }
   // cancel() normally ends the current utterance through its error handler; make sure.
   setTimeout(() => { if (current) { current = null; pump(); } }, 250);
@@ -358,7 +410,140 @@ function flush() {
   prompt(text, alternatives, false);
 }
 
+// ---------- listening through the server: the page records, Groq's Whisper transcribes ----------
+//
+// The microphone stays open. The page watches how loud it is: when speech starts a
+// recording is under way already, and when speech has been followed by a pause, that
+// recording is sent off and its text handed on. A recording with no speech in it is
+// thrown away every few seconds.
+
+const ear = { stream: null, ctx: null, analyser: null, data: null, recorder: null, chunks: [], timer: 0, startedAt: 0, speechAt: 0, lastLoud: 0, loud: 0, floor: 0.008, busy: 0 };
+
+async function openEar() {
+  if (ear.stream) return true;
+  try {
+    ear.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch (err) {
+    problem = 'Microphone not allowed';
+    els.note.hidden = false;
+    els.note.textContent = 'Allow the microphone for this page in the browser’s site settings, then tap Talk again.';
+    note(`microphone: ${err.name}`);
+    setOn(false);
+    return false;
+  }
+  ear.ctx = audio || new (window.AudioContext || window.webkitAudioContext)();
+  const source = ear.ctx.createMediaStreamSource(ear.stream);
+  ear.analyser = ear.ctx.createAnalyser();
+  ear.analyser.fftSize = 1024;
+  ear.data = new Float32Array(ear.analyser.fftSize);
+  source.connect(ear.analyser);
+  return true;
+}
+
+function startRecording() {
+  ear.chunks = [];
+  ear.speechAt = 0;
+  ear.loud = 0;
+  ear.startedAt = Date.now();
+  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((m) => MediaRecorder.isTypeSupported(m)) || '';
+  const recorder = new MediaRecorder(ear.stream, mime ? { mimeType: mime, audioBitsPerSecond: 32_000 } : undefined);
+  ear.recorder = recorder;
+  recorder.ondataavailable = (e) => { if (e.data.size) ear.chunks.push(e.data); };
+  recorder.start();
+}
+
+// Ends the running recording. `keep` sends it to be transcribed; otherwise it is dropped.
+function endRecording(keep) {
+  const recorder = ear.recorder;
+  ear.recorder = null;
+  if (!recorder) return;
+  const chunksNow = ear.chunks;
+  recorder.onstop = async () => {
+    if (!keep) return;
+    const blob = new Blob(chunksNow, { type: recorder.mimeType || 'audio/webm' });
+    ear.busy += 1;
+    thinking = true;
+    paint();
+    try {
+      const data = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = reject; r.readAsDataURL(blob); });
+      const res = await fetch('/api/speech/hear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio: data, mime: blob.type, lang: settings.lang }) });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || `status ${res.status}`);
+      note(`heard: ${out.text ? out.text.slice(0, 60) : '(nothing)'}`);
+      if (out.text) { segments.push({ text: out.text, alts: [] }); showLive(); flush(); }
+    } catch (err) {
+      note(`listening failed: ${err.message}`);
+      els.note.hidden = false;
+      els.note.textContent = `Could not turn that into text: ${err.message}`;
+    } finally {
+      ear.busy -= 1;
+      if (!ear.busy && !segments.length) { thinking = false; paint(); }
+    }
+  };
+  try { recorder.stop(); } catch { /* already stopped */ }
+}
+
+function earTick() {
+  if (!on || !ear.analyser) return;
+  const quiet = speaking && !settings.headphones; // it would hear itself
+  if (quiet || ended) {
+    if (ear.recorder) endRecording(false);
+    if (listening) { listening = false; paint(); }
+    return;
+  }
+  if (!ear.recorder) startRecording();
+  if (!listening) { listening = true; paint(); }
+  ear.analyser.getFloatTimeDomainData(ear.data);
+  let sum = 0;
+  for (const v of ear.data) sum += v * v;
+  const level = Math.sqrt(sum / ear.data.length);
+  const now = Date.now();
+  const threshold = Math.max(0.02, ear.floor * 3.2);
+  if (level > threshold) {
+    ear.loud += 1;
+    ear.lastLoud = now;
+    // A few loud moments in a row are speech, not a door or a step.
+    if (!ear.speechAt && ear.loud >= 3) {
+      ear.speechAt = now;
+      note(`speech started (level ${level.toFixed(3)}, floor ${ear.floor.toFixed(3)})`);
+      els.live.hidden = false;
+      els.live.textContent = '…';
+      if (speaking && settings.headphones) { note('interrupted by speech'); shutUp(); }
+    }
+  } else {
+    if (!ear.speechAt) { ear.loud = 0; ear.floor = ear.floor * 0.95 + level * 0.05; }
+  }
+  if (ear.speechAt) {
+    const pause = Math.max(1200, settings.pause);
+    if (now - ear.lastLoud > pause || now - ear.speechAt > 90_000) {
+      const spoke = ear.lastLoud - ear.speechAt;
+      els.live.hidden = true;
+      endRecording(spoke > 250);
+    }
+  } else if (now - ear.startedAt > 6000) {
+    endRecording(false); // nothing said: start afresh, so a recording never begins with a long silence
+  }
+}
+
+async function listenServer() {
+  if (!(await openEar()) || ear.timer) return;
+  if (ear.ctx.state !== 'running') await ear.ctx.resume().catch(() => {});
+  note(`microphone open (audio ${ear.ctx.state})`);
+  ear.timer = setInterval(earTick, 50);
+}
+
+function closeEar() {
+  clearInterval(ear.timer);
+  ear.timer = 0;
+  endRecording(false);
+  ear.stream?.getTracks().forEach((t) => t.stop());
+  ear.stream = null;
+  ear.analyser = null;
+  listening = false;
+}
+
 function listen() {
+  if (serverHears()) { if (on && !ended) listenServer(); return; }
   if (!on || rec || ended || !Recognition) return;
   if (speaking && !settings.headphones) return;
   const mine = new Recognition();
@@ -424,6 +609,7 @@ function listen() {
 }
 
 function stopListening() {
+  if (serverHears()) return; // the open microphone pauses by itself while the page speaks
   const mine = rec;
   if (!mine) return;
   try { mine.abort(); } catch { /* not running */ }
@@ -446,7 +632,7 @@ function setOn(value) {
   if (on) {
     problem = '';
     els.note.hidden = true;
-    if (!Recognition) {
+    if (!canListen()) {
       on = false;
       els.note.hidden = false;
       els.note.textContent = 'This browser cannot listen. Use Chrome on Android or on the computer. Typing works everywhere.';
@@ -456,6 +642,8 @@ function setOn(value) {
     if (ended) beginAgain();
     // Sound has to begin inside a tap; after that the page may speak by itself.
     try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch { audio = null; }
+    // A moment of silence, so the audio element may play by itself from here on.
+    try { player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; player.play().catch(() => {}); } catch { /* no audio */ }
     if (canSpeak) { try { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); } catch { /* no voice */ } }
     keepAwake();
     note('hands-free on');
@@ -464,6 +652,7 @@ function setOn(value) {
     shutUp();
     speaking = false;
     stopListening();
+    closeEar();
     flush();
     wakeLock?.release?.().catch(() => {});
     els.shield.hidden = true;
@@ -507,6 +696,16 @@ els.sounds.checked = settings.sounds;
 els.headphones.checked = settings.headphones;
 
 els.lang.addEventListener('change', () => { settings.lang = els.lang.value; saved.set('lang', settings.lang); loadVoices(); stopListening(); });
+els.engine.addEventListener('change', () => { saved.set('engine', els.engine.value); showEngines(); });
+
+const ENGINES = { piper: 'Piper (made by the app, free)', openai: 'OpenAI (natural, costs a little)', device: 'The phone’s own voice' };
+function showEngines() {
+  const now = engine();
+  els.engine.replaceChildren(...[...server.voices, 'device'].map((e) => new Option(ENGINES[e] || e, e, false, e === now)));
+  els.voice.closest('label').hidden = now !== 'device';
+  els.hears.textContent = serverHears() ? 'Listening goes through Groq’s Whisper.' : server.hear === 'groq' ? 'This browser cannot record, so the phone’s own listening is used.' : 'Listening uses the phone’s own speech recognition. A Groq key in the app’s settings file makes it much better (docs/voice.md).';
+}
+fetch('/api/speech').then((r) => r.json()).then((s) => { server = s; showEngines(); note(`server: hears with ${s.hear}, speaks with ${s.speak}`); paint(); }).catch(() => showEngines());
 els.pause.addEventListener('change', () => { settings.pause = Number(els.pause.value); saved.set('pause', settings.pause); });
 els.aloud.addEventListener('change', () => { settings.aloud = els.aloud.checked; saved.set('aloud', settings.aloud); if (!settings.aloud) shutUp(); });
 els.rate.addEventListener('change', () => { settings.rate = Number(els.rate.value); saved.set('rate', settings.rate); });
@@ -557,6 +756,6 @@ if (!window.isSecureContext) {
   els.note.hidden = false;
   els.note.textContent = 'The microphone only works over https or on the computer itself. Open the app through its Tailscale address (docs/pi.md).';
 }
-note(`page opened; listening ${Recognition ? 'available' : 'not available'}; voice ${canSpeak ? 'available' : 'not available'}`);
+note(`page opened; phone listening ${Recognition ? 'available' : 'not available'}; recording ${canRecord ? 'available' : 'not available'}; voice ${canSpeak ? 'available' : 'not available'}`);
 paint();
 connect();

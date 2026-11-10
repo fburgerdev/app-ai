@@ -115,6 +115,10 @@ const DEFAULTS = {
     digestModel: 'haiku', // model that turns a reply into something to listen to
     hostModel: 'haiku', // the voice you talk to: decides where your speech goes
     thinkModel: 'sonnet', // answers the questions the host hands on
+    groqKey: '', // Groq API key: the Talk page then listens through Groq's Whisper instead of the phone
+    openaiKey: '', // OpenAI API key, only for the "openai" voice
+    speak: 'piper', // the voice that reads aloud: piper (on this machine) or openai; the phone's own if neither is there
+    piper: { command: 'piper', dir: '', voices: { de: 'de_DE-thorsten-medium', en: 'en_US-lessac-medium' } },
   },
 };
 
@@ -138,6 +142,8 @@ export function loadConfig() {
   }
   const config = { ...DEFAULTS, ...stored };
   for (const key of ['google', 'voice', 'queue', 'cards']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  const piper = stored.voice?.piper || {};
+  config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
   if (process.env.APP_AI_BRAIN_REPO) config.brainRepo = process.env.APP_AI_BRAIN_REPO;
   if (process.env.APP_AI_DATA_REPO !== undefined) config.dataRepo = process.env.APP_AI_DATA_REPO;

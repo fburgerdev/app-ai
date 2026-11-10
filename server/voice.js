@@ -47,7 +47,7 @@ function plainSpeech(text) {
 }
 
 // Names the phone is likely to mishear: the projects, and the words Florian listed.
-function words() {
+export function words() {
   let names = [];
   try {
     names = projectTree().groups.flatMap((g) => [g.name, ...g.projects.map((p) => p.name)]).filter((n) => n && n !== 'No area');

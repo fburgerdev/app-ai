@@ -447,6 +447,19 @@ test('walk mode: the host on the page, with a screen to tell and a connection th
   assert.equal(words.status, 200);
 });
 
+test('the Talk page can listen and speak through the server', async () => {
+  const status = (await call('GET', '/api/speech')).data;
+  assert.equal(status.hear, 'groq');
+  assert.deepEqual(status.voices, ['piper']);
+  assert.equal((await call('POST', '/api/speech/hear', { audio: 'AAAA', mime: 'audio/webm', lang: 'de-DE' })).data.text, '', 'too short to be speech');
+  const heard = await call('POST', '/api/speech/hear', { audio: Buffer.alloc(4000, 1).toString('base64'), mime: 'audio/webm', lang: 'en-US' });
+  assert.equal(heard.data.text, 'what is waiting?');
+  const said = await fetch(`${base}/api/speech/say`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'Hello.', lang: 'en-US' }) });
+  assert.equal(said.headers.get('content-type'), 'audio/wav');
+  assert.equal(Buffer.from(await said.arrayBuffer()).subarray(0, 4).toString(), 'RIFF');
+  assert.equal((await call('POST', '/api/speech/say', { text: '' })).status, 502);
+});
+
 test('the app\'s state is pushed to its own repo, without secrets', async () => {
   await call('POST', '/api/brain/extract', {});
   await lastRun(2);
