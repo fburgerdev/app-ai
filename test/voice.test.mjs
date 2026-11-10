@@ -21,6 +21,16 @@ test('speech is told apart from commands', () => {
   assert.deepEqual(interpret('Go with the second option and send it'), { command: 'send', text: 'Go with the second option' });
   assert.deepEqual(interpret('Please send the mail to the office tomorrow'), { command: null, text: 'Please send the mail to the office tomorrow' });
   assert.deepEqual(interpret('We are done with the first part'), { command: null, text: 'We are done with the first part' });
+  // Near misses and filler words still count as commands.
+  for (const [said, command] of [['New threat.', 'new'], ['nu thread', 'new'], ['okay new thread please', 'new'], ['Neuer Thread', 'new'], ['start new thread', 'new'], ['sent it', 'send'], ['Repeat that please', 'repeat'], ['Tschüss', 'bye'], ['mark it done', 'done'], ['Erledigt.', 'done']]) {
+    assert.equal(interpret(said).command, command, said);
+  }
+  // A command found only among the phone's other guesses.
+  assert.equal(interpret('New Fred', ['new thread', 'new friend']).command, 'new');
+  // Dictation is left alone.
+  for (const said of ['I think we should wait until Friday', 'Dan', 'next week', 'send the mail to Lisa tomorrow morning', 'that sounds good to me']) {
+    assert.equal(interpret(said).command, null, said);
+  }
 });
 
 function fakeApp() {

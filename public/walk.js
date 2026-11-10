@@ -58,8 +58,8 @@ function speak(text) {
   });
 }
 
-function say(command) {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'prompt', voicePrompt: command, last: true }));
+function say(command, alternatives = []) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'prompt', voicePrompt: command, alternatives, last: true }));
 }
 
 function start() {
@@ -79,11 +79,15 @@ function start() {
   recognition.lang = els.lang.value;
   recognition.continuous = false;
   recognition.interimResults = true;
+  recognition.maxAlternatives = 5;
   recognition.onresult = (e) => {
     const result = e.results[e.results.length - 1];
     const text = result[0].transcript.trim();
     els.heard.textContent = text;
-    if (result.isFinal && text) say(text);
+    if (!result.isFinal || !text) return;
+    // The phone's other guesses help catch a command it misheard as its first guess.
+    const alternatives = Array.from(result, (r) => r.transcript.trim()).slice(1).filter(Boolean);
+    say(text, alternatives);
   };
   recognition.onerror = (e) => {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {

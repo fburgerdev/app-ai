@@ -23,26 +23,81 @@ import { queueOrder, recordDecision } from './queue.js';
 const DICTATED = '[Dictated on a phone call; may contain transcription errors.]';
 
 const COMMANDS = [
-  ['send', /^(ok(ay)? )?(please )?(send|send it|send that|senden|abschicken)$/],
-  ['repeat', /^(repeat|repeat that|again|say that again|nochmal|wiederholen)$/],
-  ['later', /^(later|skip|skip it|next|next one|später|weiter)$/],
-  ['done', /^(done|mark (it |that )?(as )?done|close it|erledigt)$/],
-  ['cancel', /^(cancel|scratch that|start over|delete that|verwerfen)$/],
-  ['new', /^(new thread|start a new thread|neuer thread)$/],
-  ['bye', /^(goodbye|good bye|bye|hang up|that's all|thats all|end call|tschüss)$/],
+  ['send', /^(send|send it|send that|send this|senden|abschicken|schick es ab|schicken)$/],
+  ['repeat', /^(repeat|repeat that|again|say that again|say again|nochmal|noch mal|wiederholen|wiederhole)$/],
+  ['later', /^(later|skip|skip it|skip this|next|next one|next thread|später|weiter|überspringen)$/],
+  ['done', /^(done|mark (it |that |this )?(as )?done|close it|close this|finished|erledigt|fertig)$/],
+  ['cancel', /^(cancel|scratch that|start over|delete that|abbrechen|verwerfen|lösch das)$/],
+  ['new', /^((start |create |open |make )?(a )?new (thread|chat|conversation)|neuer (thread|chat)|neuen (thread|chat)( starten| anfangen)?)$/],
+  ['bye', /^(goodbye|good bye|bye|bye bye|hang up|that's all|thats all|end call|stop|tschüss|tschüs|auf wiedersehen|ende)$/],
   ['help', /^(help|what can i say|hilfe)$/],
 ];
+// Said around a command without changing it: "okay new thread please".
+const FILLER = /^(?:(?:ok|okay|okey|please|bitte|hey|claude|um|uh|ähm|äh|so|also|and|und|now|jetzt)\s+)+|(?:\s+(?:please|bitte|now|jetzt|then|dann))+$/g;
+// Spoken forms of each command, to catch near misses ("new threat", "nu thread", "sent it").
+const SPOKEN = {
+  send: ['send', 'send it', 'senden'],
+  repeat: ['repeat', 'repeat that', 'say that again', 'wiederholen', 'nochmal'],
+  later: ['later', 'skip it', 'next one', 'später', 'weiter'],
+  done: ['done', 'mark as done', 'erledigt'],
+  cancel: ['cancel', 'scratch that', 'abbrechen', 'verwerfen'],
+  new: ['new thread', 'start a new thread', 'neuer thread', 'new chat'],
+  bye: ['goodbye', 'hang up', 'tschüss'],
+  help: ['help', 'hilfe'],
+};
+
+function normalize(text) {
+  return String(text || '').toLowerCase().replace(/[.,!?¿¡"“”„]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function distance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const keep = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = keep;
+    }
+  }
+  return row[b.length];
+}
+
+// The command a short utterance is, exactly or nearly; null if none.
+function commandOf(norm) {
+  const bare = norm.replace(FILLER, '').trim();
+  for (const candidate of [norm, bare]) {
+    for (const [command, pattern] of COMMANDS) if (pattern.test(candidate)) return command;
+  }
+  // Near misses only for short utterances, so ordinary dictation is never taken for a command.
+  if (!bare || bare.split(' ').length > 5) return null;
+  let best = null;
+  for (const [command, forms] of Object.entries(SPOKEN)) {
+    for (const form of forms) {
+      if (form.length < 5 && bare.length < 5) continue; // "done" vs "dan": too short to guess
+      const similarity = 1 - distance(bare, form) / Math.max(bare.length, form.length);
+      if (similarity >= 0.7 && (!best || similarity > best.similarity)) best = { command, similarity };
+    }
+  }
+  return best?.command || null;
+}
+
 const KEYS = { 1: 'send', 2: 'repeat', 3: 'later', 4: 'done', 5: 'new', 0: 'cancel', 9: 'bye' };
 const HELP = 'Speak your reply, then say send, or press 1. Say repeat, or press 2, to hear it again. Later, or 3, puts the thread at the back. Done, or 4, closes it. New thread, or 5, starts one. Cancel, or 0, drops what you said. Goodbye, or 9, ends the call.';
 
 // What was said, as a command or as dictation. "…and send it" at the end of a sentence
 // counts as dictation followed by send.
-export function interpret(utterance) {
+export function interpret(utterance, alternatives = []) {
   const text = String(utterance || '').trim();
-  const norm = text.toLowerCase().replace(/[.,!?¿¡]/g, '').replace(/\s+/g, ' ').trim();
+  const norm = normalize(text);
   if (!norm) return { command: null, text: '' };
-  for (const [command, pattern] of COMMANDS) if (pattern.test(norm)) return { command, text: '' };
-  const tail = /^(.*?)[\s,.]+(?:and\s+)?(?:then\s+)?send(?: it| that)?[.!]?$/i.exec(text);
+  // The phone's best guess first, then its other guesses: a command heard in any of them counts.
+  for (const guess of [norm, ...alternatives.map(normalize).filter(Boolean)]) {
+    const command = commandOf(guess);
+    if (command) return { command, text: '' };
+  }
+  const tail = /^(.*?)[\s,.]+(?:and\s+)?(?:then\s+)?(?:send|senden|abschicken)(?: it| that)?[.!]?$/i.exec(text);
   const said = tail ? tail[1].replace(/[\s,]+$/, '') : '';
   if (said.split(/\s+/).length >= 3) return { command: 'send', text: said };
   return { command: null, text };
@@ -111,8 +166,8 @@ export class CallSession {
     this.run(() => this.present('Claude has finished one. '));
   }
 
-  heard(utterance) {
-    return this.run(() => this.handle(interpret(utterance)));
+  heard(utterance, alternatives = []) {
+    return this.run(() => this.handle(interpret(utterance, alternatives)));
   }
 
   key(digit) {
@@ -302,7 +357,7 @@ export function attachVoice(server, config, allowedHosts) {
         session.start();
         return;
       }
-      if (msg.type === 'prompt' && msg.last !== false) session.heard(msg.voicePrompt);
+      if (msg.type === 'prompt' && msg.last !== false) session.heard(msg.voicePrompt, trusted && Array.isArray(msg.alternatives) ? msg.alternatives.slice(0, 5).map(String) : []);
       else if (msg.type === 'dtmf') session.key(String(msg.digit));
       else if (msg.type === 'error') log(`voice: Twilio reported: ${msg.description}`);
     });
