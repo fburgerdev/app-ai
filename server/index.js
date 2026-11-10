@@ -15,6 +15,7 @@ import { initReads, logRead } from './reads.js';
 import * as queue from './queue.js';
 import * as cards from './cards.js';
 import * as projects from './projects.js';
+import * as checkins from './checkins.js';
 import * as datasync from './datasync.js';
 import { parseMail } from './mail.js';
 import { getState, setState, readPad, writePad, MODELS, EFFORTS } from './state.js';
@@ -150,6 +151,13 @@ app.put('/api/pads/:name', (req, res) => {
 });
 
 app.get('/api/projects', (req, res) => res.json(projects.projectTree()));
+
+// Threads on every active project, every paused one, or on areas (one, or all).
+app.post('/api/projects/start', (req, res) => {
+  try {
+    res.json(checkins.startCheckins(String(req.body.which || ''), String(req.body.name || '')));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 app.get('/api/connections', (req, res) => res.json(connections(req)));
 

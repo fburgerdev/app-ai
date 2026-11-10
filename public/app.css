@@ -206,7 +206,7 @@ kbd {
 
 /* ---------- dragging a thread ---------- */
 
-.item[data-id], .tree-thread[data-id] { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.item[data-id], .out-thread[data-id] { touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .is-dragged { opacity: 0.35; }
 .drag-ghost {
   position: fixed;
@@ -843,12 +843,10 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .status { animation: swap 200ms ease-out; }
 
 /* ---------- the outline ----------
-   Where the open thread sits: its area, its project, and the threads next to it, joined
-   by lines the way a file tree is. "All folders" underneath opens the whole vault tree,
-   for looking around and for filing a thread somewhere else. */
+   Projects and areas, most recently dealt with first; no threads unless one is opened.
+   A dot marks a project with open threads. Paused projects and empty areas are grey. */
 
 .tree {
-  --guide: #454b6b;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -856,83 +854,59 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
   overflow-y: auto;
   background: var(--rail);
   border-left: 1px solid var(--line);
-  padding: 14px 10px 24px;
+  padding: 4px 8px 24px;
 }
-.tree-label { margin: 0 6px 8px; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
-.tree-note { margin: 2px 6px; color: var(--faint); font-size: 12.5px; }
-.folder-row, .tree-thread {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 28px;
-  padding: 3px 7px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font-size: 13.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.folder-row:hover, .tree-thread:hover { background: var(--panel); color: var(--text); }
-.folder-name, .tree-thread span:last-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.folder.is-area > .folder-row { color: var(--text); font-weight: 600; }
-.folder.is-here > .folder-row { color: var(--you); font-weight: 600; }
-.folder-count { flex: none; min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--raised); color: var(--muted); font: 650 11px/1.4 var(--sans); text-align: center; }
-.folder-count.has-ready { background: var(--you); color: var(--you-ink); }
-.folder-count.is-working::before { content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--work); vertical-align: 1px; }
-.folder.is-drop > .folder-row { background: rgba(245, 183, 92, 0.12); box-shadow: inset 0 0 0 1.5px var(--you); color: var(--bright); }
-.tree-thread { font-size: 13px; }
-.tree-thread.is-current { background: var(--raised); color: var(--bright); }
-.dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
-.dot-ready { background: var(--you); }
-.dot-working { background: var(--work); }
-.dot-done { background: var(--done); opacity: 0.55; }
-
-/* The lines: every child hangs on an elbow from its parent's rail, and the rail runs on
-   past every child but the last. */
-.kids { margin-left: 12px; }
-.kid { position: relative; padding-left: 13px; }
-.kid::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0;
-  width: 10px; height: 14px;
-  border-left: 1px solid var(--guide);
-  border-bottom: 1px solid var(--guide);
-}
-.kid:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  left: 0; top: 14px; bottom: 0;
-  border-left: 1px solid var(--guide);
-}
-.folder-acts { display: flex; flex-wrap: wrap; gap: 0 12px; min-height: 28px; align-items: center; padding: 0 7px; font-size: 12.5px; }
-.folder-acts .link { color: var(--faint); text-decoration: none; }
-.folder-acts .link:hover { color: var(--text); text-decoration: underline; }
-.tree-all {
+.tree-label { margin: 14px 8px 6px; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+.tree-note { margin: 2px 8px; color: var(--faint); font-size: 12.5px; }
+.out-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  margin: 14px 0 4px;
-  padding: 6px 7px;
+  min-height: 28px;
+  padding: 3px 8px;
   border: 0;
-  border-top: 1px solid var(--line);
+  border-radius: 6px;
   background: none;
-  color: var(--faint);
-  font: 650 11px/1 var(--sans);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  color: var(--text);
+  font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
-.tree-all:hover, .tree-all.is-on { color: var(--muted); }
-.tree-all::after { content: ''; width: 5px; height: 5px; margin-left: auto; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 150ms ease; }
-.tree-all.is-on::after { transform: rotate(45deg); }
-.rail-lists .tree { border: 0; background: none; padding: 8px 0 12px; overflow: visible; }
-.rail-lists .tree-all { display: none; }
+.out-row:hover, .out.is-open > .out-row { background: var(--panel); }
+.out-mark { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.out-mark.has-open { background: var(--you); }
+.out-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.out-when { flex: none; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.out.is-grey > .out-row { color: var(--faint); }
+.out.is-grey .out-when { opacity: 0.7; }
+.out.is-here > .out-row { color: var(--bright); font-weight: 600; box-shadow: inset 2px 0 0 var(--you); }
+.out.is-drop > .out-row { background: rgba(245, 183, 92, 0.12); box-shadow: inset 0 0 0 1.5px var(--you); color: var(--bright); }
+.out-body { margin: 1px 0 6px 11px; padding: 2px 0 2px 10px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.out-about { margin: 2px 6px 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.out-thread {
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.out-thread:hover { background: var(--panel); color: var(--text); }
+.out-thread.is-current { color: var(--bright); background: var(--raised); }
+.out-acts, .out-bulk { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 4px 6px; font-size: 12.5px; }
+.out-bulk { flex-direction: column; gap: 6px; padding: 0 8px; }
+.out-acts .link, .out-bulk .link { color: var(--muted); text-decoration: none; }
+.out-acts .link:hover, .out-bulk .link:hover { color: var(--text); text-decoration: underline; }
+.out-bulk .link:disabled { color: var(--faint); opacity: 0.5; cursor: default; text-decoration: none; }
+.out-bulk .link.is-armed { color: var(--you); font-weight: 600; }
+.rail-lists .tree { border: 0; background: none; padding: 0 0 12px; overflow: visible; }
 
 /* ---------- the thread's place, under its name ---------- */
 
@@ -1107,10 +1081,9 @@ a.chip:hover { border-color: var(--muted); }
   #rail-pin { display: none; }
   .rail-close { display: inline; margin-left: auto; font-size: 14px; padding: 6px 2px; }
   .item { padding: 11px 8px; }
-  .folder-row, .tree-thread { min-height: 40px; font-size: 15px; }
-  .kid::before { height: 20px; }
-  .kid:not(:last-child)::after { top: 20px; }
-  .folder-acts { font-size: 14px; gap: 0 18px; min-height: 40px; }
+  .out-row { min-height: 42px; font-size: 15px; }
+  .out-thread { padding: 9px 6px; font-size: 14.5px; }
+  .out-acts, .out-bulk { font-size: 14px; gap: 10px 18px; }
 
   .thread-head { padding: 8px 14px; min-height: 0; gap: 2px 10px; }
   .thread-title { flex-basis: 100%; font-size: 16px; }

@@ -138,7 +138,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up' };
+const KIND = { 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 function kindLabel(t) {
   if (t.kind === 'card') return { chase: 'Chase', proposal: 'Proposal' }[t.card?.type] || 'Opportunity';
   return KIND[t.kind] || '';
@@ -200,19 +200,9 @@ function queueLists() {
 const svg = (markup) => { const t = document.createElement('template'); t.innerHTML = markup.trim(); return t.content.firstChild; };
 
 const wide = window.matchMedia('(min-width: 1100px)');
-const tree = {
-  kept: new Set((() => { try { return JSON.parse(localStorage.getItem('tree-open') || '[]'); } catch { return []; } })()), // opened by a click
-  hover: new Set(), // opened because the pointer rests on them
-  all: (() => { try { return localStorage.getItem('tree-all') === '1'; } catch { return false; } })(), // "All folders" kept open
-  allHover: false,
-  timer: 0,
-};
+const tree = { open: '' }; // the one project or area that is expanded
 
 const threadsIn = (project) => all().filter((t) => t.kind !== 'card' && (t.project || '') === project);
-const openFirst = (list) => [
-  ...list.filter((t) => t.state !== 'done').sort((a, b) => b.updatedAt - a.updatedAt),
-  ...list.filter((t) => t.state === 'done').sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt)).slice(0, 5),
-];
 
 // Where a project sits: [area, project], [area] for an area itself, [] for none.
 function pathOf(project) {
@@ -224,95 +214,98 @@ function pathOf(project) {
   return [project];
 }
 
-function treeThread(t) {
-  return h('button', { class: `tree-thread${t.id === S.current ? ' is-current' : ''}`, type: 'button', title: t.title, dataset: { id: t.id }, onclick: () => openThread(t.id) },
-    h('span', { class: `dot dot-${t.state}` }), h('span', {}, t.title));
-}
+// ---------- the outline: every project and area, most recently dealt with first ----------
+//
+// It shows projects, not threads. A dot marks a project that has open threads; paused
+// projects and areas without a project are grey and at the bottom. Click one to see its
+// threads and what can be done there. Drop a thread on one to file it.
 
-// One row of the outline with what hangs below it. `forced` rows belong to the open
-// thread's own branch: they are always open, and a click reads the project's note.
-function folderEl({ key, name, isArea, project, about, threads, kids = [], here, forced = false }) {
-  const mine = threads || [];
-  const below = [...mine, ...kids.flatMap((k) => k.threads || [])];
-  const ready = below.filter((t) => t.state === 'ready').length;
-  const busy = below.some((t) => t.state === 'working');
-  const open = forced || tree.kept.has(key) || tree.hover.has(key);
+function outlineRow({ name, project, about, touched, open, grey, isArea, hereName }) {
+  const key = `${isArea ? 'a' : 'p'}:${name}`;
+  const isOpen = tree.open === key;
   const current = S.current ? S.threads.get(S.current) : null;
-  const canMove = project != null && current && current.kind !== 'card' && (current.project || '') !== project;
+  const canMove = current && current.kind !== 'card' && (current.project || '') !== project;
   const row = h('button', {
-    class: 'folder-row', type: 'button', title: forced && project ? `Read the note of ${name}` : about || name, dataset: { key },
-    onclick: () => {
-      if (forced) { if (project) openPanel({ kind: 'note', link: project }); return; }
-      if (open && tree.kept.has(key)) { tree.kept.delete(key); tree.hover.delete(key); } else tree.kept.add(key);
-      try { localStorage.setItem('tree-open', JSON.stringify([...tree.kept])); } catch { /* private mode */ }
-      renderTree();
-    },
-  }, h('span', { class: 'folder-name' }, name),
-  !forced && (ready || busy) ? h('span', { class: `folder-count${ready ? ' has-ready' : ''}${busy ? ' is-working' : ''}` }, ready ? String(ready) : '') : null);
-  // On the open thread's branch only the folder it is in offers actions, not the area above it.
-  const acts = project == null || (forced && kids.length) ? null : h('div', { class: 'folder-acts' },
-    project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, '+ New thread') : null,
-    canMove ? h('button', { class: 'link', type: 'button', onclick: () => moveToProject(current.id, project) }, 'Move this thread here') : null,
-    project && !forced ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
-  );
-  const below2 = open ? [
-    ...openFirst(mine).map(treeThread),
-    ...kids.map((k) => folderEl({ ...k, here })),
-    acts && acts.children.length ? acts : null,
-  ].filter(Boolean) : [];
-  return h('div', {
-    class: `folder${isArea ? ' is-area' : ''}${open ? ' is-open' : ''}${here.at === key ? ' is-here' : ''}`,
-    dataset: project == null ? {} : { drop: 'folder', project },
-  }, row, below2.length ? h('div', { class: 'kids' }, below2.map((el) => h('div', { class: 'kid' }, el))) : null);
-}
-
-// The whole vault tree: every area with its projects, and "No project".
-function allFolders(here) {
-  const t = S.projects;
-  const nodes = (t.missing ? [] : t.groups).map((g) => folderEl({
-    key: `a:${g.name}`, name: g.name, isArea: true, about: g.about,
-    project: g.isArea ? g.name : null,
-    threads: g.isArea ? threadsIn(g.name) : [],
-    kids: g.projects.map((p) => ({ key: `p:${p.name}`, name: p.name, project: p.name, about: p.about, threads: threadsIn(p.name) })),
-    here,
-  }));
-  // Threads filed under a name the vault's index does not have (any more) stay findable.
-  const known = new Set((t.groups || []).flatMap((g) => [g.isArea ? g.name : null, ...g.projects.map((p) => p.name)]));
-  for (const name of new Set(all().map((x) => x.project).filter((x) => x && !known.has(x)))) {
-    nodes.push(folderEl({ key: `p:${name}`, name, project: name, threads: threadsIn(name), here }));
+    class: 'out-row', type: 'button', title: about || name, dataset: { key },
+    onclick: () => { tree.open = isOpen ? '' : key; renderTree(); },
+  },
+  h('span', { class: `out-mark${open ? ' has-open' : ''}`, title: open ? `${open} open ${open === 1 ? 'thread' : 'threads'}` : null }),
+  h('span', { class: 'out-name' }, name),
+  touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null);
+  let body = null;
+  if (isOpen) {
+    const mine = threadsIn(project).filter((t) => t.state !== 'done').sort((a, b) => b.updatedAt - a.updatedAt);
+    body = h('div', { class: 'out-body' },
+      about ? h('p', { class: 'out-about' }, about) : null,
+      ...mine.map((t) => h('button', { class: `out-thread${t.id === S.current ? ' is-current' : ''}`, type: 'button', title: t.title, dataset: { id: t.id }, onclick: () => openThread(t.id) }, t.title)),
+      h('div', { class: 'out-acts' },
+        project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, '+ New thread') : null,
+        isArea ? h('button', { class: 'link', type: 'button', onclick: () => startThreads('areas', name) }, '+ New project?') : null,
+        canMove ? h('button', { class: 'link', type: 'button', onclick: () => moveToProject(current.id, project) }, 'Move this thread here') : null,
+        project ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
+      ));
   }
-  nodes.push(folderEl({ key: 'none', name: 'No project', project: '', threads: threadsIn(''), here }));
-  return nodes;
+  return h('div', { class: `out${grey ? ' is-grey' : ''}${hereName === project ? ' is-here' : ''}${isOpen ? ' is-open' : ''}`, dataset: { drop: 'folder', project } }, row, body);
 }
 
-// Just the branch the open thread is on: its area, its project, and the threads beside it.
-function branch(now, here) {
-  if (now == null) return [];
-  if (!now) return [folderEl({ key: 'none', name: 'No project', project: '', threads: threadsIn(''), here, forced: true })];
-  const path = pathOf(now);
-  const leaf = { key: here.at, name: now, project: now, threads: threadsIn(now), here, forced: true };
-  if (path.length === 2) return [folderEl({ key: `a:${path[0]}`, name: path[0], isArea: true, project: path[0], threads: [], kids: [leaf], here, forced: true })];
-  return [folderEl({ ...leaf, isArea: here.at.startsWith('a:') })];
+// Starts threads on many projects or areas at once. Asks once more, in place.
+let armedStart = '';
+async function startThreads(which, name = '') {
+  try {
+    const out = await api('POST', '/api/projects/start', { which, name });
+    toast(out.started
+      ? `Started ${out.started} ${out.started === 1 ? 'thread' : 'threads'}${out.skipped ? `; ${out.skipped} already had one` : ''}. They come into the inbox as Claude finishes.`
+      : out.skipped ? 'Each of them already has an open thread.' : 'There is nothing to start a thread on.');
+  } catch (err) { toast(err.message); }
+}
+function bulkButton(which, label, count) {
+  const armed = armedStart === which;
+  return h('button', {
+    class: `link${armed ? ' is-armed' : ''}`, type: 'button', disabled: !count,
+    title: 'One thread each, for those that have no open thread yet',
+    onclick: () => {
+      if (!armed) { armedStart = which; renderTree(); setTimeout(() => { if (armedStart === which) { armedStart = ''; renderTree(); } }, 4000); return; }
+      armedStart = '';
+      renderTree();
+      startThreads(which);
+    },
+  }, armed ? `Start ${count} ${count === 1 ? 'thread' : 'threads'}?` : label);
 }
 
-function treeNodes({ everything = false } = {}) {
+function treeNodes() {
   const t = S.projects;
   if (!t) return [h('p', { class: 'tree-note' }, 'Reading the vault…')];
-  // The folder the open thread (or the thread being started) is in.
-  const now = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
-  const here = { at: now == null ? '' : !now ? 'none' : t.groups.some((g) => g.isArea && g.name === now) ? `a:${now}` : `p:${now}` };
-  if (everything) return t.missing ? [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')] : allFolders(here);
-  const showAll = tree.all || tree.allHover || Boolean(drag?.active);
-  const toggle = h('button', {
-    class: `tree-all${showAll ? ' is-on' : ''}`, type: 'button', title: 'Every area and project in the vault. Drag a thread onto one to file it there.',
-    onclick: () => { tree.all = !(tree.all || tree.allHover); tree.allHover = false; try { localStorage.setItem('tree-all', tree.all ? '1' : ''); } catch { /* private mode */ } renderTree(); },
-  }, 'All folders');
+  if (t.missing) return [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')];
+  const hereName = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
+  // Counted here, from the threads the page has, so the dots are always current.
+  const openIn = (name) => threadsIn(name).filter((x) => x.state !== 'done').length;
+  const dealt = (name, vault) => Math.max(vault || 0, ...threadsIn(name).map((x) => x.lastUserTs || 0));
+  const byRecent = (a, b) => b.touched - a.touched || a.name.localeCompare(b.name);
+  const projects = t.groups.flatMap((g) => g.projects.map((p) => ({ name: p.name, project: p.name, about: p.about, paused: p.paused, touched: dealt(p.name, p.touched), open: openIn(p.name) })));
+  const active = projects.filter((p) => !p.paused).sort(byRecent);
+  const paused = projects.filter((p) => p.paused).sort(byRecent);
+  const areas = t.groups.filter((g) => g.isArea).map((g) => ({
+    name: g.name, project: g.name, isArea: true, about: g.projects.length ? g.projects.map((p) => p.name).join(', ') : 'No project right now',
+    empty: !g.projects.length, open: openIn(g.name),
+    touched: Math.max(dealt(g.name, g.touched), ...g.projects.map((p) => dealt(p.name, p.touched))),
+  }));
+  const row = (x, grey) => outlineRow({ ...x, grey, hereName });
+  const loose = openIn('');
   return [
-    h('p', { class: 'tree-label' }, now == null ? 'Not in a folder' : 'This thread is in'),
-    ...branch(now, here),
-    toggle,
-    ...(showAll ? (t.missing ? [h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.')] : allFolders(here)) : []),
-  ];
+    h('p', { class: 'tree-label' }, 'Projects'),
+    ...active.map((p) => row(p, false)),
+    ...paused.map((p) => row(p, true)),
+    !projects.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
+    outlineRow({ name: 'No project', project: '', about: 'Threads that belong to no project', touched: 0, open: loose, grey: !loose, hereName }),
+    h('p', { class: 'tree-label' }, 'Areas'),
+    ...areas.filter((a) => !a.empty).sort(byRecent).map((a) => row(a, false)),
+    ...areas.filter((a) => a.empty).sort(byRecent).map((a) => row(a, true)),
+    h('p', { class: 'tree-label' }, 'Start threads'),
+    h('div', { class: 'out-bulk' },
+      bulkButton('active', 'On every active project', active.length),
+      bulkButton('paused', 'On every paused project', paused.length),
+      bulkButton('areas', 'New project ideas, per area', areas.length)),
+  ].filter(Boolean);
 }
 
 function renderTree(force = false) {
@@ -320,26 +313,6 @@ function renderTree(force = false) {
   if (wide.matches) els.tree.replaceChildren(...treeNodes());
   else if (S.tab === 'projects') renderRail();
 }
-
-// In the full tree a folder opens while the pointer rests on it, and "All folders" opens
-// while the pointer rests on that. Everything opened that way closes again once the
-// pointer has left the outline.
-els.tree.addEventListener('mouseover', (e) => {
-  clearTimeout(tree.timer);
-  if (e.target.closest('.tree-all')) {
-    if (!tree.all && !tree.allHover) tree.timer = setTimeout(() => { tree.allHover = true; renderTree(); }, 220);
-    return;
-  }
-  const key = e.target.closest('.folder-row')?.dataset.key;
-  if (!key || tree.hover.has(key) || tree.kept.has(key)) return;
-  tree.timer = setTimeout(() => { tree.hover.add(key); renderTree(); }, 170);
-});
-els.tree.addEventListener('mouseleave', () => {
-  clearTimeout(tree.timer);
-  tree.timer = setTimeout(() => {
-    if ((tree.hover.size || tree.allHover) && !drag?.active) { tree.hover.clear(); tree.allHover = false; renderTree(); }
-  }, 450);
-});
 
 async function moveToProject(id, project) {
   try {
@@ -354,7 +327,7 @@ function renderRail() {
   if (drag?.active) { drag.stale = true; return; }
   const folders = S.tab === 'projects' && !wide.matches;
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes({ everything: true }))] : queueLists()));
+  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes())] : queueLists()));
   els.tabQueue.classList.toggle('is-on', !folders);
   els.tabProjects.classList.toggle('is-on', folders);
   if (!reducedMotion.matches && before.size) {
@@ -454,8 +427,6 @@ function beginDrag() {
   document.body.classList.add('is-dragging');
   drag.ghost = h('div', { class: 'drag-ghost' }, S.threads.get(drag.id)?.title || '');
   document.body.append(drag.ghost);
-  // The outline shows every folder while a thread is in the air, so there is somewhere to drop it.
-  if (S.threads.get(drag.id)?.kind !== 'card') renderTree(true);
   if (drag.touch) navigator.vibrate?.(12);
 }
 
@@ -463,14 +434,6 @@ function moveDrag(x, y) {
   drag.ghost.style.transform = `translate(${x + 14}px, ${y + 10}px)`;
   // Coming from the folders with the inbox hidden: the left edge brings it in.
   if (x < 18 && !els.app.classList.contains('rail-open') && !els.app.classList.contains('rail-pinned')) setRail(true);
-  // A closed folder opens when a dragged thread rests on it, so what is inside can be reached.
-  const row = document.elementFromPoint(x, y)?.closest('.folder-row');
-  const key = row?.dataset.key || '';
-  if (key !== drag.overKey) {
-    clearTimeout(drag.spring);
-    drag.overKey = key;
-    if (key && !row.parentElement.classList.contains('is-open')) drag.spring = setTimeout(() => { tree.hover.add(key); renderTree(true); }, 420);
-  }
   clearDropMarks();
   const target = dropAt(x, y);
   drag.target = target;
@@ -487,9 +450,6 @@ async function endDrag(drop) {
   drag = null;
   if (!d) return;
   clearTimeout(d.timer);
-  clearTimeout(d.spring);
-  if (!els.tree.matches(':hover')) tree.hover.clear();
-  if (d.active) d.stale = true;
   d.item.classList.remove('is-dragged');
   d.ghost?.remove();
   document.body.classList.remove('is-dragging');
@@ -524,7 +484,7 @@ async function endDrag(drop) {
 }
 
 document.addEventListener('pointerdown', (e) => {
-  const item = e.target.closest('.item[data-id], .tree-thread[data-id]');
+  const item = e.target.closest('.item[data-id], .out-thread[data-id]');
   if (!item || e.button > 0) return;
   const touch = e.pointerType !== 'mouse';
   drag = { item, id: item.dataset.id, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId, touch, active: false, target: null, timer: 0, stale: false };

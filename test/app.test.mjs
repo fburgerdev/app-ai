@@ -62,6 +62,7 @@ fs.writeFileSync(path.join(seed, 'Scratchpad.md'), 'the old scratchpad\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Areas', 'Campaign.md'), '# Campaign\n\nThe area note.\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Motion.md'), '# Motion\n\nThe project note.\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Grant.md'), '# Grant\n\nStatus: paused\nDeadline: —\n\nWaiting for the office.\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Campaign]]\n\n- [[Motion]] — a motion\n\n## No area\n\n- [[Grant]] — a grant\n');
 git(seed, 'checkout', '-B', 'main');
 git(seed, 'add', '-A');
@@ -285,6 +286,30 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   await until(async () => ((await state()).cards.running ? null : true), 'second run done');
   assert.equal((await state()).threads.filter((t) => t.kind === 'prep').length, 1);
   assert.ok((await state()).threads.length >= threadsBefore);
+});
+
+test('the outline knows paused projects and when each was dealt with; threads start on all of a kind at once', async () => {
+  const tree = (await call('GET', '/api/projects')).data;
+  const all = tree.groups.flatMap((g) => g.projects);
+  assert.equal(all.find((p) => p.name === 'Motion').paused, false);
+  assert.equal(all.find((p) => p.name === 'Grant').status, 'paused');
+  assert.equal(all.find((p) => p.name === 'Grant').paused, true);
+  assert.ok(all.find((p) => p.name === 'Motion').touched > 0, 'from his latest message in its threads, or the note in the vault');
+  assert.ok(all.find((p) => p.name === 'Grant').touched > 0);
+
+  const paused = (await call('POST', '/api/projects/start', { which: 'paused' })).data;
+  assert.deepEqual(paused, { started: 1, skipped: 0 });
+  const t = (await state()).threads.find((x) => x.kind === 'checkin-paused');
+  assert.equal(t.project, 'Grant');
+  assert.equal(t.title, 'Still waiting? Grant');
+  assert.match((await ready(t.id)).messages[0].text, /every paused project\. This one is for "Grant"/);
+  assert.deepEqual((await call('POST', '/api/projects/start', { which: 'paused' })).data, { started: 0, skipped: 1 }, 'not twice while one is open');
+  const active = (await call('POST', '/api/projects/start', { which: 'active' })).data;
+  assert.equal(active.started + active.skipped, 1, 'Motion, unless it already has an open thread');
+  const area = (await call('POST', '/api/projects/start', { which: 'areas', name: 'Campaign' })).data;
+  assert.equal(area.started, 1);
+  assert.equal((await state()).threads.find((x) => x.kind === 'checkin-areas').title, 'New project in Campaign?');
+  assert.equal((await call('POST', '/api/projects/start', { which: 'nonsense' })).status, 400);
 });
 
 test('send and done closes the thread once Claude has answered; files can be attached; Claude spins off on request', async () => {

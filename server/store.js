@@ -113,6 +113,7 @@ export function createThread({ title, kind = 'chat', sessionId = null, project =
     messageCount: 0,
     extractedCount: 0, // how many messages the last brain update has seen
     lastUserAt: 0, // messageCount right after Florian's latest message
+    lastUserTs: 0, // when that was
     archived: false,
     error: '',
     activity: '', // what Claude is doing right now, while working
@@ -184,7 +185,7 @@ export function appendMessage(id, message) {
   meta.messageCount += 1;
   meta.updatedAt = full.ts;
   // A message the app wrote to start a thread is not something Florian said.
-  if (full.role === 'user' && !full.auto) meta.lastUserAt = meta.messageCount;
+  if (full.role === 'user' && !full.auto) { meta.lastUserAt = meta.messageCount; meta.lastUserTs = Date.now(); }
   writeJson(metaFile(id), meta);
   events.emit('message', { threadId: id, message: full });
   events.emit('thread', meta);

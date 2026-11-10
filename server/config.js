@@ -90,7 +90,7 @@ const DEFAULTS = {
   threadShell: false,
 
   // How many threads may be worked on at once. More than this wait in line.
-  maxParallel: 4,
+  maxParallel: 6,
 
   // Other addresses this app may be opened under, besides localhost. Empty on a laptop.
   // On a Raspberry Pi behind "tailscale serve" this is the Pi's name in your tailnet,

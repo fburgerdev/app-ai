@@ -62,17 +62,22 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     store.updateThread(threadId, { pending: [...(thread.pending || []), prompt] });
     return message;
   }
-  startTurn(threadId, prompt);
+  startTurn(threadId, prompt, auto);
   return message;
 }
 
-function startTurn(threadId, prompt) {
+// How many turns may run at once. Work the app started by itself (`background`) leaves
+// one slot free, so a message of Florian's never waits behind it for long.
+const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);
+
+function startTurn(threadId, prompt, background = false) {
   store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting' });
-  if (running.size >= config.maxParallel) {
-    waiting.push({ threadId, prompt });
-    store.updateThread(threadId, { activity: 'Waiting for a free slot' }, { quiet: true });
+  if (!slotFree(background)) {
+    waiting.push({ threadId, prompt, background });
+    store.updateThread(threadId, { activity: background ? 'Waiting its turn (your own messages go first)' : 'Waiting for a free slot' }, { quiet: true });
     return;
   }
+  running.set(threadId, { abort: new AbortController(), parts: [] }); // holds the slot until runTurn takes over
   runTurn(threadId, prompt).catch((err) => {
     log(`turn failed unexpectedly: ${err.stack || err.message}`);
     running.delete(threadId);
@@ -265,8 +270,10 @@ async function runTurn(threadId, prompt) {
   } finally {
     running.delete(threadId);
     emitLive({ op: 'end' });
-    const next = waiting.shift();
-    if (next) startTurn(next.threadId, next.prompt);
+    // His own messages first; background work only into a slot it may have.
+    let i = waiting.findIndex((w) => !w.background);
+    if (i < 0 && waiting.length && slotFree(true)) i = 0;
+    if (i >= 0) { const [next] = waiting.splice(i, 1); startTurn(next.threadId, next.prompt, next.background); }
   }
 }
 
