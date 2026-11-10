@@ -25,6 +25,8 @@ Each thread file is a conversation with Florian. It has an "Earlier" part, which
 
 A thread whose first message says the app started it from his calendar is a preparation for an event. What Claude wrote in the briefing is Claude's; what Florian said in the session is filed like any thinking session.
 
+A thread that worked in a GitHub repo shows it in its events: what was pushed, merged into main, renamed or created. File what that means for the project, not the code itself. When a repo was renamed, change every mention of the old name in the vault, the `repo:` lines included. When Florian says a project has a repo, give its note a `repo: owner/name` line under its other field lines.
+
 A file Florian attached to a message is something he gave Claude to work with. Its path is next to his message. Read it when what he said about it needs it; file what he stated, not the file's content as such, unless he asked for it to be kept (then it belongs in `Files/` under the vault's rules).
 
 Most chats hold little that is durable. A thread with nothing to file is a normal result: skip it.

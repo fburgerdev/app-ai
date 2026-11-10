@@ -16,7 +16,8 @@ import { logRead, logToolRead } from './reads.js';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState } from './state.js';
-import { projectContext } from './projects.js';
+import { projectContext, repoOf } from './projects.js';
+import * as repos from './repos.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -45,24 +46,37 @@ function promptFor(threadId, text, files) {
 
 // Florian sends a message. Returns the stored message.
 // `auto` marks a message the app wrote itself to start a thread (a mail to answer).
-// `files` are attachments already moved into the thread. `doneAfter` closes the thread
-// once Claude has answered, instead of putting it back into the inbox.
+// `files` are attachments already moved into the thread. `doneAfter` is "send and done":
+// the message is kept and the thread closes, without a turn. He is closing it, so an
+// answer would only cost usage; the brain update reads the message like any other, and
+// if he reopens the thread, Claude gets it with his next message.
 export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false } = {}) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
   const stored = { role: 'user', text };
   if (auto) stored.auto = true;
   if (files.length) stored.files = files;
+  if (doneAfter && !auto) stored.unanswered = true;
   const message = store.appendMessage(threadId, stored);
   const prompt = promptFor(threadId, text, files);
-  // A plain message after "send and done" means he wants to see the answer after all.
-  if (!auto) store.updateThread(threadId, { doneAfter });
-  if (thread.state === 'working') {
-    // Claude is still on the previous message: this one goes in as soon as that turn ends.
-    store.updateThread(threadId, { pending: [...(thread.pending || []), prompt] });
+  if (doneAfter && !auto) {
+    const unsent = [...(thread.unsent || []), prompt];
+    // Mid-turn: the thread closes when that turn ends; this message starts no turn of its own.
+    if (thread.state === 'working') store.updateThread(threadId, { unsent, doneAfter: true });
+    else store.updateThread(threadId, { unsent, doneAfter: false, state: 'done', doneAt: Date.now(), activity: '', requeuedAt: 0 });
     return message;
   }
-  startTurn(threadId, prompt, auto);
+  // A plain message after "send and done" means he wants to see the answer after all.
+  if (!auto) store.updateThread(threadId, { doneAfter: false });
+  // What he sent with "send and done" goes in first, so Claude has it too.
+  const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
+  if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
+  if (thread.state === 'working') {
+    // Claude is still on the previous message: this one goes in as soon as that turn ends.
+    store.updateThread(threadId, { pending: [...(thread.pending || []), withUnsent] });
+    return message;
+  }
+  startTurn(threadId, withUnsent, auto);
   return message;
 }
 
@@ -121,7 +135,11 @@ function threadInstructions(thread) {
       ].join('\n')
     : '';
   const g = google.googleStatus();
+  const repo = thread.repo
+    ? `This thread's repo is ${thread.repo}${thread.repoBranch ? `; its work so far is on the branch \`${thread.repoBranch}\`` : ''}. Call \`open_repo\` before you read or change its code in this turn.`
+    : 'This thread has no repo yet.';
   return readPrompt('thread.md', {
+    repo,
     today: todayLine(),
     artifactsDir: store.artifactsDir(thread.id),
     mail: g.connected ? readPrompt('mail-connected.md', { email: g.email || 'his Gmail account' }) : readPrompt('mail-offline.md').trim(),
@@ -201,14 +219,69 @@ async function runTurn(threadId, prompt) {
     return `Started the thread "${copy.title}". It works by itself from here, and Florian finds it in his inbox when it is ready. Do not do that task in this thread.`;
   };
 
+  // Code. A thread on a project with a `repo:` line starts out with that repo; Claude
+  // opens it (or any other repo of Florian's) when the work needs the code. Opening it
+  // takes it for this turn: one thread at a time per repo.
+  const repoDir = () => {
+    const t = store.getThread(threadId);
+    return t?.repo && repos.holder(t.repo) === threadId ? repos.dirOf(t.repo) : null;
+  };
+  const repoTools = {
+    open: async (input) => {
+      const full = repos.repoName(input || store.getThread(threadId)?.repo);
+      if (!full) throw new Error(input ? `"${input}" is not a repo name. Give it as owner/name or just the name.` : 'Name the repo to open.');
+      const before = store.getThread(threadId);
+      if (before.repo && repos.holder(before.repo) === threadId && before.repo.toLowerCase() !== full.toLowerCase()) {
+        await repos.saveWork(threadId);
+        repos.release(before.repo, threadId);
+      }
+      const other = repos.holder(full);
+      if (other && other !== threadId) {
+        activity(`Waiting for ${full}: "${store.getThread(other)?.title || 'another thread'}" is working in it`);
+        const got = await Promise.race([repos.acquire(full, threadId), new Promise((r) => setTimeout(() => r(false), 20 * 60_000))]);
+        if (!got) throw new Error(`${full} is still in use by the thread "${store.getThread(repos.holder(full))?.title}". Tell Florian; he can come back to this when that thread is done.`);
+      } else await repos.acquire(full, threadId);
+      if (abort.signal.aborted) { repos.release(full, threadId); throw new Error('Stopped.'); }
+      activity(`Opening ${full}`);
+      try {
+        const { dir, branch, base } = await repos.openFor(threadId, full);
+        store.updateThread(threadId, { repoSet: true });
+        return { dir, branch, base, full };
+      } catch (err) {
+        repos.release(full, threadId);
+        throw err;
+      }
+    },
+    rename: async ({ repo, new_name: name }) => {
+      const to = await repos.rename(repo, name);
+      store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude renamed the GitHub repo ${repos.repoName(repo)} to ${to} on ${dateTimeDMY(Date.now())}. Notes in the vault that name the old repo need the new name.]` });
+      return to;
+    },
+    create: async ({ name, private: isPrivate, description }) => {
+      const full = await repos.create(name, { isPrivate, description });
+      store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude created the GitHub repo ${full} (${isPrivate === false ? 'public' : 'private'}) on ${dateTimeDMY(Date.now())}.]` });
+      return full;
+    },
+    describe: ({ repo, description }) => repos.describe(repo, description),
+    list: () => repos.list(),
+  };
+
   try {
     activity('Getting the vault up to date');
     await brain.refresh();
+    // The project's repo, once: after that the thread's own choice counts.
+    if (!thread.repoSet && thread.project) {
+      const r = repos.repoName(repoOf(thread.project));
+      store.updateThread(threadId, { repoSet: true, ...(r ? { repo: r } : {}) });
+    }
     activity('Starting');
 
     const base = {
       cwd: brain.brainDir(),
-      systemAppend: threadInstructions(thread),
+      systemAppend: threadInstructions(store.getThread(threadId)),
+      repoDir,
+      reposDir: config.reposDir,
+      repoTools,
       model: getState().model,
       effort: getState().effort,
       mode: 'thread',
@@ -242,6 +315,10 @@ async function runTurn(threadId, prompt) {
     if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
 
+    // The repo is saved and given back before the thread shows as ready, so nothing
+    // Florian does next (another repo, merging) meets a turn still holding it.
+    await repos.saveWork(threadId).catch(() => {});
+    repos.releaseAll(threadId);
     const fresh = store.getThread(threadId);
     const pending = fresh.pending || [];
     running.delete(threadId);
@@ -268,6 +345,9 @@ async function runTurn(threadId, prompt) {
       if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
     }
   } finally {
+    // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
+    await repos.saveWork(threadId).catch(() => {});
+    repos.releaseAll(threadId);
     running.delete(threadId);
     emitLive({ op: 'end' });
     // His own messages first; background work only into a slot it may have.

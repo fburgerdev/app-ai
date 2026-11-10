@@ -325,8 +325,8 @@ function renderRail() {
   els.inboxCount.classList.toggle('has-ready', n > 0);
   els.inboxCount.classList.toggle('is-working', busy > 0 && n > 0);
   els.openInbox.title = `${n} waiting${busy ? `, Claude is working on ${busy}` : ''}. Alt L, or move the pointer to the left edge.`;
-  document.title = n ? `(${n}) Brain` : 'Brain';
-  if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+  // No count in the title or on the taskbar icon: there is always something waiting.
+  document.title = 'Brain';
 }
 
 // On a phone, putting the cursor in the reply box brings up the keyboard over what you
@@ -721,7 +721,7 @@ function messageEl(threadId, m) {
       m.files?.length ? h('div', { class: 'msg-files' }, m.files.map((f) => h('a', {
         class: 'chip', href: `/api/threads/${threadId}/upload?name=${encodeURIComponent(f.name)}`, target: '_blank', rel: 'noopener', title: `Open ${f.name}`,
       }, h('span', { class: 'chip-name' }, f.name), h('span', { class: 'chip-size' }, fileSize(f.size))))) : null,
-      h('time', { class: 'msg-time' }, stamp(m.ts)),
+      h('time', { class: 'msg-time' }, stamp(m.ts), m.unanswered ? ' · sent and done, no answer' : ''),
     );
   }
   const body = h('div', { class: 'msg-body' });
@@ -833,6 +833,11 @@ function renderHead() {
   const files = t.kind === 'card' ? [] : S.view?.artifacts || [];
   if (files.length) {
     actions.unshift(h('button', { class: 'btn btn-quiet', type: 'button', onclick: toggleFiles }, `${files.length} ${files.length === 1 ? 'file' : 'files'} `, kbd('Alt A')));
+  }
+  if (t.kind !== 'card' && t.repo) {
+    const shortName = t.repo.split('/').pop();
+    actions.unshift(h('button', { class: `btn btn-quiet repo-btn${S.panel?.kind === 'repo' ? ' is-on' : ''}`, type: 'button', title: `This thread works in ${t.repo}${t.repoBranch ? ` on ${t.repoBranch}` : ''}`, onclick: toggleRepo },
+      h('span', { class: 'repo-glyph', 'aria-hidden': 'true' }, '⑂'), shortName, t.repoBranch ? h('span', { class: 'repo-dot', title: 'Has work on its branch' }) : null));
   }
   if (t.state !== 'working') actions.push(deleteButton(t));
   els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, actions), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
@@ -1140,7 +1145,7 @@ async function openPad() {
   area.setSelectionRange(area.value.length, area.value.length);
 }
 
-// `done` is "send and done": the thread closes by itself once Claude has answered.
+// `done` is "send and done": the message is kept, the thread closes, Claude does not answer.
 async function send(done = false) {
   const text = els.input.value.trim();
   if (S.pad) return;
@@ -1161,7 +1166,7 @@ async function send(done = false) {
     els.input.value = '';
     S.drafts.delete(from || 'new');
     S.attach.delete(from || 'new');
-    if (done) toast('Sent. The thread closes when Claude has answered.');
+    if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
     advance(from);
   } catch (err) {
     toast(err.message);
@@ -1284,6 +1289,7 @@ async function openPanel(panel) {
   if (panel.kind === 'artifact') return showArtifact(panel);
   if (panel.kind === 'note') return showNote(panel);
   if (panel.kind === 'run') return showRun(panel.run);
+  if (panel.kind === 'repo') return showRepo(panel);
   return showFiles();
 }
 
@@ -1293,6 +1299,136 @@ function toggleFiles() {
   if (!files.length) { toast('Claude has not made a file in this thread.'); return; }
   if (files.length === 1) openPanel({ kind: 'artifact', threadId: S.current, name: files[0].name });
   else openPanel({ kind: 'files' });
+}
+
+// ---------- the repo a thread works in ----------
+
+function toggleRepo() {
+  if (S.panel?.kind === 'repo') { closePanel(); renderHead(); return; }
+  openPanel({ kind: 'repo', threadId: S.current });
+  renderHead();
+}
+
+// A git diff, coloured by line.
+function renderGitDiff(text) {
+  const lines = text.split('\n').filter((l) => !/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|similarity|rename (from|to))/.test(l));
+  return h('pre', { class: 'git-diff' }, lines.map((l) => h('span', { class: l.startsWith('+') ? 'is-add' : l.startsWith('-') ? 'is-del' : l.startsWith('@@') ? 'is-hunk' : '' }, `${l}\n`)));
+}
+
+function armedButton(label, armedLabel, run) {
+  const button = h('button', { class: 'btn', type: 'button' }, label);
+  let armed = 0;
+  button.addEventListener('click', async () => {
+    if (!armed) {
+      button.textContent = armedLabel;
+      button.classList.add('btn-danger');
+      armed = setTimeout(() => { armed = 0; button.textContent = label; button.classList.remove('btn-danger'); }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    button.disabled = true;
+    button.textContent = 'One moment…';
+    try { await run(); } catch (err) { toast(err.message); button.disabled = false; button.textContent = label; button.classList.remove('btn-danger'); armed = 0; }
+  });
+  return button;
+}
+
+async function showRepo(panel) {
+  const { threadId } = panel;
+  const t = S.threads.get(threadId);
+  if (!t) return closePanel();
+  const body = h('div', { class: 'panel-body repo-panel' });
+  const repoTitle = t.repo || 'No repo';
+  if (!body.isConnected) panelFrame(repoTitle, [], body);
+
+  // Which repo: change it here, or let Claude open one when you ask in the thread.
+  const picker = h('input', { class: 'input repo-input', list: 'repo-list', placeholder: 'owner/name or just name', value: t.repo || '', spellcheck: 'false', 'aria-label': 'Repo' });
+  const list = h('datalist', { id: 'repo-list' });
+  api('GET', '/api/repos').then((r) => list.replaceChildren(...r.repos.map((n) => h('option', { value: n })))).catch(() => {});
+  const change = async () => {
+    const value = picker.value.trim();
+    if (value === (t.repo || '')) return;
+    try {
+      const out = await api('POST', `/api/threads/${threadId}/repo`, { repo: value });
+      S.threads.set(threadId, out.thread);
+      renderHead();
+      showRepo(panel);
+    } catch (err) { toast(err.message); picker.value = t.repo || ''; }
+  };
+  picker.addEventListener('change', change);
+  picker.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); picker.blur(); } });
+  body.append(h('div', { class: 'repo-pick' }, h('label', { class: 'panel-note' }, 'Works in'), picker, list));
+
+  if (!t.repo) {
+    body.append(h('p', { class: 'panel-note' }, 'Pick a repo, or just tell Claude in the thread which one to work in.'));
+    return;
+  }
+  let st;
+  try { st = (await api('GET', `/api/threads/${threadId}/repo`)).status; } catch (err) {
+    body.append(h('p', { class: 'panel-note is-error' }, err.message));
+    return;
+  }
+  if (S.panel !== panel) return;
+  const tools = [h('a', { class: 'btn btn-quiet', href: st.url, target: '_blank', rel: 'noopener' }, 'GitHub')];
+  panelFrame(st.repo, tools, body);
+
+  if (st.holder) body.append(h('p', { class: 'panel-note repo-busy' }, `“${st.holder}” is working in this repo right now. This thread waits for it before Claude touches the repo.`));
+  if (!st.cloned || !st.branch) {
+    body.append(h('p', { class: 'panel-note' }, st.merged ? 'Merged into ' + st.main + '. The next change Claude makes starts a fresh branch.'
+      : !st.cloned ? 'Not on the app’s machine yet. It is cloned the moment Claude opens it.'
+        : 'Claude has not changed anything here yet. The first change starts a branch of its own for this thread.'));
+    return;
+  }
+
+  body.append(h('p', { class: 'repo-branch' }, h('code', {}, st.branch), ` → ${st.main}`,
+    h('span', { class: 'panel-note' }, ` · ${st.ahead} ${st.ahead === 1 ? 'commit' : 'commits'}${st.uncommitted ? ', plus changes not yet committed' : ''} · ${st.pushed ? 'pushed' : 'only here, not on GitHub'}`)));
+
+  // The buttons: nothing leaves the machine without them.
+  const busy = t.state === 'working' || Boolean(st.holder);
+  const actions = h('div', { class: 'repo-actions' });
+  if (busy) actions.append(h('p', { class: 'panel-note' }, 'Buttons come back when Claude’s turn ends.'));
+  else if (st.ahead || st.uncommitted) {
+    actions.append(
+      h('button', { class: 'btn', type: 'button', onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try { const out = await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed.'); window.open(out.compare, '_blank', 'noopener'); showRepo(panel); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+      } }, st.pushed ? 'Open pull request' : 'Push and open pull request'),
+      armedButton(`Merge into ${st.main}`, `Merge into ${st.main} and push`, async () => {
+        await api('POST', `/api/threads/${threadId}/repo/merge`, {});
+        toast(`Merged into ${st.main}.`);
+        showRepo(panel);
+      }),
+    );
+    if (!st.pushed && st.ahead) actions.append(h('button', { class: 'btn btn-quiet', type: 'button', onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try { await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed the branch.'); showRepo(panel); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+    } }, 'Only push'));
+  }
+  body.append(actions);
+
+  if (st.commits.length) {
+    body.append(h('h3', { class: 'repo-h' }, 'Commits'), h('ul', { class: 'repo-commits' }, st.commits.map((c) => {
+      const [hash, ...rest] = c.split(' ');
+      return h('li', {}, h('code', {}, hash), ' ', rest.join(' '));
+    })));
+  }
+  if (st.files.length) {
+    body.append(h('h3', { class: 'repo-h' }, `Changed files (${st.files.length})`));
+    const word = { A: 'new', M: 'changed', D: 'deleted', R: 'moved' };
+    for (const f of st.files) {
+      const box = h('div', { class: 'repo-diff' });
+      const row = h('details', { class: 'repo-file', ontoggle: async (e) => {
+        if (!e.currentTarget.open || box.childElementCount) return;
+        box.append(h('p', { class: 'panel-note' }, 'Loading…'));
+        try {
+          const text = await (await fetch(`/api/threads/${threadId}/repo/diff?file=${encodeURIComponent(f.name)}`)).text();
+          box.replaceChildren(text.trim() ? renderGitDiff(text) : h('p', { class: 'panel-note' }, 'No text changes to show.'));
+        } catch (err) { box.replaceChildren(h('p', { class: 'panel-note is-error' }, err.message)); }
+      } },
+      h('summary', {}, h('span', { class: `change change-${f.status}` }, word[f.status] || f.status), h('span', { class: 'repo-file-name' }, f.name)), box);
+      body.append(row);
+    }
+  }
 }
 
 function showFiles() {
@@ -1491,7 +1627,24 @@ async function fillConnections(body, token) {
       : `You are reaching it at ${location.host}.`)));
 }
 
+function sleepFields() {
+  const sl = S.settings.sleep || { on: true, from: '00:00', to: '08:00' };
+  const save = (patch) => {
+    S.settings = { ...S.settings, sleep: { ...sl, ...patch } };
+    api('PUT', '/api/settings', { sleep: patch }).catch((e) => toast(e.message));
+    checkSleep();
+  };
+  const time = (key) => h('input', { class: 'sleep-time', type: 'time', value: sl[key], 'aria-label': key === 'from' ? 'Sleep from' : 'Sleep until', onchange: (e) => { if (e.target.value) save({ [key]: e.target.value }); } });
+  const on = h('input', { type: 'checkbox', checked: sl.on, onchange: (e) => save({ on: e.target.checked }) });
+  return [
+    h('h3', { class: 'window-head' }, 'Sleep time'),
+    h('p', { class: 'panel-note' }, 'In this time the app shows a go-to-sleep screen instead of the queue. You can get past it, but it comes back every time you open the app again.'),
+    h('div', { class: 'sleep-fields' }, h('label', { class: 'check' }, on, ' On'), ' from ', time('from'), ' to ', time('to')),
+  ];
+}
+
 async function fillQueue(body, token) {
+  body.append(...sleepFields());
   const state = h('span', { class: 'status' });
   body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
     h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));
@@ -1511,7 +1664,7 @@ async function fillQueue(body, token) {
 function fillKeys(body) {
   const rows = [
     ['Enter', 'Send, then open what the queue puts next'],
-    ['Ctrl Enter', 'Send and done: the thread closes by itself once Claude has answered'],
+    ['Ctrl Enter', 'Send and done: the message is kept for the brain update and the thread closes, with no answer from Claude'],
     ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
     ['Shift Enter', 'New line'],
     ['Alt N', 'New thread'],
@@ -1530,6 +1683,64 @@ function fillKeys(body) {
     h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])),
     h('p', { class: 'panel-note' }, 'Select any text in a reply, a file or a vault note to quote it in your reply. Drag a thread to reorder the inbox, onto Done to close it, or onto a folder to file it.'));
 }
+
+// ---------- sleep time ----------
+//
+// Between the sleep hours the app covers itself with a go-to-sleep screen. Getting past it
+// lasts only as long as this window stays open: opening the app again, or coming back to it
+// after a while away, brings the screen back.
+
+const minutesOf = (hhmm) => { const [a, b] = hhmm.split(':').map(Number); return a * 60 + b; };
+let sleepPassed = 0; // until when the screen was waved away
+let hiddenSince = 0;
+
+function sleepWindow(now = new Date()) {
+  const sl = S.settings?.sleep;
+  if (!sl?.on) return null;
+  const from = minutesOf(sl.from);
+  const to = minutesOf(sl.to);
+  const m = now.getHours() * 60 + now.getMinutes();
+  const inside = from < to ? m >= from && m < to : from > to ? m >= from || m < to : false;
+  if (!inside) return null;
+  const end = new Date(now);
+  end.setHours(Math.floor(to / 60), to % 60, 0, 0);
+  if (end <= now) end.setDate(end.getDate() + 1);
+  return { until: sl.to, end: end.getTime() };
+}
+
+const sleepScreen = h('div', { class: 'sleep', hidden: true, role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Time to sleep' });
+document.body.append(sleepScreen);
+
+function checkSleep() {
+  const w = sleepWindow();
+  const show = Boolean(w) && Date.now() >= sleepPassed;
+  if (!show) {
+    if (!sleepScreen.hidden) { sleepScreen.hidden = true; document.body.classList.remove('is-asleep'); }
+    return;
+  }
+  const now = new Date();
+  sleepScreen.replaceChildren(h('div', { class: 'sleep-inner' },
+    h('div', { class: 'sleep-moon', 'aria-hidden': 'true' }),
+    h('h1', { class: 'sleep-title' }, 'Time to sleep.'),
+    h('p', { class: 'sleep-text' }, `It is ${clock(now.getTime())}. Everything here is still here at ${w.until}, and the queue keeps until then.`),
+    h('button', { class: 'btn btn-quiet sleep-pass', type: 'button', onclick: () => { sleepPassed = w.end; checkSleep(); } }, 'Let me in anyway'),
+  ));
+  if (sleepScreen.hidden) {
+    sleepScreen.hidden = false;
+    document.body.classList.add('is-asleep');
+    closePickers();
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  }
+}
+
+setInterval(checkSleep, 30 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenSince = Date.now(); return; }
+  // Away for a while counts as opening the app again.
+  if (hiddenSince && Date.now() - hiddenSince > 10 * 60 * 1000) sleepPassed = 0;
+  hiddenSince = 0;
+  checkSleep();
+});
 
 // ---------- pickers: model and effort ----------
 
@@ -1677,6 +1888,7 @@ document.addEventListener('click', (e) => {
 let lastKeyAt = 0;
 
 window.addEventListener('keydown', (e) => {
+  if (!sleepScreen.hidden) { if (!e.target.closest?.('.sleep')) e.preventDefault(); return; }
   if (e.key === 'Escape') {
     if (!els.quote.hidden) { hideQuote(); return; }
     if (els.settings.open) return; // the window closes itself
@@ -1773,10 +1985,11 @@ function onThread(t) {
   renderRail();
   renderComposer();
   if (t.id === S.current && !S.pad) {
-    if (!before || before.state !== t.state || before.title !== t.title || before.archived !== t.archived || before.project !== t.project) {
+    if (!before || before.state !== t.state || before.title !== t.title || before.archived !== t.archived || before.project !== t.project || before.repo !== t.repo || before.repoBranch !== t.repoBranch) {
       const editing = document.activeElement?.classList.contains('thread-title');
       if (!editing) renderHead();
     }
+    if (S.panel?.kind === 'repo' && S.panel.threadId === t.id && before && (before.state !== t.state || before.repo !== t.repo || before.repoBranch !== t.repoBranch)) showRepo(S.panel);
     if (t.kind !== 'card') {
       if (t.state === 'working' && !S.live) { S.live = []; scheduleLive(); }
       if (t.state === 'working' && S.live && !S.live.length) scheduleLive();
@@ -1851,7 +2064,7 @@ function connect() {
   on('live', onLive);
   on('artifacts', onArtifacts);
   on('brain', setBrain);
-  on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); });
+  on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); checkSleep(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
@@ -1887,6 +2100,8 @@ async function load() {
   S.config = state.config;
   S.connections = state.connections;
   S.settings = state.settings;
+  checkSleep();
+  navigator.clearAppBadge?.().catch(() => {}); // the old count, from before it was taken off
   S.queue = state.queue;
   S.cards = state.cards;
   S.brain = state.brain;

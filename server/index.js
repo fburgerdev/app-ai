@@ -16,6 +16,7 @@ import * as queue from './queue.js';
 import * as cards from './cards.js';
 import * as projects from './projects.js';
 import * as checkins from './checkins.js';
+import * as repos from './repos.js';
 import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import { parseMail } from './mail.js';
@@ -29,6 +30,7 @@ const wantsOpen = process.argv.includes('--open');
 const url = `http://localhost:${config.port}`;
 
 brain.initBrain(config);
+repos.initRepos(config);
 runner.initRunner(config);
 extraction.initExtraction(config);
 google.initGoogle(config);
@@ -134,10 +136,10 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-// The mood line, the model and the effort. Saved as you change them; nothing is sent.
+// The mood line, the model, the effort and the sleep time. Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort } = req.body || {};
-  res.json(setState({ mood, model, effort }));
+  const { mood, model, effort, sleep } = req.body || {};
+  res.json(setState({ mood, model, effort, sleep }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.
@@ -293,7 +295,10 @@ app.post('/api/threads', (req, res) => {
   const waitingFiles = pendingFiles(req.body.files);
   if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
   const project = String(req.body.project || '');
-  const thread = store.createThread({ title: runner.titleFrom(text || 'Attached files'), project: projects.isKnownProject(project) ? project : '' });
+  const known = projects.isKnownProject(project) ? project : '';
+  const thread = store.createThread({ title: runner.titleFrom(text || 'Attached files'), project: known });
+  const pick = req.body.repo !== undefined ? repos.repoName(req.body.repo) : repos.repoName(projects.repoOf(known));
+  if (pick || req.body.repo !== undefined) store.updateThread(thread.id, { repo: pick || '', repoSet: true });
   runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true });
   cards.maybeMakeCards();
   res.json({ thread: store.getThread(thread.id) });
@@ -318,7 +323,7 @@ app.post('/api/threads/:id/messages', (req, res) => {
   if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card takes no reply. Edit its text, then accept or decline.' });
   if (thread.state === 'done') store.updateThread(thread.id, { state: 'ready' });
-  // "Send and done": the thread closes by itself once Claude has answered.
+  // "Send and done": the message is kept and the thread closes, with no answer.
   const done = req.body.done === true;
   queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
   const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done });
@@ -387,7 +392,9 @@ app.post('/api/threads/:id/project', (req, res) => {
   if (!thread) return;
   const project = String(req.body.project || '');
   if (project && !projects.isKnownProject(project)) return res.status(400).json({ error: 'That project is not in the vault\'s Projects Index.' });
-  res.json({ thread: store.updateThread(thread.id, { project }) });
+  // Filed under a project with a repo, a thread without one takes the project's.
+  const repo = !thread.repo ? repos.repoName(projects.repoOf(project)) : null;
+  res.json({ thread: store.updateThread(thread.id, { project, ...(repo ? { repo, repoSet: true } : {}) }) });
 });
 
 app.post('/api/threads/:id/title', (req, res) => {
@@ -398,12 +405,66 @@ app.post('/api/threads/:id/title', (req, res) => {
   res.json({ thread: store.updateThread(thread.id, { title }) });
 });
 
+// ---------- code: the repo a thread works in ----------
+
+app.get('/api/repos', async (req, res) => {
+  try { res.json({ repos: await repos.list() }); } catch (err) { res.status(502).json({ error: err.message }); }
+});
+
+app.get('/api/threads/:id/repo', async (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try { res.json({ status: await repos.status(thread.id) }); } catch (err) { res.status(502).json({ error: err.message }); }
+});
+
+// Florian picks the repo for a thread (or none). Claude opens it when the work needs it.
+app.post('/api/threads/:id/repo', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const raw = String(req.body.repo || '').trim();
+  const full = raw ? repos.repoName(raw) : '';
+  if (raw && !full) return res.status(400).json({ error: `"${raw}" is not a repo name. Use owner/name or just the name.` });
+  if (thread.state === 'working') return res.status(409).json({ error: 'Claude is working in this thread. Change the repo when it is done.' });
+  const same = full && thread.repo && full.toLowerCase() === thread.repo.toLowerCase();
+  res.json({ thread: store.updateThread(thread.id, { repo: full, repoSet: true, ...(same ? {} : { repoBranch: '', repoMain: '' }) }) });
+});
+
+app.get('/api/threads/:id/repo/diff', async (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  res.type('text/plain').send(await repos.fileDiff(thread.id, String(req.query.file || '')).catch((err) => `Could not read the change: ${err.message}`));
+});
+
+const repoEvent = (thread, text) => store.appendMessage(thread.id, { role: 'user', event: true, text: `[${text}]` });
+
+app.post('/api/threads/:id/repo/push', async (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try {
+    const compare = await repos.push(thread.id);
+    repoEvent(thread, `Florian pushed the branch ${thread.repoBranch} of ${thread.repo} to GitHub on ${dateTimeDMY(Date.now())}.`);
+    res.json({ compare, status: await repos.status(thread.id) });
+  } catch (err) { res.status(502).json({ error: err.message }); }
+});
+
+app.post('/api/threads/:id/repo/merge', async (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const branch = thread.repoBranch;
+  try {
+    const { base } = await repos.merge(thread.id);
+    repoEvent(thread, `Florian merged the branch ${branch} into ${base} of ${thread.repo} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.`);
+    res.json({ status: await repos.status(thread.id) });
+  } catch (err) { res.status(409).json({ error: err.message }); }
+});
+
 // Deletes a thread for good. For chats that were a test, random, or nothing for the brain.
 app.delete('/api/threads/:id', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   if (thread.state === 'working') runner.stopTurn(thread.id);
   log(`thread deleted: "${thread.title}"`);
+  repos.releaseAll(thread.id);
   store.deleteThread(thread.id);
   datasync.saveNow('thread deleted').catch(() => {});
   res.json({ deleted: true });

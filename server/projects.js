@@ -107,6 +107,17 @@ export function projectContext(name) {
   return out;
 }
 
+// The GitHub repo a project or area note names on its optional `repo:` line, or ''.
+export function repoOf(name) {
+  if (!name) return '';
+  const f = brain.resolveWikilink(name);
+  if (!f) return '';
+  try {
+    const line = /^repo:\s*`?([^`\s,]+)`?/im.exec(fs.readFileSync(f.full, 'utf8').slice(0, 3000));
+    return line ? line[1].replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/, '') : '';
+  } catch { return ''; }
+}
+
 export function isKnownProject(name) {
   const file = brain.readVaultFile(INDEX);
   if (!file) return false;

@@ -331,7 +331,7 @@ test('update brain archives closed threads that are entirely in the brain, with 
   assert.equal((await thread(quiet.id)).thread.archived, false);
 });
 
-test('send and done closes the thread once Claude has answered; files can be attached; Claude spins off on request', async () => {
+test('send and done keeps the message and closes the thread without an answer; files can be attached; Claude spins off on request', async () => {
   // Attach a file to a new thread.
   const up = await call('POST', '/api/uploads', { name: '../../notes on the meeting.txt', data: Buffer.from('The board meets on the 14th.').toString('base64') });
   assert.equal(up.status, 200);
@@ -352,12 +352,24 @@ test('send and done closes the thread once Claude has answered; files can be att
   const second = await ready(made.id);
   assert.equal(second.messages.at(-2).files[0].name, 'notes on the meeting (2).txt');
 
-  // Send and done: no stop in the inbox on the way.
+  // Send and done: kept for the record and closed, with no turn and so no usage.
   const sent = await call('POST', `/api/threads/${made.id}/messages`, { text: 'Thanks, file that and we are finished here', done: true });
-  assert.equal(sent.data.thread.state, 'working');
-  const closed = await until(async () => { const t = await thread(made.id); return t.thread.state === 'done' ? t : null; }, 'closed by itself');
-  assert.equal(closed.messages.at(-1).role, 'assistant', 'with Claude\'s answer in it');
-  assert.equal(closed.thread.doneAfter, false);
+  assert.equal(sent.data.thread.state, 'done');
+  await sleep(300);
+  const closed = await thread(made.id);
+  assert.equal(closed.thread.state, 'done');
+  assert.equal(closed.messages.at(-1).role, 'user', 'Claude did not answer');
+  assert.equal(closed.messages.at(-1).unanswered, true);
+  assert.equal(closed.thread.unsent.length, 1);
+  // Reopened with a reply, Claude gets both.
+  const answers = closed.messages.filter((m) => m.role === 'assistant').length;
+  await call('POST', `/api/threads/${made.id}/messages`, { text: 'One more thing after all' });
+  const reopened = await until(async () => { const t = await thread(made.id); return t.thread.state === 'ready' && t.messages.at(-1).role === 'assistant' ? t : null; }, 'answered');
+  assert.equal(reopened.messages.filter((m) => m.role === 'assistant').length, answers + 1, 'one answer, for both messages');
+  assert.deepEqual(reopened.thread.unsent, []);
+  // A new thread with send and done: no turn either.
+  const noted = (await call('POST', '/api/threads', { text: 'Just for the record: the Mensa board meets on Thursday', done: true })).data.thread;
+  assert.equal(noted.state, 'done');
 
   // Asked in the message, Claude spins off a thread of its own and carries on here.
   const before = (await state()).threads.length;

@@ -29,6 +29,7 @@ const IGNORE = [
   '/extractions/*/transcripts/',
   '/cards/runs/',
   '/uploads-pending/',
+  '/repos/',
   '',
 ].join('\n');
 

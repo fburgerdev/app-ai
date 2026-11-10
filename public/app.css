@@ -1206,3 +1206,53 @@ a.chip:hover { border-color: var(--muted); }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
+
+/* ---------- the repo a thread works in ---------- */
+.repo-btn { display: inline-flex; align-items: center; gap: 6px; }
+.repo-glyph { color: var(--muted); font-size: 14px; }
+.repo-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--you); }
+.repo-pick { display: flex; align-items: center; gap: 10px; }
+.repo-input {
+  flex: 1; min-width: 0;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 7px;
+  padding: 6px 9px; font: 13px var(--mono); color: inherit;
+}
+.repo-input:focus { outline: none; border-color: var(--you); }
+.repo-busy { color: var(--work); }
+.repo-branch { margin: 0; }
+.repo-branch code, .repo-commits code { font: 12.5px var(--mono); background: var(--raised); padding: 1px 5px; border-radius: 5px; }
+.repo-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.repo-h { margin: 8px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: none; }
+.repo-commits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.repo-file summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; padding: 3px 0; list-style: none; }
+.repo-file summary::-webkit-details-marker { display: none; }
+.repo-file[open] summary .repo-file-name { color: var(--text); }
+.repo-file-name { font: 13px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.repo-file summary:hover .repo-file-name { color: var(--text); }
+.git-diff { margin: 6px 0 10px; padding: 10px 12px; background: var(--raised); border-radius: 8px; font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.git-diff .is-add { color: var(--done); background: rgba(120, 220, 160, 0.07); }
+.git-diff .is-del { color: var(--bad); background: rgba(255, 143, 143, 0.07); }
+.git-diff .is-hunk { color: var(--muted); }
+
+/* ---------- sleep time ---------- */
+.sleep {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center;
+  background: radial-gradient(ellipse at 50% 35%, #1c2036 0%, #0d0f1a 70%);
+  animation: sleep-in 0.6s ease;
+}
+.sleep[hidden] { display: none; }
+@keyframes sleep-in { from { opacity: 0; } }
+.sleep-inner { max-width: 380px; padding: 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.sleep-moon {
+  width: 64px; height: 64px; border-radius: 50%;
+  box-shadow: inset -14px 8px 0 0 #e9dcb4; transform: rotate(-20deg);
+  margin-bottom: 10px; filter: drop-shadow(0 0 18px rgba(233, 220, 180, 0.25));
+}
+.sleep-title { margin: 0; font-size: 26px; font-weight: 600; color: var(--text); }
+.sleep-text { margin: 0; color: var(--muted); line-height: 1.55; }
+.sleep-pass { margin-top: 18px; opacity: 0.55; font-size: 13px; }
+.sleep-pass:hover, .sleep-pass:focus-visible { opacity: 1; }
+.sleep-fields { display: flex; align-items: center; gap: 8px; color: var(--muted); margin-bottom: 18px; }
+.sleep-time { background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; color: var(--text); font: inherit; color-scheme: dark; }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }

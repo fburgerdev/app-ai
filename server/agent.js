@@ -3,7 +3,8 @@
 // lands in this one file.
 //
 // Permissions are decided here, in code, not by asking: nobody is sitting at a prompt.
-//   thread   reads the vault, searches the web, writes only into its artifacts folder
+//   thread   reads the vault, searches the web, writes only into its artifacts folder; once
+//            it has opened a repo, also writes and runs commands in that repo
 //   extract  the brain update: reads and writes the vault, no web, no git history
 //   plain    no tools at all (used to turn a reply into something to listen to)
 //   lookup   like plain, but it may search and read the web (the voice host's harder questions)
@@ -19,6 +20,15 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'K
 const NEVER = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'CronCreate', 'CronDelete', 'CronList'];
 const GIT_HISTORY = /\bgit\b[^|;&\n]*\b(commit|push|pull|fetch|reset|rebase|checkout|switch|restore|clean|stash|merge|branch|remote|config)\b/;
 
+// In a repo, Claude commits on its own branch; pushing, switching branches and throwing
+// work away are the app's and Florian's.
+const REPO_FORBIDDEN = [
+  [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push: Florian pushes and merges with the buttons in the thread.'],
+  [/\bgit\b[^|;&\n]*\b(switch|worktree)\b|\bgit\b[^|;&\n]*\bcheckout\b(?![^|;&\n]*\s--\s)/, 'Stay on this thread\'s branch: the app manages branches. To undo changes to a file use "git restore <file>".'],
+  [/\bgit\b[^|;&\n]*\b(reset\s+--hard|branch\s+-[dD]|remote|filter-branch|clean\s+-[a-z]*f)/, 'That git command can lose work or change the repo\'s setup; the app does not allow it.'],
+  [/\bgh\b[^|;&\n]*\b(repo\s+(delete|rename|archive)|pr\s+(merge|create))/, 'Use the app\'s GitHub tools; deleting a repo is not possible at all.'],
+];
+
 function isInside(file, root) {
   const rel = path.relative(path.resolve(root), path.resolve(file));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -33,8 +43,8 @@ function deny(message) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, google = false }) {
-  const readable = [cwd, artifactsDir, ...readDirs].filter(Boolean);
+export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, google = false, repoDir = () => null, reposDir = '' }) {
+  const readable = [cwd, artifactsDir, ...readDirs, reposDir].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
     return p ? path.resolve(cwd, String(p)) : null;
@@ -46,6 +56,12 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
       if (!file) return deny('No file path given.');
       if (mode === 'thread') {
         if (isInside(file, artifactsDir)) return allow(input);
+        const repo = repoDir();
+        if (repo && isInside(file, repo)) {
+          if (isInside(file, path.join(repo, '.git'))) return deny('The .git folder is the app\'s to manage.');
+          return allow(input);
+        }
+        if (reposDir && isInside(file, reposDir)) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed.');
         return deny(
           `Threads in this app cannot write there. Write files only into the artifacts folder: ${artifactsDir}. ` +
           'The vault is written by the brain update, which Florian starts himself.',
@@ -73,7 +89,13 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
 
     if (SHELL_TOOLS.has(toolName)) {
       if (mode === 'thread') {
-        return shell ? allow(input) : deny('Shell commands are turned off for threads in this app.');
+        const repo = repoDir();
+        if (repo) {
+          const command = String(input.command || '');
+          for (const [pattern, why] of REPO_FORBIDDEN) if (pattern.test(command)) return deny(why);
+          return allow(input);
+        }
+        return shell ? allow(input) : deny('Shell commands work only in a repo: call open_repo first. Otherwise they are turned off for threads in this app.');
       }
       const command = String(input.command || '');
       if (GIT_HISTORY.test(command)) {
@@ -97,7 +119,10 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
 }
 
 // The app's own tools for a thread. `spinOff` starts a new thread from this one.
-async function buildAppServer({ spinOff }) {
+const ok = (text) => ({ content: [{ type: 'text', text }] });
+const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
+
+async function buildAppServer({ spinOff, repoTools }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -105,6 +130,28 @@ async function buildAppServer({ spinOff }) {
     version: '1.0.0',
     instructions: 'Tools of Florian\'s inbox app itself.',
     tools: [
+      ...(repoTools ? [
+        tool('open_repo', 'Open one of Florian\'s GitHub repos to work in it during this turn: the app clones or updates it and puts this thread on its own branch. Call it before reading or changing the code, in every turn that needs the code. Only one thread can hold a repo at a time; if another thread holds it, this waits until that thread\'s turn ends. Returns the folder to work in.',
+          { repo: z.string().optional().describe('owner/name or just the name (owner fburgerdev); leave out for this thread\'s own repo') },
+          async ({ repo }) => {
+            try {
+              const r = await repoTools.open(repo);
+              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push or switch branches: Florian pushes, opens a pull request or merges with buttons in the thread. Whatever you leave uncommitted is committed for you when the turn ends.`);
+            } catch (err) { return fail(err); }
+          }),
+        tool('list_repos', 'List Florian\'s GitHub repos.', {}, async () => {
+          try { return ok((await repoTools.list()).join('\n') || 'No repos found.'); } catch (err) { return fail(err); }
+        }),
+        tool('github_rename_repo', 'Rename one of Florian\'s GitHub repos. Only when Florian asks for it. GitHub forwards the old address; the app moves its own copy and the threads that use it.',
+          { repo: z.string().describe('owner/name or name'), new_name: z.string().describe('the new name, without the owner') },
+          async (args) => { try { return ok(`Renamed to ${await repoTools.rename(args)}.`); } catch (err) { return fail(err); } }),
+        tool('github_create_repo', 'Create a new GitHub repo for Florian. Only when he asks for it. Private unless he says otherwise.',
+          { name: z.string(), private: z.boolean().optional(), description: z.string().optional() },
+          async (args) => { try { return ok(`Created ${await repoTools.create(args)}. Open it with open_repo to work in it.`); } catch (err) { return fail(err); } }),
+        tool('github_describe_repo', 'Set the description of one of Florian\'s GitHub repos.',
+          { repo: z.string(), description: z.string() },
+          async (args) => { try { return ok(`Description of ${await repoTools.describe(args)} set.`); } catch (err) { return fail(err); } }),
+      ] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -141,6 +188,11 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'PowerShell': return `Ran ${clip(input.command, 80)}`;
     case 'Agent':
     case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
+    case 'mcp__app__open_repo': return `Opened the repo ${input.repo || ''}`.trim();
+    case 'mcp__app__list_repos': return 'Listed the repos';
+    case 'mcp__app__github_rename_repo': return `Renamed the repo ${input.repo} to ${input.new_name}`;
+    case 'mcp__app__github_create_repo': return `Created the repo ${input.name}`;
+    case 'mcp__app__github_describe_repo': return `Described the repo ${input.repo}`;
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
@@ -186,8 +238,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers: givenServers, spinOff }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -221,7 +273,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, google }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, google, repoDir, reposDir }),
     additionalDirectories: [artifactsDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
@@ -298,7 +350,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent, spinOff }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent, spinOff, repoTools }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -431,6 +483,18 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   let text = '';
   // "…spin off a new task about X": the stand-in does it, as the real Claude would with its tool.
   const newest = userPrompt.split('The new message:').pop();
+  // "REPO-TEST" or "REPO-TEST=name": open the repo and change a file in it, as the real Claude would.
+  const repoAsk = repoTools && /REPO-TEST(?:=([\w./-]+))?/.exec(newest);
+  if (repoAsk) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__open_repo', summary: `Opened the repo ${repoAsk[1] || ''}`.trim() });
+    try {
+      const r = await repoTools.open(repoAsk[1]);
+      fs.writeFileSync(path.join(r.dir, 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
+      if (/REPO-SLOW/.test(newest)) await new Promise((res) => setTimeout(res, 1500));
+    } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
+  }
+  const renameAsk = repoTools && /RENAME-TEST ([\w./-]+) ([\w.-]+)/.exec(newest);
+  if (renameAsk) await repoTools.rename({ repo: renameAsk[1], new_name: renameAsk[2] }).catch((err) => onEvent?.({ type: 'activity', text: err.message }));
   const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
   if (wanted) {
     onEvent?.({ type: 'tool', name: 'mcp__app__spin_off', summary: `Spun off a thread: ${wanted[1].trim()}` });

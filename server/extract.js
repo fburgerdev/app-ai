@@ -94,6 +94,8 @@ export function extractionStatus() {
 function speaker(m) {
   if (m.role !== 'user') return 'Claude';
   if (m.auto) return 'The app (automatic, not Florian)';
+  // "Send and done": said for the record, Claude did not answer it.
+  if (m.unanswered) return 'Florian (for the record; closed without an answer)';
   return 'Florian';
 }
 

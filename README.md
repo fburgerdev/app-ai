@@ -49,7 +49,7 @@ The order is worked out in the background, so moving on never waits for a model.
 
 **Requeue** (Alt+S) means "not now": the thread goes to the back for 20 minutes and you get the next one.
 
-**Send and done** (Ctrl+Enter), next to Send: your message goes out and the thread closes by itself once Claude has answered, without stopping in the inbox. If the turn fails or you stop it, the thread comes back to the inbox instead.
+**Send and done** (Ctrl+Enter), next to Send: your message is kept in the thread and the thread closes, and Claude does not answer it, so it costs no usage. It is for things you only want on record: the next brain update reads them like any other message. If you reopen the thread later, Claude gets those messages together with your next one. Sent while Claude is still working, the thread closes when that turn ends.
 
 **Attach files** with the paperclip, by dropping them on the thread, or by pasting. They upload at once and go out with your next message; Claude reads them (text, images, PDFs; up to 25 MB each). They live in the thread, not in the vault.
 
@@ -146,6 +146,23 @@ The outline on the right is an overview of projects and areas, read from the vau
 - Hover a row for **+**: a new thread on that project or area, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
 - Next to the headings: **+ active** and **+ paused** start one thread on every active or paused project. **+ project ideas** starts one per area about which project to start there. Each asks once more, and skips what already has an open thread.
 - When the window is too narrow for the outline (and on the phone), it is the **Folders** tab in the inbox.
+
+## Repos
+
+Any thread can work in any of your GitHub repos: from the project's `repo:` line, by naming it
+in the thread, or by picking it in the repo panel (the repo button in the thread header). The
+repo is cloned the moment Claude opens it; one thread works in a repo at a time, the others
+wait; every thread gets a branch of its own. Claude commits but never pushes: the panel's
+**Push and open pull request**, **Only push** and **Merge into main** are yours. Claude can
+rename and create repos when you ask. Detail, and the token for renaming, in
+[docs/repos.md](docs/repos.md).
+
+## Sleep time
+
+From 00:00 to 08:00 the app shows a go-to-sleep screen instead of the queue. **Let me in anyway**
+gets you past it, but only for as long as the window stays open: opening the app again, or
+coming back after more than ten minutes away, shows it again. Change the hours or turn it off in
+Settings → Queue.
 
 ## Scratchpad
 

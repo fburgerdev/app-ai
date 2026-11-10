@@ -64,6 +64,12 @@ const DEFAULTS = {
   dataBranch: 'main',
   dataSyncMinutes: 5,
 
+  // Git repos threads work in: cloned on demand into the data folder (repos/), from here.
+  reposDir: '',
+  repoBase: 'https://github.com',
+  // GitHub's API, for renaming and creating repos. Empty token: the one git uses on this machine.
+  github: { owner: 'fburgerdev', token: '' },
+
   // Recording what gets read from the vault (reads.jsonl). Off for now.
   readLog: false,
 
@@ -141,12 +147,13 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
   if (process.env.APP_AI_BRAIN_REPO) config.brainRepo = process.env.APP_AI_BRAIN_REPO;
   if (process.env.APP_AI_DATA_REPO !== undefined) config.dataRepo = process.env.APP_AI_DATA_REPO;
+  if (process.env.APP_AI_REPO_BASE) config.repoBase = process.env.APP_AI_REPO_BASE;
   if (!config.brainDir) config.brainDir = path.join(DATA_DIR, 'brain');
   config.brainDir = path.resolve(config.brainDir);
   config.fake = process.env.APP_AI_FAKE === '1';
