@@ -38,6 +38,8 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 | Alt+U | Update the brain from all threads |
 | Esc | Close the side panel |
 
+Opening and closing things is animated; with "reduce motion" switched on in Windows, it is not.
+
 A thread is in one of three states: **waiting for you** (Claude has finished), **Claude is working**, or **done**. When nothing is waiting, the app shows the new-thread screen, and the first thread to finish opens by itself unless you are typing.
 
 A message sent while Claude is still working is handed over as soon as that turn ends.
@@ -71,6 +73,22 @@ If a push fails because you are offline, the commit stays in the clone and goes 
 
 The prompts are in `prompts/`: `thread.md` (what every thread is told about the app) and `extract.md` (the brain update). They point at the vault's rules rather than repeating them.
 
+## Gmail and Calendar
+
+Once connected, threads can search and read your mail, save and update Gmail drafts, read your calendar and add entries. They cannot send mail or invite anyone. Setting it up needs your own Google Cloud project, about ten minutes, once: [docs/google.md](docs/google.md). The state is under **Connections**, bottom left.
+
+## Calling the inbox
+
+With a Twilio number, you can call the app: it reads you the waiting threads and takes your replies by voice or keypad. Off until you set it up: [docs/calling.md](docs/calling.md).
+
+## On a Raspberry Pi
+
+By default the app runs on the laptop and only this computer can reach it. To have threads keep working with the laptop closed, and to reach the inbox from the phone, run it on a Pi: [docs/pi.md](docs/pi.md).
+
+## The read log
+
+Every read from the vault is recorded in `reads.jsonl` in the data folder: which file, which lines when Claude read only part of it, which search, by which thread. Rules loaded into a thread and notes you open beside the chat are marked as such. Nothing acts on the log; it is there to learn from later. `npm run reads` prints the files by how often Claude opened them (`npm run reads -- 14` for the last 14 days).
+
 ## Where things are
 
 App data is outside the vault, because the vault folder on the laptop is reset to GitHub every minute:
@@ -81,7 +99,7 @@ App data is outside the vault, because the vault folder on the laptop is reset t
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-Inside: `config.json`, `brain/` (the clone), `threads/<id>/` (state, messages, files and their versions), `extractions/<time>/` (what each brain update was given and what it did), `log.txt`. Everything is plain files.
+Inside: `config.json`, `brain/` (the clone), `threads/<id>/` (state, messages, files and their versions), `extractions/<time>/` (what each brain update was given and what it did), `reads.jsonl`, `google-token.json` once connected, `log.txt`. Everything is plain files.
 
 Claude's own session files are where Claude Code keeps them (`~/.claude`). If one goes missing, the thread carries on from the app's transcript.
 
@@ -99,6 +117,9 @@ Claude's own session files are where Claude Code keeps them (`~/.claude`). If on
 | `model`, `extractModel` | empty | Model for threads and for the brain update. Empty means Claude Code's default. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads. Off, a thread can read the vault, search the web and write files; nothing else. |
 | `maxParallel` | `4` | Threads worked on at once. |
+| `allowedHosts` | empty | Other addresses the app answers under (the Pi's tailnet name). |
+| `google` | empty | Client id and secret of your Google Cloud project. |
+| `voice` | off | Calling: Twilio token, public address, your phone numbers, language. |
 
 ## Tests
 
@@ -110,4 +131,4 @@ Runs the whole app against a throwaway vault with the stand-in Claude: threads a
 
 ## Not built yet
 
-Gmail and calendar are not connected, so a mail draft is a file you copy from. There is no scheduled brain update, no reordering by hand, no project threads with spin-offs, no opportunities view, and no phone call.
+There is no scheduled brain update, no reordering by hand, no project threads with spin-offs and no opportunities view. Nothing acts on the read log yet.

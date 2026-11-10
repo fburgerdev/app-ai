@@ -5,6 +5,7 @@
 // Permissions are decided here, in code, not by asking: nobody is sitting at a prompt.
 //   thread   reads the vault, searches the web, writes only into its artifacts folder
 //   extract  the brain update: reads and writes the vault, no web, no git history
+//   plain    no tools at all (used to turn a reply into something to listen to)
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +32,7 @@ function deny(message) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false }) {
+export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, google = false }) {
   const readable = [cwd, artifactsDir, ...readDirs].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
@@ -80,6 +81,11 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
       return allow(input);
     }
 
+    // Gmail and Calendar: the app's own tools, which can read, draft and add, never send.
+    if (toolName.startsWith('mcp__google__')) {
+      return mode === 'thread' && google ? allow(input) : deny('Gmail and Calendar are not connected in this app.');
+    }
+
     return deny(`${toolName} is not available in this app.`);
   };
 }
@@ -107,6 +113,11 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'PowerShell': return `Ran ${clip(input.command, 80)}`;
     case 'Agent':
     case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
+    case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
+    case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
+    case 'mcp__google__gmail_save_draft': return `${input.draftId ? 'Updated the' : 'Saved a'} Gmail draft to ${clip(input.to, 60)}`;
+    case 'mcp__google__calendar_list': return 'Looked at your calendar';
+    case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}`;
     case 'TodoWrite':
     case 'TaskCreate':
     case 'TaskUpdate':
@@ -147,7 +158,7 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent }) {
+async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers }) {
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -159,7 +170,19 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifac
   if (mode === 'extract') disallowedTools.push('WebSearch', 'WebFetch');
   if (mode === 'thread' && !shell) disallowedTools.push('Bash', 'PowerShell');
 
-  const options = {
+  // "plain" is Claude with no tools and no vault: text in, text out.
+  const plain = mode === 'plain';
+  const google = Boolean(mcpServers?.google);
+  const options = plain ? {
+    cwd,
+    abortController,
+    settingSources: [],
+    systemPrompt: systemAppend,
+    tools: [],
+    permissionMode: 'default',
+    canUseTool: async (name) => deny(`${name} is not available here.`),
+    persistSession: false,
+  } : {
     cwd,
     abortController,
     includePartialMessages: true,
@@ -168,12 +191,13 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifac
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, google }),
     additionalDirectories: [artifactsDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
+  if (!plain && mcpServers) options.mcpServers = mcpServers;
   if (resume) options.resume = resume;
-  else if (title) options.title = title;
+  else if (title && !plain) options.title = title;
   if (model) options.model = model;
 
   // The permission callback needs the streaming form of the prompt.
@@ -211,6 +235,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifac
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           const summary = describeTool(block.name, block.input, cwd);
+          onEvent?.({ type: 'tool-input', name: block.name, input: block.input || {} });
           if (summary) onEvent?.({ type: 'tool', name: block.name, summary, helper: Boolean(msg.parent_tool_use_id) });
         } else if (block.type === 'text' && !msg.parent_tool_use_id && !sawDelta) {
           // No partial messages arrived for this block: show it whole.
@@ -256,6 +281,12 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
     return full;
   };
 
+  if (mode === 'plain') {
+    const source = prompt.split('---').pop().replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+    const digest = source.length > 260 ? `${source.slice(0, 260)}…` : source;
+    return { sessionId: null, text: digest, finalText: digest, error: '', aborted: false };
+  }
+
   if (mode === 'extract') {
     onEvent?.({ type: 'tool', name: 'Read', summary: 'Read CLAUDE.md' });
     await sleep(150 * speed);
@@ -287,8 +318,10 @@ async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, sign
 
   let text = '';
   text += await say('Let me look at what the vault has on this.\n\n');
+  onEvent?.({ type: 'tool-input', name: 'Read', input: { file_path: path.join(cwd, 'Brain', 'Next Actions.md'), offset: 1, limit: 40 } });
   onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Brain/Next Actions.md' });
   await sleep(400 * speed);
+  onEvent?.({ type: 'tool-input', name: 'Grep', input: { pattern: 'deadline', path: path.join(cwd, 'Brain') } });
   onEvent?.({ type: 'tool', name: 'Grep', summary: 'Searched the vault for "deadline"' });
   await sleep(400 * speed);
   onEvent?.({ type: 'tool', name: 'WebSearch', summary: 'Searched the web for "example query"' });

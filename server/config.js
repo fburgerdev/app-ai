@@ -32,6 +32,8 @@ export const THREADS_DIR = path.join(DATA_DIR, 'threads');
 export const EXTRACTIONS_DIR = path.join(DATA_DIR, 'extractions');
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 export const LOG_FILE = path.join(DATA_DIR, 'log.txt');
+export const READS_FILE = path.join(DATA_DIR, 'reads.jsonl');
+export const GOOGLE_TOKEN_FILE = path.join(DATA_DIR, 'google-token.json');
 
 const DEFAULTS = {
   // The local web address. Bound to this computer only.
@@ -62,6 +64,29 @@ const DEFAULTS = {
 
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 4,
+
+  // Other addresses this app may be opened under, besides localhost. Empty on a laptop.
+  // On a Raspberry Pi behind "tailscale serve" this is the Pi's name in your tailnet,
+  // for example ["pi.tail1234.ts.net"]. See docs/pi.md.
+  allowedHosts: [],
+
+  // Gmail and Google Calendar. The two values come from your own Google Cloud project;
+  // see docs/google.md. Connecting happens in the app, under "Connections".
+  google: {
+    clientId: '',
+    clientSecret: '',
+  },
+
+  // Calling the inbox from a phone, through Twilio. Off until set up; see docs/calling.md.
+  voice: {
+    enabled: false,
+    publicUrl: '', // the https address Twilio reaches this app under
+    authToken: '', // Twilio auth token, used to check that a call really comes from Twilio
+    allowedCallers: [], // phone numbers that may call, like "+491701234567"
+    language: 'en-US',
+    speechTimeoutMs: 2500, // how long a pause ends what you are saying
+    digestModel: 'haiku', // model that turns a reply into something to listen to
+  },
 };
 
 function ensureDirs() {
@@ -83,6 +108,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
+  for (const key of ['google', 'voice']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
   if (process.env.APP_AI_BRAIN_REPO) config.brainRepo = process.env.APP_AI_BRAIN_REPO;
   if (!config.brainDir) config.brainDir = path.join(DATA_DIR, 'brain');

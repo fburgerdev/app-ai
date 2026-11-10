@@ -69,10 +69,11 @@ kbd {
 
 .app {
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
+  grid-template-columns: 292px 1fr 0%;
   height: 100vh;
+  transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
 }
-.app.has-panel { grid-template-columns: 292px minmax(380px, 1fr) minmax(360px, 44%); }
+.app.has-panel { grid-template-columns: 292px 1fr 44%; }
 
 /* ---------- rail ---------- */
 
@@ -184,6 +185,7 @@ kbd {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 .is-offline .stage::before {
   content: 'The app stopped answering. Start it again with “npm start”; this page reconnects by itself.';
@@ -326,9 +328,15 @@ input.thread-title:hover { background: var(--panel); }
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--panel);
   border-left: 1px solid var(--line);
+  opacity: 0;
+  transition: opacity 200ms ease;
 }
+.has-panel .panel { opacity: 1; }
+/* The content keeps its width while the panel slides, so text does not rewrap mid-move. */
+.panel > * { min-width: min(360px, 100vw); }
 .panel[hidden] { display: none; }
 .panel-head {
   display: flex;
@@ -523,10 +531,46 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 
 .msg-you .md blockquote { font-size: 14px; }
 
+/* ---------- connections ---------- */
+
+.conn { padding: 4px 0 18px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.conn:last-child { border-bottom: 0; }
+.conn-title { margin: 0; font: 650 15px/1.3 var(--sans); color: var(--bright); display: flex; gap: 12px; align-items: baseline; }
+.conn-state { font-weight: 400; font-size: 13px; color: var(--muted); }
+.conn-state.is-on { color: var(--done); }
+.foot-links { display: flex; gap: 16px; }
+
+/* ---------- motion ----------
+   Everything here answers something you did: a thread opening, a panel sliding, a
+   reply arriving. Nothing moves on its own except the "working" dot. */
+
+.btn, .item, .artifact-card, .link, .composer textarea, .code-copy, .thread-title {
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.btn:active, .artifact-card:active { transform: translateY(1px); }
+
+@keyframes enter { from { opacity: 0; transform: translateX(14px); } }
+@keyframes swap { from { opacity: 0; transform: translateY(6px); } }
+@keyframes arrive { from { opacity: 0; transform: translateY(10px); } }
+@keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
+
+.messages.enter { animation: enter 220ms cubic-bezier(.2, .8, .2, 1); }
+.swap { animation: swap 180ms ease-out; }
+.msg.arrive { animation: arrive 240ms cubic-bezier(.2, .8, .2, 1); }
+.quote-btn.pop { animation: pop 140ms ease-out; }
+.toast.pop { animation: toastpop 220ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes toastpop { from { opacity: 0; transform: translate(-50%, -10px); } }
+.steps[open] ol { animation: swap 160ms ease-out; }
+.status { animation: swap 200ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 900px) {
-  .app, .app.has-panel { grid-template-columns: 220px minmax(0, 1fr); }
+  .app, .app.has-panel { grid-template-columns: 220px 1fr 0%; }
   .panel { position: fixed; inset: 0 0 0 0; z-index: 10; }
   .thread-head { flex-wrap: wrap; padding: 10px 16px; }
   .messages, .composer { padding-left: 16px; padding-right: 16px; }

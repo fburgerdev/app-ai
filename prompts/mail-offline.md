@@ -1,0 +1,1 @@
+- Mail drafts: Gmail is not connected to this app, so a draft is an artifact he copies from. Follow `Claude/Writing Mails.md` for the text. The brain update files the draft into `Artifacts/Mails/` later; do not try to write it there.

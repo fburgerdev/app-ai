@@ -1,0 +1,13 @@
+[Unit]
+Description=Inbox app (app-ai)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/app-ai
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

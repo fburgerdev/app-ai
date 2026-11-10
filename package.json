@@ -12,6 +12,7 @@
     "serve": "node server/index.js",
     "login": "node scripts/login.mjs",
     "demo": "node scripts/demo.mjs",
+    "reads": "node scripts/reads.mjs",
     "test": "node --test"
   },
   "dependencies": {
@@ -23,6 +24,8 @@
     "dompurify": "^3.3.0",
     "express": "^5.1.0",
     "katex": "^0.19.1",
-    "marked": "^18.2.0"
+    "marked": "^18.2.0",
+    "ws": "^8.22.2",
+    "zod": "^4.6.7"
   }
 }

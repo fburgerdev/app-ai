@@ -10,7 +10,9 @@
 import { runAgent } from './agent.js';
 import * as brain from './brain.js';
 import * as store from './store.js';
-import { log } from './config.js';
+import { DATA_DIR, log } from './config.js';
+import * as google from './google.js';
+import { logRead, logToolRead } from './reads.js';
 import { messageText, readPrompt, todayLine, dateTimeDMY } from './util.js';
 
 let config;
@@ -83,9 +85,12 @@ function threadInstructions(thread) {
         ...preload.map((f) => `<vault-file path="${f.path}">\n${f.text.trim()}\n</vault-file>`),
       ].join('\n')
     : '';
+  for (const f of preload) logRead({ by: 'preload', threadId: thread.id, path: f.path });
+  const g = google.googleStatus();
   return readPrompt('thread.md', {
     today: todayLine(),
     artifactsDir: store.artifactsDir(thread.id),
+    mail: g.connected ? readPrompt('mail-connected.md', { email: g.email || 'his Gmail account' }) : readPrompt('mail-offline.md').trim(),
     preload: preloadText,
   });
 }
@@ -135,6 +140,8 @@ async function runTurn(threadId, prompt) {
       run.parts.push({ type: 'tool', name: ev.name, summary: ev.summary });
       emitLive({ op: 'parts', parts: run.parts });
       activity(ev.summary);
+    } else if (ev.type === 'tool-input') {
+      logToolRead({ vaultDir: brain.brainDir(), by: 'thread', threadId, tool: ev.name, input: ev.input });
     } else if (ev.type === 'tool-result') {
       recordArtifacts();
     } else if (ev.type === 'activity') {
@@ -159,6 +166,7 @@ async function runTurn(threadId, prompt) {
       title: thread.title,
       fake: config.fake,
       onEvent,
+      mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer() } : undefined,
     };
     let result = await runAgent({ ...base, prompt, resume: thread.sessionId || undefined });
     if (thread.sessionId && result.error && /no conversation found|session.*(not found|does not exist)/i.test(result.error)) {
@@ -191,6 +199,7 @@ async function runTurn(threadId, prompt) {
         pending: [],
         error: result.error || '',
       });
+      if (config.voice.enabled) spokenDigest(threadId).catch(() => {});
     }
   } finally {
     running.delete(threadId);
@@ -198,4 +207,52 @@ async function runTurn(threadId, prompt) {
     const next = waiting.shift();
     if (next) startTurn(next.threadId, next.prompt);
   }
+}
+
+// ---------- for calls: a reply as something to listen to ----------
+
+const digesting = new Map(); // threadId -> promise
+
+function plainSpeech(text) {
+  return String(text)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (m, a, b) => b || a)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[#*_`>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// The spoken version of a thread's latest reply. Made once per reply and kept with the
+// thread, so a call can read it out without waiting for a model.
+export function spokenDigest(threadId) {
+  const thread = store.getThread(threadId);
+  if (!thread) return Promise.resolve('');
+  if (thread.spoken && thread.spoken.at === thread.messageCount) return Promise.resolve(thread.spoken.text);
+  if (digesting.has(threadId)) return digesting.get(threadId);
+  const job = (async () => {
+    const at = thread.messageCount;
+    const last = store.readMessages(threadId).filter((m) => m.role === 'assistant').at(-1);
+    if (!last) return '';
+    let text;
+    if (last.error && !(last.parts || []).length) {
+      text = 'Claude stopped with an error in this thread. Have a look at it on a screen.';
+    } else {
+      const reply = messageText(last);
+      const result = await runAgent({
+        prompt: `The reply to turn into speech:\n\n---\n\n${reply.slice(0, 30_000)}`,
+        cwd: DATA_DIR,
+        systemAppend: readPrompt('digest.md'),
+        model: config.voice.digestModel,
+        mode: 'plain',
+        fake: config.fake,
+      });
+      // If the model is unavailable, the start of the reply itself is better than silence.
+      text = plainSpeech(result.finalText || result.text) || `${plainSpeech(reply).slice(0, 500)}`;
+    }
+    store.updateThread(threadId, { spoken: { at, text } });
+    return text;
+  })().finally(() => digesting.delete(threadId));
+  digesting.set(threadId, job);
+  return job;
 }

@@ -18,6 +18,7 @@ const S = {
   live: null, // parts of the message Claude is writing in the current thread
   brain: null,
   config: {},
+  connections: null,
   panel: null,
   drafts: new Map(),
   showDone: false,
@@ -57,6 +58,7 @@ let toastTimer;
 function toast(text) {
   els.toast.textContent = text;
   els.toast.hidden = false;
+  enter(els.toast, 'pop');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { els.toast.hidden = true; }, 4500);
 }
@@ -79,6 +81,14 @@ function stamp(ts) {
 }
 
 const kbd = (text) => h('kbd', {}, text);
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+// Restarts a CSS entrance animation on an element.
+function enter(el, name = 'enter') {
+  el.classList.remove(name);
+  void el.offsetWidth;
+  el.classList.add(name);
+}
 
 // ---------- which thread comes next ----------
 
@@ -106,6 +116,7 @@ function railItem(t) {
     class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}`,
     type: 'button',
     title: t.title,
+    dataset: { id: t.id },
     onclick: () => openThread(t.id),
   },
     h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
@@ -133,7 +144,16 @@ function renderRail() {
     const toggle = h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show');
     parts.push(section('Done', closed.length, S.showDone ? closed.map(railItem) : [], toggle));
   }
+  const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
   els.lists.replaceChildren(...parts);
+  if (!reducedMotion.matches && before.size) {
+    for (const el of els.lists.querySelectorAll('.item')) {
+      const was = before.get(el.dataset.id);
+      const now = el.getBoundingClientRect().top;
+      if (was == null) el.animate([{ opacity: 0, transform: 'translateX(-8px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
+      else if (Math.abs(was - now) > 1) el.animate([{ transform: `translateY(${was - now}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    }
+  }
 
   const n = ready.length;
   document.title = n ? `(${n}) Inbox` : 'Inbox';
@@ -166,7 +186,10 @@ function renderBrain() {
     else text = `Last update ${stamp(last.finishedAt)}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.pushed ? '' : ', not pushed yet'}`;
     rows.push(h('button', { class: `link brain-last${last.status === 'failed' || !last.pushed ? ' is-error' : ''}`, type: 'button', onclick: () => openPanel({ kind: 'run', run: last }) }, text));
   }
-  rows.push(h('button', { class: 'link keys-link', type: 'button', onclick: () => openPanel({ kind: 'keys' }) }, 'Keyboard shortcuts'));
+  rows.push(h('div', { class: 'foot-links' },
+    h('button', { class: 'link keys-link', type: 'button', onclick: () => openPanel({ kind: 'connections' }) }, 'Connections'),
+    h('button', { class: 'link keys-link', type: 'button', onclick: () => openPanel({ kind: 'keys' }) }, 'Keyboard shortcuts'),
+  ));
   els.brain.replaceChildren(...rows);
 }
 
@@ -369,6 +392,7 @@ async function openThread(id, { keepPanel = false } = {}) {
   S.live = data.thread.state === 'working' ? (data.live || []) : null;
   renderHead();
   els.messages.replaceChildren(...data.messages.map((m) => messageEl(id, m)));
+  enter(els.messages);
   if (S.live) renderLive();
   // Start reading where Claude's latest message starts, not at its end.
   const claude = [...els.messages.querySelectorAll('.msg-claude')].at(-1);
@@ -392,6 +416,7 @@ function openNew() {
   renderComposer();
   restoreDraft();
   renderEmpty();
+  enter(els.messages);
   els.input.focus();
 }
 
@@ -447,11 +472,18 @@ function step(direction) {
 
 // ---------- the side panel ----------
 
+let panelTimer = 0;
+
 function closePanel() {
   S.panel = null;
-  els.panel.hidden = true;
-  els.panel.replaceChildren();
   els.app.classList.remove('has-panel');
+  clearTimeout(panelTimer);
+  // The panel slides shut first; its content goes once it is out of sight.
+  panelTimer = setTimeout(() => {
+    if (S.panel) return;
+    els.panel.hidden = true;
+    els.panel.replaceChildren();
+  }, reducedMotion.matches ? 0 : 240);
 }
 
 function panelFrame(title, tools, body) {
@@ -462,8 +494,12 @@ function panelFrame(title, tools, body) {
     ),
     body,
   );
+  clearTimeout(panelTimer);
+  const wasOpen = els.app.classList.contains('has-panel');
   els.panel.hidden = false;
+  if (!wasOpen) void els.panel.offsetWidth;
   els.app.classList.add('has-panel');
+  if (wasOpen) enter(els.panel.lastElementChild, 'swap');
 }
 
 const TEXT_TYPES = ['md', 'txt', 'csv', 'json', 'js', 'mjs', 'ts', 'py', 'css', 'sh', 'ps1', 'yml', 'yaml', 'xml', 'sql', 'tex'];
@@ -475,6 +511,7 @@ async function openPanel(panel) {
   if (panel.kind === 'note') return showNote(panel);
   if (panel.kind === 'run') return showRun(panel.run);
   if (panel.kind === 'files') return showFiles();
+  if (panel.kind === 'connections') return showConnections();
   return showKeys();
 }
 
@@ -519,7 +556,7 @@ async function showArtifact(panel) {
   if (isText) {
     tools.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => { await navigator.clipboard.writeText(text ?? ''); toast('Copied.'); } }, 'Copy'));
   }
-  tools.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Open with the program your computer uses for this kind of file', onclick: () => api('POST', `/api/threads/${threadId}/artifact/open`, { name }).catch((e) => toast(e.message)) }, 'Open in app'));
+  if (S.config.local) tools.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Open with the program your computer uses for this kind of file', onclick: () => api('POST', `/api/threads/${threadId}/artifact/open`, { name }).catch((e) => toast(e.message)) }, 'Open in app'));
   tools.push(h('a', { class: 'btn btn-quiet', href: `${url}&download=1` }, 'Download'));
 
   const body = h('div', { class: 'panel-body quotable', dataset: { quoteSource: source } });
@@ -545,7 +582,7 @@ async function showArtifact(panel) {
       body.classList.add('is-frame');
       body.append(h('iframe', { class: 'frame', src: url, title: name }));
     } else {
-      body.append(h('p', { class: 'panel-note' }, 'This kind of file cannot be shown here. Use “Open in app”.'));
+      body.append(h('p', { class: 'panel-note' }, S.config.local ? 'This kind of file cannot be shown here. Use “Open in app”.' : 'This kind of file cannot be shown here. Download it to open it.'));
     }
   } catch (err) {
     body.append(h('p', { class: 'panel-note is-error' }, `The file could not be loaded: ${err.message}`));
@@ -597,6 +634,50 @@ function showRun(run) {
   panelFrame(`Brain update, ${stamp(run.finishedAt)}`, [], body);
 }
 
+async function showConnections() {
+  const panel = S.panel;
+  const body = h('div', { class: 'panel-body' });
+  panelFrame('Connections', [], body);
+  let c;
+  try {
+    c = await api('GET', '/api/connections');
+  } catch (err) {
+    body.append(h('p', { class: 'panel-note is-error' }, err.message));
+    return;
+  }
+  if (S.panel !== panel) return;
+  S.connections = c;
+  const block = (title, state, ...rest) => h('section', { class: 'conn' },
+    h('h3', { class: 'conn-title' }, title, h('span', { class: `conn-state${state.on ? ' is-on' : ''}` }, state.text)), ...rest);
+  const note = (text) => h('p', { class: 'panel-note' }, text);
+
+  const g = c.google;
+  if (g.connected) {
+    body.append(block('Gmail and Calendar', { on: true, text: 'connected' },
+      note(`Signed in${g.email ? ` as ${g.email}` : ''}. Threads can search and read your mail, save drafts, read your calendar and add entries. They cannot send mail or invite anyone.`),
+      h('button', { class: 'btn', type: 'button', onclick: async () => { await api('POST', '/api/google/disconnect', {}); toast('Disconnected. Threads no longer reach Gmail or Calendar.'); openPanel({ kind: 'connections' }); } }, 'Disconnect')));
+  } else if (g.configured) {
+    body.append(block('Gmail and Calendar', { text: 'not connected' },
+      note('Sign in with Google once. Threads can then search and read your mail, save drafts, read your calendar and add entries. They cannot send mail or invite anyone.'),
+      h('a', { class: 'btn btn-brain', href: '/auth/google' }, 'Connect Google')));
+  } else {
+    body.append(block('Gmail and Calendar', { text: 'not set up' },
+      note('This needs a Google client id and secret in config.json first. The steps are in docs/google.md in the app’s folder; they take about ten minutes, once.')));
+  }
+
+  const v = c.voice;
+  body.append(block('Calling the inbox', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
+    note(v.ready ? 'Call your Twilio number from one of your allowed phones. The app reads you the waiting threads and takes your replies.'
+      : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
+        : 'Off. Setting it up needs a Twilio number and a public address for this app; the steps are in docs/calling.md.')));
+
+  const r = c.remote;
+  body.append(block('Where the app runs', { on: true, text: r.local ? 'this computer' : 'another computer' },
+    note(r.local
+      ? (r.allowedHosts.length ? `Also reachable as ${r.allowedHosts.join(', ')}.` : 'Only this computer can reach it. To run it on a Raspberry Pi and reach it from your laptop and phone, see docs/pi.md.')
+      : `You are reaching it at ${location.host}. Threads keep working there while this device is closed.`)));
+}
+
 function showKeys() {
   const rows = [
     ['Enter', 'Send, then open the next waiting thread'],
@@ -627,6 +708,7 @@ function maybeShowQuote() {
   const zone = node?.closest('.quotable');
   if (!text || !zone) return hideQuote();
   const rect = sel.getRangeAt(0).getBoundingClientRect();
+  if (els.quote.hidden) enter(els.quote, 'pop');
   els.quote.hidden = false;
   els.quote.style.top = `${Math.max(8, rect.top - 40)}px`;
   els.quote.style.left = `${Math.min(window.innerWidth - 150, Math.max(8, rect.left + rect.width / 2 - 60))}px`;
@@ -746,6 +828,7 @@ function onMessage({ threadId, message }) {
     liveEl = null;
   }
   const el = messageEl(threadId, message);
+  el.classList.add('arrive');
   if (liveEl?.isConnected) liveEl.before(el);
   else els.messages.append(el);
   if (stick || message.role === 'user') els.scroller.scrollTop = els.scroller.scrollHeight;
@@ -785,6 +868,7 @@ function connect() {
   source.addEventListener('live', (e) => onLive(JSON.parse(e.data)));
   source.addEventListener('artifacts', (e) => onArtifacts(JSON.parse(e.data)));
   source.addEventListener('brain', (e) => setBrain(JSON.parse(e.data)));
+  source.addEventListener('connections', () => { if (S.panel?.kind === 'connections') openPanel({ kind: 'connections' }); });
   let lost = false;
   source.onerror = () => { lost = true; els.app.classList.add('is-offline'); };
   source.onopen = async () => {
@@ -800,6 +884,7 @@ async function load() {
   const state = await api('GET', '/api/state');
   S.threads = new Map(state.threads.map((t) => [t.id, t]));
   S.config = state.config;
+  S.connections = state.connections;
   S.brain = state.brain;
   renderRail();
   renderBrain();

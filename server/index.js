@@ -10,6 +10,9 @@ import * as brain from './brain.js';
 import * as store from './store.js';
 import * as runner from './runner.js';
 import * as extraction from './extract.js';
+import * as google from './google.js';
+import { logRead } from './reads.js';
+import { answerCall, attachVoice, voiceStatus } from './voice.js';
 import { ROOT } from './util.js';
 
 const config = loadConfig();
@@ -19,6 +22,7 @@ const url = `http://localhost:${config.port}`;
 brain.initBrain(config);
 runner.initRunner(config);
 extraction.initExtraction(config);
+google.initGoogle(config);
 store.loadThreads();
 
 const app = express();
@@ -30,9 +34,20 @@ app.disable('x-powered-by');
 // the Host header must be this server (blocks DNS rebinding), and anything that changes
 // state must come from this app's own pages and carry JSON (which other sites cannot
 // send without asking permission first, and permission is never given).
-const allowedHosts = new Set([`localhost:${config.port}`, `127.0.0.1:${config.port}`]);
+const localHosts = new Set([`localhost:${config.port}`, `127.0.0.1:${config.port}`]);
+const allowedHosts = new Set([...localHosts, ...(config.allowedHosts || []).map((h) => String(h).toLowerCase())]);
+const isLocal = (req) => localHosts.has(req.headers.host || '');
+
+// Twilio's "a call is coming in". It arrives from the internet, so it is checked on its
+// own terms (Twilio's signature and your phone number) instead of by address.
+app.post('/voice/twiml', express.urlencoded({ extended: false }), (req, res) => {
+  const out = answerCall(config, { path: req.originalUrl, params: req.body || {}, signature: req.headers['x-twilio-signature'] });
+  if (out.type) res.type(out.type);
+  res.status(out.status).send(out.body);
+});
+
 app.use((req, res, next) => {
-  if (!allowedHosts.has(req.headers.host || '')) return res.status(403).send('Forbidden');
+  if (!allowedHosts.has(String(req.headers.host || '').toLowerCase())) return res.status(403).send('Forbidden');
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const origin = req.headers.origin;
     if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ''))) return res.status(403).send('Forbidden');
@@ -56,12 +71,49 @@ vendor('/vendor/fonts/jetbrains-mono', '@fontsource-variable/jetbrains-mono');
 app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'] }));
 
 // ---------- state and live updates ----------
-function publicConfig() {
-  return { threadShell: config.threadShell, fake: config.fake, dataDir: DATA_DIR, brainRepo: config.brainRepo };
+// `local` says whether the browser runs on the same computer as the app. Opening a file
+// in another program only makes sense there.
+function publicConfig(req) {
+  return { threadShell: config.threadShell, fake: config.fake, dataDir: DATA_DIR, brainRepo: config.brainRepo, local: isLocal(req) };
+}
+
+function connections(req) {
+  return {
+    google: google.googleStatus(),
+    voice: voiceStatus(config),
+    remote: { local: isLocal(req), allowedHosts: config.allowedHosts || [] },
+  };
 }
 
 app.get('/api/state', (req, res) => {
-  res.json({ threads: store.listThreads(), brain: extraction.extractionStatus(), config: publicConfig() });
+  res.json({ threads: store.listThreads(), brain: extraction.extractionStatus(), config: publicConfig(req), connections: connections(req) });
+});
+
+app.get('/api/connections', (req, res) => res.json(connections(req)));
+
+// ---------- signing in to Google ----------
+const ownOrigin = (req) => `${isLocal(req) ? 'http' : 'https'}://${req.headers.host}`;
+
+app.get('/auth/google', (req, res) => {
+  if (!google.googleStatus().configured) return res.status(400).send('Add your Google client id and secret to config.json first. See docs/google.md.');
+  res.redirect(google.authUrl(`${ownOrigin(req)}/auth/google/callback`));
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const page = (text) => `<!doctype html><meta charset="utf-8"><title>Inbox</title><body style="background:#1b1d2a;color:#dfe1ee;font:16px system-ui;padding:3rem"><p>${text}</p><p><a style="color:#8cc4ff" href="/">Back to the inbox</a></p>`;
+  if (req.query.error) return res.status(400).send(page('Google sign-in was cancelled.'));
+  try {
+    const email = await google.finishAuth({ code: String(req.query.code || ''), state: String(req.query.state || '') });
+    store.events.emit('connections', connections(req));
+    res.send(page(`Gmail and Calendar are connected${email ? ` as ${email.replace(/[<>&]/g, '')}` : ''}. New turns in every thread can use them.`));
+  } catch (err) {
+    res.status(400).send(page(String(err.message).replace(/[<>&]/g, '')));
+  }
+});
+
+app.post('/api/google/disconnect', (req, res) => {
+  google.disconnect();
+  res.json(connections(req));
 });
 
 app.get('/api/events', (req, res) => {
@@ -78,6 +130,7 @@ app.get('/api/events', (req, res) => {
     live: send('live'),
     artifacts: send('artifacts'),
     brain: send('brain'),
+    connections: send('connections'),
   };
   for (const [name, fn] of Object.entries(handlers)) store.events.on(name, fn);
   const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
@@ -193,6 +246,7 @@ function openWithSystem(file, reveal) {
 app.post('/api/threads/:id/artifact/open', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
+  if (!isLocal(req)) return res.status(409).json({ error: 'The app runs on another computer, so it cannot open a program on this one. Use Download.' });
   const file = store.artifactLivePath(thread.id, String(req.body.name || ''));
   if (!file) return res.status(404).json({ error: 'That file is no longer in the thread\'s folder.' });
   openWithSystem(file, Boolean(req.body.reveal));
@@ -219,6 +273,7 @@ app.get('/api/vault', (req, res) => {
   const link = String(req.query.link || '');
   const found = brain.resolveWikilink(link);
   if (!found) return res.status(404).json({ error: `No note called "${link}" in the vault.` });
+  logRead({ by: 'you', path: found.path });
   const ext = path.extname(found.path).toLowerCase();
   if (!['.md', '.txt', '.json', '.csv', '.ps1'].includes(ext)) return res.json({ path: found.path, binary: true });
   res.json({ path: found.path, text: fs.readFileSync(found.full, 'utf8') });
@@ -243,6 +298,8 @@ const server = app.listen(config.port, '127.0.0.1', () => {
   if (wantsOpen) openBrowser();
   brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()));
 });
+
+attachVoice(server, config);
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

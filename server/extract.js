@@ -16,6 +16,7 @@ import { runAgent } from './agent.js';
 import * as brain from './brain.js';
 import * as store from './store.js';
 import { EXTRACTIONS_DIR, log } from './config.js';
+import { logToolRead } from './reads.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
@@ -193,7 +194,8 @@ async function runExtraction(id, changed) {
       title: `Brain update ${dateDMY()}`,
       fake: config.fake,
       onEvent: (ev) => {
-        if (ev.type === 'tool') setStep(ev.summary);
+        if (ev.type === 'tool-input') logToolRead({ vaultDir: brain.brainDir(), by: 'brain-update', tool: ev.name, input: ev.input });
+        else if (ev.type === 'tool') setStep(ev.summary);
         else if (ev.type === 'text-start') setStep('Writing the report');
       },
     });
