@@ -69,7 +69,10 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   next();
 });
-app.use(express.json({ limit: '5mb' }));
+// Uploads carry a whole file and get a larger limit; everything else stays small.
+const smallJson = express.json({ limit: '5mb' });
+const uploadJson = express.json({ limit: '36mb' });
+app.use((req, res, next) => (req.path === '/api/uploads' ? uploadJson : smallJson)(req, res, next));
 
 // ---------- the interface and its libraries ----------
 const vendor = (route, dir) => app.use(route, express.static(path.join(ROOT, 'node_modules', dir), { maxAge: '1d' }));
@@ -213,12 +216,54 @@ const need = (req, res) => {
 
 const cleanText = (value) => String(value ?? '').replace(/\r\n/g, '\n').trim();
 
+// ---------- files Florian attaches ----------
+//
+// A file is uploaded as soon as he picks it and waits in a folder of its own until the
+// message it belongs to is sent; then it moves into that thread.
+
+const PENDING = path.join(DATA_DIR, 'uploads-pending');
+const MAX_UPLOAD = 25 * 1024 * 1024;
+fs.rmSync(PENDING, { recursive: true, force: true }); // what was never sent is not kept
+
+app.post('/api/uploads', (req, res) => {
+  // Only the file's own name, whatever path came with it, and nothing a file system minds.
+  const name = String(req.body.name || '').split(/[\\/]/).pop().replace(/[:*?"<>|\u0000-\u001f]/g, ' ').replace(/^\.+/, '').trim().slice(0, 140) || 'file';
+  let data;
+  try { data = Buffer.from(String(req.body.data || ''), 'base64'); } catch { data = null; }
+  if (!data?.length) return res.status(400).json({ error: 'That file is empty.' });
+  if (data.length > MAX_UPLOAD) return res.status(413).json({ error: 'That file is larger than 25 MB.' });
+  const id = store.newId();
+  fs.mkdirSync(path.join(PENDING, id), { recursive: true });
+  fs.writeFileSync(path.join(PENDING, id, name), data);
+  res.json({ id, name, size: data.length });
+});
+
+// The upload ids a message names, as the folders they wait in.
+const pendingFiles = (ids) => (Array.isArray(ids) ? ids : []).slice(0, 20)
+  .map((id) => path.join(PENDING, path.basename(String(id))))
+  .filter((dir) => fs.existsSync(dir));
+
+app.get('/api/threads/:id/upload', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const file = store.uploadPath(thread.id, req.query.name);
+  if (!file) return res.status(404).send('No such file');
+  const ext = path.extname(file).toLowerCase();
+  const inline = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.txt', '.md'].includes(ext);
+  res.setHeader('Content-Type', TYPES[ext] && inline ? TYPES[ext] : 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
+  fs.createReadStream(file).pipe(res);
+});
+
 app.post('/api/threads', (req, res) => {
   const text = cleanText(req.body.text);
-  if (!text) return res.status(400).json({ error: 'Write a message first.' });
+  const waitingFiles = pendingFiles(req.body.files);
+  if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
   const project = String(req.body.project || '');
-  const thread = store.createThread({ title: runner.titleFrom(text), project: projects.isKnownProject(project) ? project : '' });
-  runner.sendMessage(thread.id, text);
+  const thread = store.createThread({ title: runner.titleFrom(text || 'Attached files'), project: projects.isKnownProject(project) ? project : '' });
+  runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true });
   cards.maybeMakeCards();
   res.json({ thread: store.getThread(thread.id) });
 });
@@ -238,11 +283,14 @@ app.post('/api/threads/:id/messages', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   const text = cleanText(req.body.text);
-  if (!text) return res.status(400).json({ error: 'Write a message first.' });
+  const waitingFiles = pendingFiles(req.body.files);
+  if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card takes no reply. Edit its text, then accept or decline.' });
   if (thread.state === 'done') store.updateThread(thread.id, { state: 'ready' });
-  queue.recordDecision('replied', thread);
-  const message = runner.sendMessage(thread.id, text);
+  // "Send and done": the thread closes by itself once Claude has answered.
+  const done = req.body.done === true;
+  queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
+  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done });
   cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
 });
@@ -254,12 +302,13 @@ app.post('/api/threads/:id/spinoff', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   const text = cleanText(req.body.text);
-  if (!text) return res.status(400).json({ error: 'Write a message first.' });
+  const waitingFiles = pendingFiles(req.body.files);
+  if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card cannot be spun off.' });
   queue.recordDecision('spun off', thread);
-  const copy = store.copyThread(thread.id, { title: runner.titleFrom(text) });
+  const copy = store.copyThread(thread.id, { title: runner.titleFrom(text || 'Attached files') });
   if (thread.state === 'ready') store.updateThread(thread.id, { requeuedAt: Date.now() });
-  runner.sendMessage(copy.id, text);
+  runner.sendMessage(copy.id, text, { files: store.attachFiles(copy.id, waitingFiles) });
   res.json({ thread: store.getThread(copy.id), from: store.getThread(thread.id) });
 });
 
@@ -449,8 +498,8 @@ app.post('/api/threads/:id/card', (req, res) => {
   if (thread.kind !== 'card' || thread.state !== 'ready') return res.status(409).json({ error: 'This card has already been decided.' });
   const outcome = req.body.outcome === 'accepted' ? 'accepted' : req.body.outcome === 'declined' ? 'declined' : null;
   if (!outcome) return res.status(400).json({ error: 'Accept or decline.' });
-  cards.decideCard(thread, outcome, outcome === 'accepted' ? 'copied' : '', req.body.reason);
-  res.json({ thread: store.getThread(thread.id) });
+  const entry = cards.decideCard(thread, outcome, outcome === 'accepted' ? 'copied' : '', req.body.reason);
+  res.json({ thread: store.getThread(thread.id), started: entry.started ? store.getThread(entry.started.id) : null });
 });
 
 app.post('/api/cards/make', (req, res) => {

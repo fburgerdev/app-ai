@@ -28,6 +28,7 @@ const IGNORE = [
   '*.tmp',
   '/extractions/*/transcripts/',
   '/cards/runs/',
+  '/uploads-pending/',
   '',
 ].join('\n');
 

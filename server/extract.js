@@ -72,7 +72,7 @@ export function extractionStatus() {
     startedAt: current?.startedAt || 0,
     waiting: unfiledThreads().length, // threads not yet in the brain
     notes: Boolean((readPad('notes') || '').trim()),
-    cards: readCardLog().filter((e) => e.ts > state.cardsLevel).length,
+    cards: readCardLog().filter((e) => e.ts > state.cardsLevel && e.type !== 'prep').length,
     mail: google.googleConnected(),
     mailLevel: state.mailLevel,
     last: lastRuns(1)[0] || null,
@@ -105,7 +105,19 @@ function writeThreads(dir, changed) {
         artifactLines.push(`- "${artifact.name}" version ${version.v}, ${who}, ${dateTimeDMY(version.ts)}${sent}: \`${dest}\``);
       }
     }
-    const render = (m) => `### ${speaker(m)}, ${dateTimeDMY(m.ts)}\n\n${messageText(m) || '(no text)'}`;
+    // What Florian attached is copied next to the thread file, so the update can read it.
+    const attached = new Map();
+    for (const m of messages.slice(0, count)) {
+      for (const f of m.files || []) {
+        const src = store.uploadPath(thread.id, f.name);
+        if (!src) continue;
+        fs.mkdirSync(filesDir, { recursive: true });
+        const dest = path.join(filesDir, `attached - ${safeFileName(f.name, 120)}`);
+        fs.copyFileSync(src, dest);
+        attached.set(f.name, dest);
+      }
+    }
+    const render = (m) => `### ${speaker(m)}, ${dateTimeDMY(m.ts)}\n\n${messageText(m) || '(no text)'}${m.files?.length ? `\n\n[He attached: ${m.files.map((f) => `"${f.name}"${attached.has(f.name) ? ` at \`${attached.get(f.name)}\`` : ''}`).join(', ')}]` : ''}`;
     const upTo = messages.slice(0, count);
     let earlier = upTo.slice(0, thread.extractedCount).map(render).join('\n\n');
     if (earlier.length > 40_000) earlier = `(the beginning is cut)\n\n${earlier.slice(-40_000)}`;
@@ -139,7 +151,7 @@ function writeCards(dir, cards) {
   const blocks = cards.map((c) => [
     `## ${c.outcome === 'accepted' ? 'Accepted' : 'Declined'}: ${c.title}`,
     '',
-    `- Kind: ${c.type}, by ${c.channel}`,
+    `- Kind: ${c.type}${c.type === 'proposal' ? ' (work Claude offered to do in a thread)' : `, by ${c.channel}`}`,
     `- To: ${c.to || 'not named'}`,
     `- Project or area: ${c.project || 'none named'}`,
     `- Decided: ${dateTimeDMY(c.ts)}${c.how ? ` (${c.how})` : ''}`,
@@ -262,7 +274,8 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
       material.push('- `Notes for Claude.md`');
     }
 
-    const cards = mailOnly ? [] : readCardLog().filter((e) => e.ts > state.cardsLevel && e.ts <= pressedAt);
+    // A preparation the app started from the calendar is a thread, and is filed as one.
+    const cards = mailOnly ? [] : readCardLog().filter((e) => e.ts > state.cardsLevel && e.ts <= pressedAt && e.type !== 'prep');
     if (cards.length) {
       writeCards(dir, cards);
       material.push('- `Cards.md`');

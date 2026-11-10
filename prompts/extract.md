@@ -23,6 +23,10 @@ Each thread file is a conversation with Florian. It has an "Earlier" part, which
    - A spin-off thread says so at its start. What it copied from its original is in its "Earlier" part and is filed from the original, not from the spin-off.
 4. **Mails.** A mail file that was not sent goes into `Artifacts/Mails/` as a draft, in the shape `Claude/Writing Mails.md` defines. A line "[Florian sent the mail …]" means he sent that version from the app: file it into `Artifacts/Mails/sent/` with the last version Claude wrote as the draft and the version he sent as sent, record what the mail fixes (what he promised, asked or announced) in the Brain, and add the Waiting For row for the reply as the vault says.
 
+A thread whose first message says the app started it from his calendar is a preparation for an event. What Claude wrote in the briefing is Claude's; what Florian said in the session is filed like any thinking session.
+
+A file Florian attached to a message is something he gave Claude to work with. Its path is next to his message. Read it when what he said about it needs it; file what he stated, not the file's content as such, unless he asked for it to be kept (then it belongs in `Files/` under the vault's rules).
+
 Most chats hold little that is durable. A thread with nothing to file is a normal result: skip it.
 
 ## Notes for Claude
@@ -39,7 +43,7 @@ If `Mail.md` is there, it holds the mail that arrived and went out since the las
 
 ## Cards
 
-If `Cards.md` is there, it lists the opportunity and chase cards Florian accepted or declined since the last update, with the text as proposed and as he sent it. Where he wrote something about a card, those are his own words: a reason is a stated rule about that kind of item, to be logged with the outcome as the vault describes. A correction ("this is outdated, we already met") is a fact: fix it in the Brain note it concerns, as "Florian said DD-MM-YYYY that …". An accepted card is a message he sent: record it where the vault says sent messages go, with the Waiting For row for the reply, and for a chase card move the row's chase date on by a week. Log every card's outcome the way `Claude/Learning From Feedback.md` describes for opportunities.
+If `Cards.md` is there, it lists the opportunity and chase cards Florian accepted or declined since the last update, with the text as proposed and as he sent it. Where he wrote something about a card, those are his own words: a reason is a stated rule about that kind of item, to be logged with the outcome as the vault describes. A correction ("this is outdated, we already met") is a fact: fix it in the Brain note it concerns, as "Florian said DD-MM-YYYY that …". An accepted opportunity or chase card is a message he sent: record it where the vault says sent messages go, with the Waiting For row for the reply, and for a chase card move the row's chase date on by a week. A proposal card is different: it is work Claude offered to do. An accepted one became a thread, which is filed as a thread; for the card itself only the outcome is logged. Log every card's outcome the way `Claude/Learning From Feedback.md` describes for opportunities.
 
 ## What not to write
 

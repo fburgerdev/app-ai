@@ -228,7 +228,7 @@ test('update brain raises the water level to the press, files the notes and empt
 
 test('cards: made in the background, edited in place, accepted or declined, never made twice', async () => {
   await call('POST', '/api/cards/make', {});
-  const s = await until(async () => { const x = await state(); return x.threads.filter((t) => t.kind === 'card' && t.state === 'ready').length === 2 ? x : null; }, 'two cards');
+  const s = await until(async () => { const x = await state(); return x.threads.filter((t) => t.kind === 'card' && t.state === 'ready').length === 3 ? x : null; }, 'three cards');
   const opp = s.threads.find((t) => t.card?.type === 'opportunity');
   const chase = s.threads.find((t) => t.card?.type === 'chase');
   assert.equal(opp.card.channel, 'linkedin');
@@ -250,13 +250,84 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   await call('POST', `/api/threads/${chase.id}/mail/send`, { name: 'Message.md' });
   assert.equal((await thread(chase.id)).thread.card.how, 'sent');
 
-  const log = fs.readFileSync(path.join(data, 'cards', 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  // A proposal is work Claude offers to do: accepting it starts the thread, with his edits.
+  const proposal = s.threads.find((t) => t.card?.type === 'proposal');
+  assert.equal(proposal.card.channel, 'thread');
+  assert.equal(proposal.project, 'Motion');
+  const brief = await artifactText(proposal.id, 'Message.md');
+  await call('POST', `/api/threads/${proposal.id}/artifact/save`, { name: 'Message.md', content: `${brief.trim()} Keep it to one page.\n` });
+  const took = (await call('POST', `/api/threads/${proposal.id}/card`, { outcome: 'accepted' })).data;
+  assert.equal(took.thread.card.how, 'started as a thread');
+  assert.equal(took.started.project, 'Motion');
+  assert.equal(took.started.title, proposal.title);
+  const work = await ready(took.started.id);
+  assert.equal(work.messages[0].auto, true, 'the brief is the app\'s message, not something Florian said');
+  assert.match(work.messages[0].text, /^Florian accepted this proposal of yours, after editing it\. Do the work:\n\nWork out a timeline.*Keep it to one page\.$/s);
+
+  // Something in the calendar for tomorrow: no card to decide, a thread that prepares him.
+  const prep = (await state()).threads.find((t) => t.kind === 'prep');
+  assert.equal(prep.title, 'Prepare: example fair tomorrow');
+  assert.equal(prep.project, 'Campaign');
+  const prepared = await ready(prep.id);
+  assert.match(prepared.messages[0].text, /^The app looked at Florian's calendar/);
+  assert.equal(prepared.thread.lastUserAt, 0);
+
+  const log = fs.readFileSync(path.join(data, 'cards', 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.type !== 'prep' && l.type !== 'proposal');
   assert.equal(log.length, 2);
   assert.equal(log[0].edited, true);
   assert.match(log[0].proposed, /zweite Absatz/);
   assert.doesNotMatch(log[0].final, /zweite Absatz/);
   assert.equal(log[0].reason, 'we already met at the summit, so I shortened it', 'what he wrote about a card is kept with its outcome');
-  assert.equal((await state()).brain.cards, 2, 'both outcomes wait for the next brain update');
+  assert.equal((await state()).brain.cards, 3, 'the outcomes wait for the next brain update; the preparation is a thread, not a card');
+  // A second run makes none of them again: the calendar entry is not prepared twice.
+  const threadsBefore = (await state()).threads.length;
+  await call('POST', '/api/cards/make', {});
+  await until(async () => ((await state()).cards.running ? null : true), 'second run done');
+  assert.equal((await state()).threads.filter((t) => t.kind === 'prep').length, 1);
+  assert.ok((await state()).threads.length >= threadsBefore);
+});
+
+test('send and done closes the thread once Claude has answered; files can be attached; Claude spins off on request', async () => {
+  // Attach a file to a new thread.
+  const up = await call('POST', '/api/uploads', { name: '../../notes on the meeting.txt', data: Buffer.from('The board meets on the 14th.').toString('base64') });
+  assert.equal(up.status, 200);
+  assert.equal(up.data.name, 'notes on the meeting.txt', 'a path in the name is dropped');
+  assert.equal((await call('POST', '/api/uploads', { name: 'empty.txt', data: '' })).status, 400);
+  const made = (await call('POST', '/api/threads', { text: 'Summarise the attached notes', files: [up.data.id, 'no-such-upload'] })).data.thread;
+  const first = await ready(made.id);
+  assert.deepEqual(first.messages[0].files, [{ name: 'notes on the meeting.txt', size: 28 }]);
+  assert.ok(fs.existsSync(path.join(data, 'threads', made.id, 'uploads', 'notes on the meeting.txt')));
+  assert.ok(!fs.existsSync(path.join(data, 'uploads-pending', up.data.id)), 'the upload moved into the thread');
+  const got = await fetch(`${base}/api/threads/${made.id}/upload?name=${encodeURIComponent('notes on the meeting.txt')}`);
+  assert.equal(await got.text(), 'The board meets on the 14th.');
+  assert.equal((await fetch(`${base}/api/threads/${made.id}/upload?name=..%2Fthread.json`)).status, 404);
+
+  // A message with only a file, and a second file of the same name.
+  const again = await call('POST', '/api/uploads', { name: 'notes on the meeting.txt', data: Buffer.from('v2').toString('base64') });
+  await call('POST', `/api/threads/${made.id}/messages`, { text: '', files: [again.data.id] });
+  const second = await ready(made.id);
+  assert.equal(second.messages.at(-2).files[0].name, 'notes on the meeting (2).txt');
+
+  // Send and done: no stop in the inbox on the way.
+  const sent = await call('POST', `/api/threads/${made.id}/messages`, { text: 'Thanks, file that and we are finished here', done: true });
+  assert.equal(sent.data.thread.state, 'working');
+  const closed = await until(async () => { const t = await thread(made.id); return t.thread.state === 'done' ? t : null; }, 'closed by itself');
+  assert.equal(closed.messages.at(-1).role, 'assistant', 'with Claude\'s answer in it');
+  assert.equal(closed.thread.doneAfter, false);
+
+  // Asked in the message, Claude spins off a thread of its own and carries on here.
+  const before = (await state()).threads.length;
+  await call('POST', `/api/threads/${planThread}/messages`, { text: 'Go with option two. Also spin off a new task only about the mail draft.' });
+  const spun = await until(async () => (await state()).threads.find((t) => t.spunFrom === planThread && /mail draft/.test(t.title)) || null, 'spun off');
+  assert.equal((await state()).threads.length, before + 1);
+  const spunDone = await ready(spun.id);
+  assert.equal(spunDone.messages.at(-2).auto, true);
+  assert.match(spunDone.messages.at(-2).text, /^Florian asked in the thread ".*" for this to be spun off.*\n\nWork only on the mail draft\.$/s);
+  assert.equal(spunDone.messages.at(-3).text, 'Go with option two. Also spin off a new task only about the mail draft.', 'it starts from the conversation as it stood');
+  assert.equal(spunDone.thread.lastUserAt, 0, 'nothing in the spin-off is Florian\'s own yet');
+  const original = await ready(planThread);
+  assert.equal(original.messages.at(-1).role, 'assistant', 'the original thread got its answer too');
+  assert.ok(!(await state()).threads.some((t) => t.spunFrom === spun.id), 'and the spin-off does not spin off again');
 });
 
 test('a spin-off starts as a copy; the original goes to the back untouched; a thread can be deleted', async () => {

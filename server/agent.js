@@ -87,8 +87,35 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
       return mode === 'thread' && google ? allow(input) : deny('Gmail and Calendar are not connected in this app.');
     }
 
+    // The app's own tools for a thread (spinning off another thread).
+    if (toolName.startsWith('mcp__app__')) {
+      return mode === 'thread' ? allow(input) : deny('That is only available in a thread.');
+    }
+
     return deny(`${toolName} is not available in this app.`);
   };
+}
+
+// The app's own tools for a thread. `spinOff` starts a new thread from this one.
+async function buildAppServer({ spinOff }) {
+  const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
+  const { z } = await import('zod');
+  return createSdkMcpServer({
+    name: 'app',
+    version: '1.0.0',
+    instructions: 'Tools of Florian\'s inbox app itself.',
+    tools: [
+      tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
+        { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
+        async (args) => {
+          try {
+            return { content: [{ type: 'text', text: await spinOff(args) }] };
+          } catch (err) {
+            return { content: [{ type: 'text', text: err.message }], isError: true };
+          }
+        }),
+    ],
+  });
 }
 
 // A short line for the interface saying what a tool call does.
@@ -114,6 +141,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'PowerShell': return `Ran ${clip(input.command, 80)}`;
     case 'Agent':
     case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
+    case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
@@ -158,7 +186,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers }) {
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers: givenServers, spinOff }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -269,7 +298,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent, spinOff }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -358,9 +387,14 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   }
 
   if (/CARDS-RUN/.test(prompt)) {
-    // A stand-in card run: one opportunity and one chase card.
+    // A stand-in card run: an opportunity, a chase, a proposal, and something from the calendar.
     fs.mkdirSync(artifactsDir, { recursive: true });
     const stamp = Date.now().toString(36);
+    // Names from the vault's own index, so the stand-in's cards land in real folders.
+    let index = '';
+    try { index = fs.readFileSync(path.join(cwd, 'Brain', 'Projects', 'Projects Index.md'), 'utf8'); } catch { /* no index */ }
+    const someProject = /^- \[\[([^\]]+)\]\]/m.exec(index)?.[1] || '';
+    const someArea = /^## \[\[([^\]]+)\]\]/m.exec(index)?.[1] || '';
     fs.writeFileSync(path.join(artifactsDir, 'one.json'), JSON.stringify({
       type: 'opportunity', channel: 'linkedin', key: `opp:example-person:${stamp}`,
       title: 'Connect with an example person', why: 'Runs catering at an example Studierendenwerk; no contact yet.',
@@ -373,7 +407,21 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       project: '', to: 'office@example.org', subject: 'Kurze Nachfrage',
       text: 'Hallo Frau Beispiel,\n\nich wollte kurz nachfragen, ob es schon Neuigkeiten gibt.\n\nViele Grüße\nFlorian',
     }));
-    return { sessionId, text: 'Made 2 cards.', finalText: 'Made 2 cards.', error: '', aborted: false };
+    fs.writeFileSync(path.join(artifactsDir, 'three.json'), JSON.stringify({
+      type: 'proposal', channel: 'thread', key: 'proposal:example-motion:timeline',
+      title: 'Work out the motion\'s timeline', why: 'The motion has had no activity for two weeks and the session date is close.',
+      project: someProject,
+      text: 'Work out a timeline for the motion: who has to be asked by when, counted back from the session date in the project note. Hand back a one-page plan and the first two mails as drafts.',
+    }));
+    if (/The calendar is connected/.test(userPrompt)) {
+      fs.writeFileSync(path.join(artifactsDir, 'four.json'), JSON.stringify({
+        type: 'prep', channel: 'thread', key: 'prep:2026-11-11:example-fair',
+        title: 'Prepare: example fair tomorrow', why: 'In the calendar for tomorrow, 10:00, and nothing in the Brain prepares it.',
+        project: someArea,
+        text: 'Tomorrow at 10:00 the calendar has "Example fair". Brief Florian on what he wants out of it, from the project notes, then start a preparation session with him.',
+      }));
+    }
+    return { sessionId, text: 'Made the cards.', finalText: 'Made the cards.', error: '', aborted: false };
   }
 
   if (/FAIL-TEST/.test(prompt)) {
@@ -381,6 +429,13 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   }
 
   let text = '';
+  // "…spin off a new task about X": the stand-in does it, as the real Claude would with its tool.
+  const newest = userPrompt.split('The new message:').pop();
+  const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
+  if (wanted) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__spin_off', summary: `Spun off a thread: ${wanted[1].trim()}` });
+    await spinOff({ title: `Only ${wanted[1].trim()}`, task: `Work only on ${wanted[1].trim()}.` });
+  }
   text += await say('Let me look at what the vault has on this.\n\n');
   onEvent?.({ type: 'tool-input', name: 'Read', input: { file_path: path.join(cwd, 'Brain', 'Next Actions.md'), offset: 1, limit: 40 } });
   onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Brain/Next Actions.md' });

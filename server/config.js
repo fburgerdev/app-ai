@@ -82,6 +82,7 @@ const DEFAULTS = {
     keepReady: 3, // how many unseen cards to keep in stock
     perRun: 3, // how many one run may make
     pauseMinutes: 45, // shortest time between two runs
+    calendarHours: 3, // how often to look at the calendar for something to prepare
   },
 
   // Whether Claude may run shell commands inside threads. Off: threads can read the

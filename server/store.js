@@ -24,6 +24,7 @@ const metaFile = (id) => path.join(threadDir(id), 'thread.json');
 const messagesFile = (id) => path.join(threadDir(id), 'messages.jsonl');
 const artifactIndexFile = (id) => path.join(threadDir(id), 'artifacts.json');
 export const artifactsDir = (id) => path.join(threadDir(id), 'artifacts');
+export const uploadsDir = (id) => path.join(threadDir(id), 'uploads'); // files Florian attached
 const versionsDir = (id) => path.join(threadDir(id), 'versions');
 
 function writeJson(file, value) {
@@ -89,7 +90,7 @@ export function copyThread(sourceId, { title }) {
     const from = path.join(threadDir(sourceId), name);
     if (fs.existsSync(from)) fs.copyFileSync(from, path.join(threadDir(copy.id), name));
   }
-  for (const dir of ['artifacts', 'versions']) {
+  for (const dir of ['artifacts', 'versions', 'uploads']) {
     const from = path.join(threadDir(sourceId), dir);
     if (fs.existsSync(from)) fs.cpSync(from, path.join(threadDir(copy.id), dir), { recursive: true });
   }
@@ -127,6 +128,32 @@ export function createThread({ title, kind = 'chat', sessionId = null, project =
   threads.set(id, meta);
   events.emit('thread', meta);
   return meta;
+}
+
+// Moves files Florian uploaded into a thread. `pending` are folders holding one file
+// each. Returns what the message carries: the name the file has in the thread, and its size.
+export function attachFiles(id, pending) {
+  const out = [];
+  if (!threads.has(id)) return out;
+  for (const dir of pending) {
+    let name;
+    try { name = fs.readdirSync(dir)[0]; } catch { continue; }
+    if (!name) continue;
+    fs.mkdirSync(uploadsDir(id), { recursive: true });
+    const ext = path.extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    let final = name;
+    for (let n = 2; fs.existsSync(path.join(uploadsDir(id), final)); n += 1) final = `${stem} (${n})${ext}`;
+    fs.renameSync(path.join(dir, name), path.join(uploadsDir(id), final));
+    fs.rmSync(dir, { recursive: true, force: true });
+    out.push({ name: final, size: fs.statSync(path.join(uploadsDir(id), final)).size });
+  }
+  return out;
+}
+
+export function uploadPath(id, name) {
+  const file = path.join(uploadsDir(id), path.basename(String(name)));
+  return fs.existsSync(file) ? file : null;
 }
 
 // Removes a thread for good: its conversation, its files and their versions. What a

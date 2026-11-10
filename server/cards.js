@@ -17,6 +17,8 @@ import { runAgent } from './agent.js';
 import * as brain from './brain.js';
 import * as google from './google.js';
 import * as store from './store.js';
+import * as runner from './runner.js';
+import { isKnownProject } from './projects.js';
 import { getState, readPad } from './state.js';
 import { parseMail, serializeMail } from './mail.js';
 import { recordDecision } from './queue.js';
@@ -30,6 +32,7 @@ export const CARD_FILE = 'Message.md';
 let config;
 let running = false;
 let lastRun = 0;
+let lastLook = 0; // when the calendar was last looked at
 let lastMade = -1;
 let lastError = '';
 
@@ -63,7 +66,7 @@ function createCard(card) {
   const thread = store.createThread({
     title: card.title,
     kind: 'card',
-    project: card.project || '',
+    project: isKnownProject(card.project) ? card.project : '',
     card: { type: card.type, channel: card.channel, key: card.key, why: card.why, to: card.to, link: card.link || '' },
   });
   const body = card.channel === 'mail'
@@ -75,28 +78,48 @@ function createCard(card) {
   return thread;
 }
 
+// A proposal or a prep is work in a thread, not a message to someone.
+const WORK = ['proposal', 'prep'];
+
 function valid(card) {
-  return card && ['opportunity', 'chase'].includes(card.type) && ['mail', 'linkedin', 'message'].includes(card.channel)
+  if (!card || !['opportunity', 'chase', ...WORK].includes(card.type)) return false;
+  if (WORK.includes(card.type)) card.channel = 'thread';
+  return ['mail', 'linkedin', 'message', 'thread'].includes(card.channel) && (card.channel === 'thread') === WORK.includes(card.type)
     && typeof card.title === 'string' && card.title.trim() && typeof card.text === 'string' && card.text.trim()
     && typeof card.key === 'string' && card.key.trim();
 }
 
+const calendarOn = () => config.fake || google.googleConnected();
+const enoughCards = () => openCards().length >= (Number(config.cards.keepReady) || 3);
+
 // Starts a run if it is time for one. Called whenever Florian moves through the queue.
+// Two things can make it time: fewer cards waiting than there should be, or the calendar
+// not having been looked at for a while.
 export function maybeMakeCards() {
   if (!config.cards.auto || running || !brain.brainStatus().ready) return false;
-  if (openCards().length >= (Number(config.cards.keepReady) || 3)) return false;
   // After a run that found nothing, wait much longer before looking again.
   const pause = (lastMade === 0 ? 6 * 60 : Number(config.cards.pauseMinutes) || 45) * 60_000;
-  if (Date.now() - lastRun < pause) return false;
-  makeCards().catch(() => {});
+  const wantCards = !enoughCards() && Date.now() - lastRun >= pause;
+  const wantCalendar = calendarOn() && Date.now() - lastLook >= (Number(config.cards.calendarHours) || 3) * 3600_000;
+  if (!wantCards && !wantCalendar) return false;
+  makeCards({ cards: wantCards }).catch(() => {});
   return true;
 }
 
-export async function makeCards() {
+// A thread the app starts by itself: the brief becomes the first message, marked as the
+// app's, and the Claude in the thread takes it from there.
+function startWork(card, text, lead) {
+  const thread = store.createThread({ title: card.title, kind: card.type === 'prep' ? 'prep' : 'chat', project: isKnownProject(card.project) ? card.project : '' });
+  runner.sendMessage(thread.id, `${lead}\n\n${text.trim()}`, { auto: true });
+  return thread;
+}
+
+export async function makeCards({ cards: wantCards = true } = {}) {
   if (running) return cardsStatus();
   if (!brain.brainStatus().ready) throw new Error('The brain is not cloned yet.');
   running = true;
-  lastRun = Date.now();
+  if (wantCards) lastRun = Date.now();
+  if (calendarOn()) lastLook = Date.now();
   lastError = '';
   store.events.emit('cards', cardsStatus());
   const id = new Date().toISOString().replace(/[:.]/g, '-');
@@ -110,7 +133,9 @@ export async function makeCards() {
     const result = await runAgent({
       prompt: readPrompt('cards.md', {
         today: todayLine(),
-        count: String(Math.max(1, Number(config.cards.perRun) || 3)),
+        count: String(wantCards ? Math.max(1, Number(config.cards.perRun) || 3) : 0),
+        calendar: calendarOn() ? readPrompt('cards-calendar.md').trim() : 'The calendar is not connected. Skip this part.',
+        threads: store.listThreads().filter((t) => t.kind !== 'card' && t.state !== 'done').map((t) => `- ${t.title}${t.project ? ` (${t.project})` : ''}`).slice(0, 60).join('\n') || '(none)',
         outDir,
         made: made.length ? made.slice(-300).join('\n') : '(none yet)',
         profile: profile ? `What his earlier choices have shown (make more of what he takes, none of what he declines):\n\n${profile}` : '',
@@ -130,16 +155,26 @@ export async function makeCards() {
     if (result.error) throw new Error(result.error);
     const known = new Set([...readCardLog().map((e) => e.key), ...openCards().map((t) => t.card.key)]);
     let count = 0;
+    let preps = 0;
     for (const name of fs.readdirSync(outDir).filter((n) => n.endsWith('.json'))) {
       let card;
       try { card = JSON.parse(fs.readFileSync(path.join(outDir, name), 'utf8')); } catch { continue; }
       if (!valid(card) || known.has(card.key)) continue;
       known.add(card.key);
+      if (card.type === 'prep') {
+        // Something coming up in the calendar: no card to decide, the thread starts at once.
+        if (preps >= 2) continue;
+        preps += 1;
+        const thread = startWork(card, card.text, 'The app looked at Florian\'s calendar and found this coming up. He has not asked for this thread; it is here so he is prepared. Do what the brief says, then end your turn with the first question of the preparation session.');
+        fs.appendFileSync(LOG, JSON.stringify({ ts: Date.now(), key: card.key, type: 'prep', channel: 'thread', title: card.title, project: thread.project, to: '', outcome: 'started', how: 'by itself, from the calendar', edited: false, mood: getState().mood.trim(), proposed: card.text }) + '\n');
+        continue;
+      }
+      if (!wantCards) continue;
       createCard(card);
       count += 1;
     }
-    lastMade = count;
-    log(`cards: made ${count}`);
+    if (wantCards) lastMade = count;
+    log(`cards: made ${count}${preps ? `, started ${preps} preparation${preps === 1 ? '' : 's'}` : ''}`);
   } catch (err) {
     lastError = err.message;
     lastMade = -1;
@@ -175,12 +210,20 @@ export function decideCard(thread, outcome, how = '', reason = '') {
     proposed: first,
     final: outcome === 'accepted' ? final : undefined,
   };
-  fs.appendFileSync(LOG, JSON.stringify(entry) + '\n');
   // For the queue's learning: what kind of change he made, in a few words.
   let change = '';
   if (edited) change = final.length < first.length * 0.85 ? 'shortened it' : final.length > first.length * 1.15 ? 'added to it' : 'reworded it';
   recordDecision(outcome, thread, { ...(change ? { edited: change } : {}), ...(reason ? { reason } : {}) });
-  store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), archived: true, card: { ...thread.card, outcome, how, reason } });
+  // An accepted proposal becomes the thread that does the work.
+  let started = null;
+  if (outcome === 'accepted' && thread.card.type === 'proposal') {
+    started = startWork({ ...thread.card, title: thread.title, project: thread.project }, final,
+      `Florian accepted this proposal of yours${edited ? ', after editing it' : ''}${reason ? ` (he added: ${reason})` : ''}. Do the work:`);
+    how = 'started as a thread';
+    entry.how = how;
+  }
+  store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), archived: true, card: { ...thread.card, outcome, how, reason, started: started?.id || '' } });
+  fs.appendFileSync(LOG, JSON.stringify(entry) + '\n');
   maybeMakeCards();
-  return entry;
+  return { ...entry, started };
 }
