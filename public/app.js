@@ -128,7 +128,8 @@ function inbox() {
   return ready.sort((a, b) => (pos.get(a.id) ?? 1e6) - (pos.get(b.id) ?? 1e6));
 }
 const working = () => all().filter((t) => t.state === 'working').sort((a, b) => a.updatedAt - b.updatedAt);
-const done = () => all().filter((t) => t.state === 'done' && t.kind !== 'card').sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
+// Done lists only what is not in the brain yet: a brain update archives the rest.
+const done = () => all().filter((t) => t.state === 'done' && t.kind !== 'card' && !t.archived).sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
 const nextReady = (exceptId) => inbox().find((t) => t.id !== exceptId) || null;
 const isUnfiled = (t) => t.kind !== 'card' && (t.lastUserAt || 0) > (t.extractedCount || 0);
 
@@ -150,7 +151,7 @@ function railItem(t) {
   let sub = '';
   if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
-  else sub = t.archived ? 'in the brain' : isUnfiled(t) ? 'not in the brain yet' : 'closed';
+  else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
   return h('button', {
     class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}`,
@@ -523,8 +524,11 @@ function renderBrain() {
     if (b.notes) bits.push('your notes');
     if (b.cards) bits.push(`${b.cards} ${b.cards === 1 ? 'card' : 'cards'}`);
     rows.push(h('p', { class: 'brain-line' }, bits.length ? `Not in the brain yet: ${bits.join(', ')}` : 'Nothing new to file in the brain'));
+    // Counted here, from the threads the page has, so it is current the moment they are archived.
+    const clean = done().filter((t) => !isUnfiled(t)).length;
+    if (clean) rows.push(h('p', { class: 'brain-sub' }, `${clean} closed ${clean === 1 ? 'thread is' : 'threads are'} already in the brain and leave Done with the next update.`));
     rows.push(h('div', { class: 'brain-btns' },
-      h('button', { class: 'brain-go', type: 'button', disabled: !bits.length && !b.mail, title: 'Files what is new in the threads, the cards you decided and new mail (Alt U)', onclick: () => updateBrain() },
+      h('button', { class: 'brain-go', type: 'button', disabled: !bits.length && !b.mail && !clean, title: 'Files what is new in the threads, the cards you decided and new mail, and clears Done of what is already in the brain (Alt U)', onclick: () => updateBrain() },
         svg(MARK), h('span', { class: 'brain-go-text' }, 'Update brain')),
       h('button', { class: 'btn', type: 'button', disabled: !b.mail, title: b.mail ? 'Takes in the mail that arrived and went out since the last time, and nothing else' : 'Connect Gmail in the settings first', onclick: () => updateBrain('mail') }, 'Update Gmail'),
     ));
@@ -823,7 +827,7 @@ function renderHead() {
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: markDone }, 'Done ', kbd('Alt X')));
   } else {
-    status = h('span', { class: 'status status-done' }, t.archived ? 'Done, and in the brain' : 'Done');
+    status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
   }
   const files = t.kind === 'card' ? [] : S.view?.artifacts || [];

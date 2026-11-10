@@ -132,6 +132,8 @@ Then the app makes one `thinking:` commit and pushes. What the vault says needs 
 
 **Update Gmail**, next to it, is the mail part by itself, with its own water level: everything received and sent since mail was last taken in (the first time: the last day). What matters is filed in the brain, sent mail gets its Waiting For row, and a mail that needs your answer becomes a thread in the queue with Claude already drafting the reply. Under the buttons you see up to when mail has been taken in.
 
+**Done stays short.** A closed thread whose content is entirely in the brain is archived by the next "Update brain" and leaves the Done list. A thread closed with nothing of yours left to file is archived by the press alone, even when there is nothing else to file. Archived threads are kept in the app's data, not deleted; reopening one brings it back.
+
 These two buttons are the only things in the app that write the vault, and they run only when you press them.
 
 ## Projects and areas

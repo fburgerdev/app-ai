@@ -312,6 +312,25 @@ test('the outline knows paused projects and when each was dealt with; threads st
   assert.equal((await call('POST', '/api/projects/start', { which: 'nonsense' })).status, 400);
 });
 
+test('update brain archives closed threads that are entirely in the brain, with or without a run', async () => {
+  // A thread closed with nothing of Florian's to file: archived by the press, no run needed.
+  const quiet = (await call('POST', '/api/threads', { text: 'A quick question' })).data.thread;
+  await ready(quiet.id);
+  await until(async () => ((await state()).brain.running ? null : true), 'no update running');
+  await call('POST', '/api/brain/extract', {});
+  await until(async () => ((await state()).brain.running ? null : true), 'update done');
+  await call('POST', `/api/threads/${quiet.id}/state`, { state: 'done' });
+  assert.equal((await thread(quiet.id)).thread.archived, false, 'closing alone does not archive');
+  const out = (await call('POST', '/api/brain/extract', {})).data;
+  assert.equal(out.started, false);
+  assert.equal(out.cleared, 1);
+  assert.match(out.reason, /Archived 1 closed thread/);
+  assert.equal((await thread(quiet.id)).thread.archived, true);
+  // Reopening brings it back.
+  await call('POST', `/api/threads/${quiet.id}/state`, { state: 'ready' });
+  assert.equal((await thread(quiet.id)).thread.archived, false);
+});
+
 test('send and done closes the thread once Claude has answered; files can be attached; Claude spins off on request', async () => {
   // Attach a file to a new thread.
   const up = await call('POST', '/api/uploads', { name: '../../notes on the meeting.txt', data: Buffer.from('The board meets on the 14th.').toString('base64') });

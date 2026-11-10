@@ -46,6 +46,16 @@ function setStep(step) {
 // Cards are not conversations; their outcomes are filed from the card log.
 const unfiledThreads = () => store.listThreads().filter((t) => t.kind !== 'card' && store.isUnfiled(t));
 
+// Closed threads with nothing left to file: entirely in the brain. A brain update
+// archives them, so the Done list holds only what still has to go in.
+const filedDone = () => store.listThreads().filter((t) => t.kind !== 'card' && t.state === 'done' && !t.archived && !store.isUnfiled(t));
+function archiveFiled() {
+  const list = filedDone();
+  for (const t of list) store.updateThread(t.id, { archived: true });
+  if (list.length) log(`brain update: archived ${list.length} closed ${list.length === 1 ? 'thread' : 'threads'} already in the brain`);
+  return list.length;
+}
+
 export function lastRuns(limit = 15) {
   if (!fs.existsSync(EXTRACTIONS_DIR)) return [];
   return fs
@@ -71,6 +81,7 @@ export function extractionStatus() {
     step: current?.step || '',
     startedAt: current?.startedAt || 0,
     waiting: unfiledThreads().length, // threads not yet in the brain
+    clean: filedDone().length, // closed threads already in the brain, archived by the next update
     notes: Boolean((readPad('notes') || '').trim()),
     cards: readCardLog().filter((e) => e.ts > state.cardsLevel && e.type !== 'prep').length,
     mail: google.googleConnected(),
@@ -221,8 +232,12 @@ export function startExtraction({ only = '' } = {}) {
   const status = extractionStatus();
   const mailOnly = only === 'mail';
   if (mailOnly && !status.mail) return { started: false, reason: 'Gmail is not connected. Connect it in the settings.' };
+  // What is closed and already filed is archived at once; it needs no run.
+  const cleared = mailOnly ? 0 : archiveFiled();
   if (!mailOnly && !status.waiting && !status.notes && !status.cards && !status.mail) {
-    return { started: false, reason: 'Nothing new to file: everything is already in the brain.' };
+    return { started: false, cleared, reason: cleared
+      ? `Nothing new to file. Archived ${cleared} closed ${cleared === 1 ? 'thread' : 'threads'} already in the brain.`
+      : 'Nothing new to file: everything is already in the brain.' };
   }
 
   const id = new Date().toISOString().replace(/[:.]/g, '-');
@@ -306,6 +321,7 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
         const thread = store.getThread(c.thread.id);
         if (!thread) continue;
         const patch = { extractedCount: c.count, extractedAt: pressedAt };
+        // Closed, and nothing said in it since the press: it is entirely in the brain now.
         if (thread.state === 'done' && thread.messageCount <= c.count) patch.archived = true;
         store.updateThread(c.thread.id, patch);
       }
