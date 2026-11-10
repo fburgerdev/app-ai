@@ -1,6 +1,6 @@
 {
-  "name": "Inbox",
-  "short_name": "Inbox",
+  "name": "Brain",
+  "short_name": "Brain",
   "description": "Threads with Claude that you steer by feedback.",
   "start_url": "/",
   "display": "standalone",

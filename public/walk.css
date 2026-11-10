@@ -8,18 +8,21 @@
   --sans: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--ground); color: var(--text); font: 16px/1.45 var(--sans); overscroll-behavior: none; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; color: inherit; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 :focus-visible { outline: 2px solid var(--you); outline-offset: 2px; }
 
+/* Pinned to the screen's edges, so the page itself never scrolls: only the conversation
+   in the middle does, and the Talk button is always in view. */
 .walk {
-  height: 100dvh; max-width: 40rem; margin: 0 auto; display: flex; flex-direction: column; gap: 10px;
+  position: fixed; inset: 0; max-width: 40rem; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
   padding: max(10px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom));
 }
 
 .bar { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.bar, .now, .live, .chips, .type, .dock, .note { flex: none; }
 .back { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); text-decoration: none; font-weight: 550; padding: 8px 8px 8px 0; }
 .chip {
   margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;

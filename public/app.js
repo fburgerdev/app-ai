@@ -9,10 +9,12 @@ const $ = (id) => document.getElementById(id);
 const els = {
   app: $('app'), lists: $('rail-lists'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
-  send: $('send'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
+  send: $('send'), spin: $('spin'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   mood: $('mood'), model: $('model'), effort: $('effort'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
-  rail: document.querySelector('.rail'), edge: $('rail-edge'), edgeCount: $('edge-count'), backdrop: $('rail-backdrop'),
-  pin: $('rail-pin'), railClose: $('rail-close'), phoneThreads: $('phone-threads'), phoneCount: $('phone-count'), phoneNew: $('phone-new'),
+  rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
+  pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
+  openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openScratch: $('open-scratch'), openSettings: $('open-settings'),
+  settings: $('settings'), settingsBody: $('settings-body'), settingsClose: $('settings-close'),
 };
 
 const S = {
@@ -30,7 +32,8 @@ const S = {
   cards: { running: false, ready: 0 },
   projects: null,
   tab: 'queue',
-  openProject: '',
+  settingsTab: 'connections',
+  lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
   showDone: false,
@@ -140,7 +143,7 @@ function kindLabel(t) {
   return KIND[t.kind] || '';
 }
 
-// ---------- the rail ----------
+// ---------- the inbox ----------
 
 function railItem(t) {
   let sub = '';
@@ -158,12 +161,13 @@ function railItem(t) {
     h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
     h('span', { class: 'item-text' },
       h('span', { class: 'item-title' }, t.title),
-      h('span', { class: 'item-sub' }, label ? h('span', { class: 'tag' }, label) : null, t.project && S.tab === 'queue' ? `${t.project}, ` : '', sub),
+      h('span', { class: 'item-sub' }, label ? h('span', { class: 'tag' }, label) : null, t.project ? `${t.project}, ` : '', sub),
     ),
   );
 }
 
-const section = (label, count, items, extra) => h('section', { class: 'group' },
+// `drop` names what dropping a thread on the section does: "queue" or "done".
+const section = (label, count, items, extra, drop) => h('section', { class: 'group', dataset: drop ? { drop } : {} },
   h('h2', { class: 'group-head' }, label, count ? h('span', { class: 'count' }, String(count)) : null, extra),
   ...items,
 );
@@ -176,56 +180,148 @@ function queueLists() {
   const note = S.queue.ranking ? 'ordering…' : S.queue.why && ready.length > 1 ? `first because: ${S.queue.why}` : '';
   parts.push(section('Next up', ready.length, [
     note ? h('p', { class: 'group-note' }, note) : null,
-    ...(ready.length ? ready.map((t) => { const el = railItem(t); if (ready.length > 1) el.dataset.drag = '1'; return el; }) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
+    ...(ready.length ? ready.map(railItem) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
     h('p', { class: 'group-foot' }, S.cards.running
       ? h('span', { class: 'looking' }, h('span', { class: 'pulse' }), 'Looking for opportunities')
       : h('button', { class: 'link', type: 'button', onclick: () => api('POST', '/api/cards/make', {}).catch((e) => toast(e.message)) }, 'Look for opportunities')),
-  ]));
+  ], null, 'queue'));
   if (busy.length) parts.push(section('Claude is working', busy.length, busy.map(railItem)));
-  if (closed.length) {
-    const toggle = h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show');
-    parts.push(section('Done', closed.length, S.showDone ? closed.map(railItem) : [], toggle));
-  }
+  const toggle = closed.length ? h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show') : null;
+  parts.push(section('Done', closed.length, [
+    h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
+    ...(S.showDone ? closed.map(railItem) : []),
+  ], toggle, 'done'));
   return parts;
 }
 
-function projectLists() {
-  const tree = S.projects;
-  if (!tree) return [h('p', { class: 'group-empty' }, 'Reading the vault…')];
-  if (tree.missing) return [h('p', { class: 'group-empty' }, 'The vault has no Projects Index yet.')];
-  const row = (node, isArea) => {
-    const open = S.openProject === node.name;
-    const mine = all().filter((t) => t.project === node.name && t.kind !== 'card' && t.state !== 'done')
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    const touched = node.touched ? ago(node.touched) : 'no thread yet';
-    return h('div', { class: `proj${isArea ? ' is-area' : ''}${open ? ' is-open' : ''}` },
-      h('button', { class: 'proj-row', type: 'button', title: node.about || node.name, onclick: () => { S.openProject = open ? '' : node.name; renderRail(); } },
-        h('span', { class: 'proj-name' }, node.name),
-        h('span', { class: `proj-meta${node.open ? ' has-open' : ''}` }, node.open ? `${node.open} open, ${touched}` : touched),
-      ),
-      open ? h('div', { class: 'proj-body' },
-        node.about ? h('p', { class: 'proj-about' }, node.about) : null,
-        ...mine.map(railItem),
-        h('div', { class: 'proj-actions' },
-          h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openNew(node.name) }, 'New thread here'),
-          h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openPanel({ kind: 'note', link: node.name }) }, 'Read the note'),
-        ),
-      ) : null,
-    );
-  };
-  return tree.groups.map((g) => h('section', { class: 'group' },
-    g.isArea ? row(g, true) : h('h2', { class: 'group-head' }, g.name),
-    ...g.projects.map((p) => row(p, false)),
-  ));
+// ---------- the folder outline: areas, projects, and the threads in them ----------
+
+const svg = (markup) => { const t = document.createElement('template'); t.innerHTML = markup.trim(); return t.content.firstChild; };
+const FOLDER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="flap" d="M3 7.5A1.5 1.5 0 014.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0121 9.7v8.8A1.5 1.5 0 0119.5 20h-15A1.5 1.5 0 013 18.5v-11z"/></svg>';
+
+const wide = window.matchMedia('(min-width: 1100px)');
+const tree = {
+  kept: new Set((() => { try { return JSON.parse(localStorage.getItem('tree-open') || '[]'); } catch { return []; } })()), // opened by a click
+  hover: new Set(), // opened because the pointer rests on them
+  timer: 0,
+};
+
+const threadsIn = (project) => all().filter((t) => t.kind !== 'card' && (t.project || '') === project);
+const openFirst = (list) => [
+  ...list.filter((t) => t.state !== 'done').sort((a, b) => b.updatedAt - a.updatedAt),
+  ...list.filter((t) => t.state === 'done').sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt)).slice(0, 5),
+];
+
+// Where a project sits: [area, project], [area] for an area itself, [] for none.
+function pathOf(project) {
+  if (!project) return [];
+  for (const g of S.projects?.groups || []) {
+    if (g.isArea && g.name === project) return [g.name];
+    if (g.projects.some((p) => p.name === project)) return g.isArea ? [g.name, project] : [project];
+  }
+  return [project];
+}
+
+function treeThread(t) {
+  return h('button', { class: `tree-thread${t.id === S.current ? ' is-current' : ''}`, type: 'button', title: t.title, dataset: { id: t.id }, onclick: () => openThread(t.id) },
+    h('span', { class: `dot dot-${t.state}` }), h('span', {}, t.title));
+}
+
+function folderEl({ key, name, isArea, project, about, threads, kids = [], here }) {
+  const mine = threads || [];
+  const below = [...mine, ...kids.flatMap((k) => k.threads || [])];
+  const ready = below.filter((t) => t.state === 'ready').length;
+  const busy = below.some((t) => t.state === 'working');
+  const open = tree.kept.has(key) || tree.hover.has(key) || here.open.has(key);
+  const current = S.current ? S.threads.get(S.current) : null;
+  const canMove = project != null && current && current.kind !== 'card' && (current.project || '') !== project;
+  const row = h('button', {
+    class: 'folder-row', type: 'button', title: about || name, dataset: { key },
+    onclick: () => {
+      if (open && tree.kept.has(key)) { tree.kept.delete(key); tree.hover.delete(key); } else tree.kept.add(key);
+      try { localStorage.setItem('tree-open', JSON.stringify([...tree.kept])); } catch { /* private mode */ }
+      renderTree();
+    },
+  }, svg(FOLDER), h('span', { class: 'folder-name' }, name),
+  ready || busy ? h('span', { class: `folder-count${ready ? ' has-ready' : ''}${busy ? ' is-working' : ''}` }, ready ? String(ready) : '') : null);
+  const acts = project == null ? null : h('div', { class: 'folder-acts' },
+    project ? h('button', { class: 'link', type: 'button', onclick: () => openNew(project) }, 'New thread') : null,
+    canMove ? h('button', { class: 'link', type: 'button', onclick: () => moveToProject(current.id, project) }, 'Move this thread here') : null,
+    project ? h('button', { class: 'link', type: 'button', onclick: () => openPanel({ kind: 'note', link: project }) }, 'Note') : null,
+  );
+  return h('div', {
+    class: `folder${isArea ? ' is-area' : ''}${open ? ' is-open' : ''}${here.at === key ? ' is-here' : ''}`,
+    dataset: project == null ? {} : { drop: 'folder', project },
+  }, row, open ? h('div', { class: 'folder-kids' },
+    ...openFirst(mine).map(treeThread),
+    ...kids.map((k) => folderEl({ ...k, here })),
+    acts && acts.children.length ? acts : null,
+    !mine.length && !kids.length && !(acts && acts.children.length) ? h('p', { class: 'tree-note' }, 'Empty') : null,
+  ) : null);
+}
+
+function treeNodes() {
+  const t = S.projects;
+  if (!t) return [h('p', { class: 'tree-note' }, 'Reading the vault…')];
+  // The folder the open thread (or the thread being started) is in, and what leads to it.
+  const now = S.current ? (S.threads.get(S.current)?.kind === 'card' ? null : S.threads.get(S.current)?.project || '') : S.pad ? null : S.newProject;
+  const path = now ? pathOf(now) : [];
+  const here = { at: now == null ? '' : now ? (path.length === 1 && t.groups.some((g) => g.isArea && g.name === now) ? `a:${now}` : `p:${now}`) : 'none', open: new Set() };
+  if (here.at) here.open.add(here.at); // the folder you are in shows what else is in it
+  if (path.length === 2) here.open.add(`a:${path[0]}`);
+  for (const g of t.groups) if (!g.isArea && g.projects.some((p) => p.name === now)) here.open.add(`a:${g.name}`);
+  const nodes = (t.missing ? [] : t.groups).map((g) => folderEl({
+    key: `a:${g.name}`, name: g.name, isArea: true, about: g.about,
+    project: g.isArea ? g.name : null,
+    threads: g.isArea ? threadsIn(g.name) : [],
+    kids: g.projects.map((p) => ({ key: `p:${p.name}`, name: p.name, project: p.name, about: p.about, threads: threadsIn(p.name) })),
+    here,
+  }));
+  // Threads filed under a name the vault's index does not have (any more) stay findable.
+  const known = new Set((t.groups || []).flatMap((g) => [g.isArea ? g.name : null, ...g.projects.map((p) => p.name)]));
+  for (const name of new Set(all().map((x) => x.project).filter((x) => x && !known.has(x)))) {
+    nodes.push(folderEl({ key: `p:${name}`, name, project: name, threads: threadsIn(name), here }));
+  }
+  nodes.push(folderEl({ key: 'none', name: 'No project', project: '', threads: threadsIn(''), here }));
+  if (t.missing) nodes.unshift(h('p', { class: 'tree-note' }, 'The vault has no Projects Index yet.'));
+  return nodes;
+}
+
+function renderTree(force = false) {
+  if (drag?.active && !force) { drag.stale = true; return; }
+  if (wide.matches) els.tree.replaceChildren(h('p', { class: 'tree-label' }, 'Folders'), ...treeNodes());
+  else if (S.tab === 'projects') renderRail();
+}
+
+// A folder opens while the pointer rests on it, and everything opened that way closes
+// again once the pointer has left the outline.
+els.tree.addEventListener('mouseover', (e) => {
+  const key = e.target.closest('.folder-row')?.dataset.key;
+  clearTimeout(tree.timer);
+  if (!key || tree.hover.has(key) || tree.kept.has(key)) return;
+  tree.timer = setTimeout(() => { tree.hover.add(key); renderTree(); }, 170);
+});
+els.tree.addEventListener('mouseleave', () => {
+  clearTimeout(tree.timer);
+  tree.timer = setTimeout(() => { if (tree.hover.size && !drag?.active) { tree.hover.clear(); renderTree(); } }, 400);
+});
+
+async function moveToProject(id, project) {
+  try {
+    const out = await api('POST', `/api/threads/${id}/project`, { project });
+    S.threads.set(id, out.thread);
+    renderRail(); renderTree(); if (id === S.current) renderHead();
+  } catch (err) { toast(err.message); }
 }
 
 function renderRail() {
-  // While a thread is being dragged the list stays as it is; it is drawn afresh on the drop.
+  // While a thread is being dragged the lists stay as they are; they are drawn afresh on the drop.
   if (drag?.active) { drag.stale = true; return; }
+  const folders = S.tab === 'projects' && !wide.matches;
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  els.lists.replaceChildren(...(S.tab === 'queue' ? queueLists() : projectLists()));
-  els.tabQueue.classList.toggle('is-on', S.tab === 'queue');
-  els.tabProjects.classList.toggle('is-on', S.tab === 'projects');
+  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes())] : queueLists()));
+  els.tabQueue.classList.toggle('is-on', !folders);
+  els.tabProjects.classList.toggle('is-on', folders);
   if (!reducedMotion.matches && before.size) {
     for (const el of els.lists.querySelectorAll('.item')) {
       const was = before.get(el.dataset.id);
@@ -236,13 +332,11 @@ function renderRail() {
   }
   const n = inbox().length;
   const busy = working().length;
-  for (const el of [els.edgeCount, els.phoneCount]) {
-    el.textContent = n ? String(n) : '';
-    el.classList.toggle('has-ready', n > 0);
-    el.classList.toggle('is-working', busy > 0);
-  }
-  els.edge.title = `${n} waiting${busy ? `, Claude is working on ${busy}` : ''}. Move the pointer here to see the threads.`;
-  document.title = n ? `(${n}) Inbox` : 'Inbox';
+  els.inboxCount.textContent = n ? String(n) : '';
+  els.inboxCount.classList.toggle('has-ready', n > 0);
+  els.inboxCount.classList.toggle('is-working', busy > 0 && n > 0);
+  els.openInbox.title = `${n} waiting${busy ? `, Claude is working on ${busy}` : ''}. Alt L, or move the pointer to the left edge.`;
+  document.title = n ? `(${n}) Brain` : 'Brain';
   if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
@@ -251,7 +345,7 @@ function renderRail() {
 const coarse = window.matchMedia('(pointer: coarse)');
 function focusInput() { if (!coarse.matches) els.input.focus(); }
 
-// ---------- the thread list: out of the way until the pointer is at the right edge ----------
+// ---------- the inbox drawer: out of the way until the pointer is at the left edge ----------
 
 const phone = window.matchMedia('(max-width: 700px)');
 let railTimer = 0;
@@ -259,6 +353,7 @@ let railTimer = 0;
 function setRail(open) {
   clearTimeout(railTimer);
   els.app.classList.toggle('rail-open', open);
+  els.openInbox.classList.toggle('is-on', open || els.app.classList.contains('rail-pinned'));
   els.backdrop.hidden = !(open && phone.matches);
 }
 const closeRailSoon = (ms = 320) => { clearTimeout(railTimer); railTimer = setTimeout(() => { if (!drag?.active) setRail(false); }, ms); };
@@ -267,10 +362,11 @@ function setPinned(pinned) {
   els.app.classList.toggle('rail-pinned', pinned);
   els.pin.textContent = pinned ? 'Hide when not in use' : 'Keep open';
   els.pin.setAttribute('aria-pressed', String(pinned));
+  els.openInbox.classList.toggle('is-on', pinned || els.app.classList.contains('rail-open'));
   try { localStorage.setItem('rail-pinned', pinned ? '1' : ''); } catch { /* private mode */ }
 }
 
-// A short dwell, so a pointer passing over the edge on its way to the scrollbar does not open it.
+// A short dwell, so a pointer passing over the edge does not open it.
 els.edge.addEventListener('mouseenter', () => { clearTimeout(railTimer); railTimer = setTimeout(() => setRail(true), 90); });
 els.edge.addEventListener('mouseleave', () => { if (!els.app.classList.contains('rail-open')) clearTimeout(railTimer); });
 els.edge.addEventListener('click', () => setRail(true));
@@ -279,103 +375,149 @@ els.rail.addEventListener('mouseleave', () => { if (!phone.matches) closeRailSoo
 els.pin.addEventListener('click', () => setPinned(!els.app.classList.contains('rail-pinned')));
 els.railClose.addEventListener('click', () => setRail(false));
 els.backdrop.addEventListener('click', () => setRail(false));
-els.phoneThreads.addEventListener('click', () => setRail(!els.app.classList.contains('rail-open')));
-els.phoneNew.addEventListener('click', () => openNew());
+els.openInbox.addEventListener('click', () => {
+  if (els.app.classList.contains('rail-pinned') && !phone.matches) setPinned(false);
+  else setRail(!els.app.classList.contains('rail-open'));
+});
 try { setPinned(localStorage.getItem('rail-pinned') === '1'); } catch { setPinned(false); }
+wide.addEventListener('change', () => { if (wide.matches) S.tab = 'queue'; renderRail(); renderTree(); });
 
-// ---------- dragging a waiting thread to another place in the queue ----------
+// ---------- dragging a thread ----------
 //
-// With a mouse: press and move. With a finger: press and hold, then move (a plain swipe
-// scrolls the list). The thread stays where it is dropped until it has been dealt with.
+// A thread can be dragged to another place in the queue, onto "Done" to close it, from
+// Done back into the queue to reopen it, and onto a folder to file it there. With a
+// mouse: press and move. With a finger: press and hold, then move (a plain swipe scrolls).
 
 let drag = null;
 
-function dragTargets() {
-  return [...els.lists.querySelectorAll('.item[data-drag]')].filter((el) => el !== drag.item);
+function clearDropMarks() {
+  for (const el of document.querySelectorAll('.drop-before, .drop-after, .is-drop')) el.classList.remove('drop-before', 'drop-after', 'is-drop');
+}
+
+// What letting go at this point would do, or null.
+function dropAt(x, y) {
+  const zone = document.elementFromPoint(x, y)?.closest('[data-drop]');
+  const t = S.threads.get(drag.id);
+  if (!zone || !t) return null;
+  const kind = zone.dataset.drop;
+  if (kind === 'queue') {
+    if (t.state === 'working') return null;
+    const others = [...zone.querySelectorAll('.item[data-id]')].filter((el) => el.dataset.id !== drag.id);
+    let index = others.findIndex((el) => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    if (index < 0) index = others.length;
+    return { kind, zone, index, others };
+  }
+  if (kind === 'done') return t.state === 'ready' && t.kind !== 'card' ? { kind, zone } : null;
+  if (kind === 'folder') return t.kind !== 'card' && (t.project || '') !== zone.dataset.project ? { kind, zone, project: zone.dataset.project } : null;
+  return null;
 }
 
 function beginDrag() {
   if (!drag || drag.active) return;
   drag.active = true;
-  drag.item.classList.add('is-dragging');
-  els.lists.classList.add('is-dragging');
+  drag.item.classList.add('is-dragged');
+  document.body.classList.add('is-dragging');
+  drag.ghost = h('div', { class: 'drag-ghost' }, S.threads.get(drag.id)?.title || '');
+  document.body.append(drag.ghost);
   if (drag.touch) navigator.vibrate?.(12);
 }
 
-function moveDrag(y) {
-  drag.item.style.transform = `translateY(${y - drag.startY}px)`;
-  const others = dragTargets();
-  let index = others.findIndex((el) => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2; });
-  if (index < 0) index = others.length;
-  drag.index = index;
-  others.forEach((el, i) => {
-    el.classList.toggle('drop-before', i === index);
-    el.classList.toggle('drop-after', index === others.length && i === others.length - 1);
-  });
+function moveDrag(x, y) {
+  drag.ghost.style.transform = `translate(${x + 14}px, ${y + 10}px)`;
+  // Coming from the folders with the inbox hidden: the left edge brings it in.
+  if (x < 18 && !els.app.classList.contains('rail-open') && !els.app.classList.contains('rail-pinned')) setRail(true);
+  // A closed folder opens when a dragged thread rests on it, so what is inside can be reached.
+  const row = document.elementFromPoint(x, y)?.closest('.folder-row');
+  const key = row?.dataset.key || '';
+  if (key !== drag.overKey) {
+    clearTimeout(drag.spring);
+    drag.overKey = key;
+    if (key && !row.parentElement.classList.contains('is-open')) drag.spring = setTimeout(() => { tree.hover.add(key); renderTree(true); }, 420);
+  }
+  clearDropMarks();
+  const target = dropAt(x, y);
+  drag.target = target;
+  if (!target) return;
+  if (target.kind === 'queue') {
+    if (!target.others.length) target.zone.classList.add('is-drop');
+    else if (target.index < target.others.length) target.others[target.index].classList.add('drop-before');
+    else target.others.at(-1).classList.add('drop-after');
+  } else target.zone.classList.add('is-drop');
 }
 
-function endDrag(drop) {
+async function endDrag(drop) {
   const d = drag;
   drag = null;
   if (!d) return;
   clearTimeout(d.timer);
-  d.item.classList.remove('is-dragging');
-  d.item.style.transform = '';
-  els.lists.classList.remove('is-dragging');
-  for (const el of els.lists.querySelectorAll('.drop-before, .drop-after')) el.classList.remove('drop-before', 'drop-after');
+  clearTimeout(d.spring);
+  if (tree.hover.size && !els.tree.matches(':hover')) { tree.hover.clear(); d.stale = true; }
+  d.item.classList.remove('is-dragged');
+  d.ghost?.remove();
+  document.body.classList.remove('is-dragging');
+  clearDropMarks();
   if (d.active) {
     // The click that ends a drag must not open the thread.
     const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
     window.addEventListener('click', swallow, { capture: true, once: true });
     setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 80);
   }
-  const from = inbox().findIndex((t) => t.id === d.id);
-  if (drop && d.active && d.index != null && d.index !== from) {
-    // Shown at once; the server's order follows a moment later.
-    const ids = inbox().map((t) => t.id).filter((id) => id !== d.id);
-    ids.splice(d.index, 0, d.id);
-    S.queue = { ...S.queue, order: ids };
-    api('POST', '/api/queue/move', { id: d.id, index: d.index }).then((q) => { S.queue = q; renderRail(); renderComposer(); }).catch((e) => toast(e.message));
+  const t = S.threads.get(d.id);
+  const target = drop && d.active ? d.target : null;
+  if (target && t) {
+    try {
+      if (target.kind === 'queue') {
+        if (t.state === 'done') S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/state`, { state: 'ready' })).thread);
+        // Shown at once; the server's order follows a moment later.
+        const ids = inbox().map((x) => x.id).filter((id) => id !== d.id);
+        ids.splice(target.index, 0, d.id);
+        S.queue = { ...S.queue, order: ids };
+        S.queue = await api('POST', '/api/queue/move', { id: d.id, index: target.index });
+      } else if (target.kind === 'done') {
+        S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/state`, { state: 'done' })).thread);
+      } else if (target.kind === 'folder') {
+        S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/project`, { project: target.project })).thread);
+        toast(target.project ? `Filed under ${target.project}.` : 'Taken out of its project.');
+      }
+    } catch (err) { toast(err.message); }
   }
-  if (d.active || d.stale) { renderRail(); renderComposer(); }
+  if (d.active || d.stale) { renderRail(); renderTree(); renderComposer(); if (S.current === d.id) renderHead(); }
   if (!els.rail.matches(':hover') && !phone.matches) closeRailSoon(600);
 }
 
-els.lists.addEventListener('pointerdown', (e) => {
-  const item = e.target.closest('.item[data-drag]');
+document.addEventListener('pointerdown', (e) => {
+  const item = e.target.closest('.item[data-id], .tree-thread[data-id]');
   if (!item || e.button > 0) return;
   const touch = e.pointerType !== 'mouse';
-  drag = { item, id: item.dataset.id, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId, touch, active: false, index: null, timer: 0, stale: false };
+  drag = { item, id: item.dataset.id, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId, touch, active: false, target: null, timer: 0, stale: false };
   if (touch) drag.timer = setTimeout(beginDrag, 380);
 });
 window.addEventListener('pointermove', (e) => {
   if (!drag || e.pointerId !== drag.pointerId) return;
-  const dx = e.clientX - drag.startX;
-  const dy = e.clientY - drag.startY;
+  const far = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
   if (!drag.active) {
-    if (drag.touch) { if (Math.hypot(dx, dy) > 10) endDrag(false); return; } // a swipe scrolls
-    if (Math.abs(dy) < 6) return;
+    if (drag.touch) { if (far > 10) endDrag(false); return; } // a swipe scrolls
+    if (far < 6) return;
     beginDrag();
   }
-  moveDrag(e.clientY);
+  moveDrag(e.clientX, e.clientY);
 });
 window.addEventListener('pointerup', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
 window.addEventListener('pointercancel', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
 // Once a finger holds a thread, moving it must not scroll the list or open a menu.
-els.lists.addEventListener('touchmove', (e) => { if (drag?.active) e.preventDefault(); }, { passive: false });
-els.lists.addEventListener('contextmenu', (e) => { if (drag) e.preventDefault(); });
+document.addEventListener('touchmove', (e) => { if (drag?.active) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', (e) => { if (drag) e.preventDefault(); });
 
 const loadProjects = debounce(async () => {
   try {
     S.projects = await api('GET', '/api/projects');
-    if (S.tab === 'projects') renderRail();
-    if (S.current) renderHead();
+    renderTree();
+    if (S.current && !S.pad) renderHead();
   } catch { /* the next change brings it */ }
 }, 400);
 
 function setTab(tab) {
   S.tab = tab;
-  if (tab === 'projects') loadProjects();
   renderRail();
 }
 
@@ -389,34 +531,30 @@ function renderBrain() {
     rows.push(h('p', { class: 'brain-line is-error' }, b.brain.error || 'Cloning the brain…'));
     if (b.brain.error) rows.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', '/api/brain/refresh', {}).then(setBrain).catch((e) => toast(e.message)) }, 'Try again'));
   } else if (b.running) {
-    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'pulse' }), 'Updating the brain'));
+    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'pulse' }), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'));
     rows.push(h('p', { class: 'brain-sub' }, b.step || 'Starting'));
   } else {
     const bits = [];
     if (b.waiting) bits.push(`${b.waiting} ${b.waiting === 1 ? 'thread' : 'threads'}`);
     if (b.notes) bits.push('your notes');
     if (b.cards) bits.push(`${b.cards} ${b.cards === 1 ? 'card' : 'cards'}`);
-    if (b.mail) bits.push('new mail');
     rows.push(h('p', { class: 'brain-line' }, bits.length ? `Not in the brain yet: ${bits.join(', ')}` : 'Nothing new to file in the brain'));
-    rows.push(h('button', { class: 'btn btn-brain', type: 'button', disabled: !bits.length, onclick: updateBrain }, 'Update brain ', kbd('Alt U')));
+    rows.push(h('div', { class: 'brain-btns' },
+      h('button', { class: 'btn btn-brain', type: 'button', disabled: !bits.length && !b.mail, title: 'Files what is new in the threads, the cards you decided and new mail', onclick: () => updateBrain() }, 'Update brain ', kbd('Alt U')),
+      h('button', { class: 'btn', type: 'button', disabled: !b.mail, title: b.mail ? 'Takes in the mail that arrived and went out since the last time, and nothing else' : 'Connect Gmail in the settings first', onclick: () => updateBrain('mail') }, 'Update Gmail'),
+    ));
+    if (b.mail) rows.push(h('p', { class: 'brain-sub' }, b.mailLevel ? `Mail is taken in up to ${stamp(b.mailLevel)}` : 'No mail taken in yet; the first time looks back one day'));
     if (b.brain.error) rows.push(h('p', { class: 'brain-sub is-error' }, b.brain.error));
   }
   if (b.last && !b.running) {
     const last = b.last;
+    const what = last.mailOnly ? 'Gmail update' : 'update';
     let text;
-    if (last.status === 'failed') text = `Last update failed, ${stamp(last.finishedAt)}`;
-    else if (last.status === 'nothing') text = `Last update ${stamp(last.finishedAt)}: nothing to file`;
-    else text = `Last update ${stamp(last.finishedAt)}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.pushed ? '' : ', not pushed yet'}`;
+    if (last.status === 'failed') text = `Last ${what} failed, ${stamp(last.finishedAt)}`;
+    else if (last.status === 'nothing') text = `Last ${what} ${stamp(last.finishedAt)}: nothing to file`;
+    else text = `Last ${what} ${stamp(last.finishedAt)}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.pushed ? '' : ', not pushed yet'}`;
     rows.push(h('button', { class: `link brain-last${last.status === 'failed' || !last.pushed ? ' is-error' : ''}`, type: 'button', onclick: () => openPanel({ kind: 'run', run: last }) }, text));
   }
-  const link = (label, fn) => h('button', { class: 'link keys-link', type: 'button', onclick: fn }, label);
-  rows.push(h('div', { class: 'foot-links' },
-    link('Scratchpad', () => openPad('scratchpad')),
-    link('Notes for Claude', () => openPad('notes')),
-    h('a', { class: 'link keys-link', href: '/walk' }, 'Talk'),
-    link('Connections', () => openPanel({ kind: 'connections' })),
-    link('Keys', () => openPanel({ kind: 'keys' })),
-  ));
   els.brain.replaceChildren(...rows);
 }
 
@@ -426,17 +564,18 @@ function setBrain(status) {
   renderBrain();
   if (wasRunning && !status.running && status.last) {
     const last = status.last;
-    if (last.status === 'failed') toast(`The brain update failed: ${last.error}`);
-    else if (last.status === 'nothing') toast('Brain update finished. Nothing needed filing.');
-    else toast(`Brain updated: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you' : ''}.`);
+    const what = last.mailOnly ? 'Gmail update' : 'brain update';
+    if (last.status === 'failed') toast(`The ${what} failed: ${last.error}`);
+    else if (last.status === 'nothing') toast(last.mailOnly ? 'No new mail that needs filing.' : 'Brain update finished. Nothing needed filing.');
+    else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
     if (S.panel?.kind === 'run') openPanel({ kind: 'run', run: last });
-    if (S.pad === 'notes') openPad('notes');
+    loadProjects();
   }
 }
 
-async function updateBrain() {
+async function updateBrain(only = '') {
   try {
-    const out = await api('POST', '/api/brain/extract', {});
+    const out = await api('POST', '/api/brain/extract', { only });
     if (!out.started) toast(out.reason);
   } catch (err) {
     toast(err.message);
@@ -449,7 +588,7 @@ const googleOn = () => S.config.fake || S.connections?.google?.connected;
 
 // `onDecided` is set for opportunity and chase cards, where putting the mail in Gmail or
 // sending it is the same as accepting the card.
-function mailCard(threadId, name, text, info, { onDecided } = {}) {
+function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
   const mail = parseMail(text);
   const sent = info?.mail?.sentAt;
   const latest = info?.versions.at(-1)?.v || 1;
@@ -478,7 +617,7 @@ function mailCard(threadId, name, text, info, { onDecided } = {}) {
     await save();
     await saving;
     try {
-      await api('POST', `/api/threads/${threadId}/mail/${path}`, { name });
+      await api('POST', `/api/threads/${threadId}/mail/${path}`, { name, reason: reason ? reason() : '' });
       toast(okText);
       document.activeElement?.blur();
       if (onDecided) onDecided();
@@ -503,7 +642,7 @@ function mailCard(threadId, name, text, info, { onDecided } = {}) {
     const m = info?.mail || {};
     const inGmail = m.draftId && m.draftVersion === latest;
     const off = !googleOn();
-    const hint = off ? 'Connect Gmail under Connections first' : null;
+    const hint = off ? 'Connect Gmail in the settings first' : null;
     actions.replaceChildren(...[
       h('button', { class: 'btn', type: 'button', disabled: off, title: hint, onclick: () => act('draft', m.draftId ? 'The Gmail draft is updated.' : 'It is in your Gmail drafts.') },
         m.draftId ? (inGmail ? 'In Gmail drafts ✓' : 'Update Gmail draft') : 'Put in Gmail'),
@@ -638,27 +777,43 @@ function scheduleLive() {
 
 const nearBottom = () => els.scroller.scrollHeight - els.scroller.scrollTop - els.scroller.clientHeight < 120;
 
-function projectPicker(t) {
-  const tree = S.projects;
-  const select = h('select', { class: 'select project-pick', 'aria-label': 'Project', title: 'The project or area this thread belongs to',
-    onchange: (e) => api('POST', `/api/threads/${t.id}/project`, { project: e.target.value }).then(() => loadProjects()).catch((err) => toast(err.message)) },
-    h('option', { value: '' }, 'No project'));
-  for (const g of tree?.groups || []) {
-    const group = h('optgroup', { label: g.name });
-    if (g.isArea) group.append(h('option', { value: g.name, selected: t.project === g.name }, `${g.name} (the area)`));
-    for (const p of g.projects) group.append(h('option', { value: p.name, selected: t.project === p.name }, p.name));
-    if (group.children.length) select.append(group);
-  }
-  if (t.project && !select.querySelector('option[selected]')) select.append(h('option', { value: t.project, selected: true }, t.project));
-  return select;
+// Where the thread is filed, as a line under its name.
+function pathEl(project) {
+  const path = pathOf(project);
+  return h('p', { class: 'thread-path', title: 'Drag the thread onto a folder to file it somewhere else' }, svg(FOLDER),
+    path.length ? path.flatMap((name, i) => [i ? ' › ' : null, i === path.length - 1 ? h('b', {}, name) : name]) : 'No project');
+}
+
+// Deleting asks once more, in place.
+function deleteButton(t) {
+  const button = h('button', { class: 'btn btn-quiet', type: 'button', title: 'Delete this thread for good' }, 'Delete');
+  let armed = 0;
+  button.addEventListener('click', async () => {
+    if (!armed) {
+      button.textContent = 'Delete for good';
+      button.className = 'btn btn-danger';
+      armed = setTimeout(() => { armed = 0; button.textContent = 'Delete'; button.className = 'btn btn-quiet'; }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    try {
+      await api('DELETE', `/api/threads/${t.id}`, {});
+      onThreadDeleted({ id: t.id });
+      toast('Deleted.');
+    } catch (err) { toast(err.message); }
+  });
+  return button;
 }
 
 function renderHead() {
   if (S.pad) return;
   const t = S.current ? S.threads.get(S.current) : null;
   if (!t) {
-    els.head.replaceChildren(h('h1', { class: 'thread-title is-static' }, S.newProject ? `New thread in ${S.newProject}` : 'New thread'),
-      S.newProject ? h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openNew() }, 'Without a project') : null);
+    els.head.replaceChildren(...[
+      h('h1', { class: 'thread-title is-static' }, 'New thread'),
+      S.newProject ? h('div', { class: 'head-actions' }, h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openNew() }, 'Without a project')) : null,
+      pathEl(S.newProject),
+    ].filter(Boolean));
     return;
   }
   const title = h('input', {
@@ -687,22 +842,25 @@ function renderHead() {
   if (files.length) {
     actions.unshift(h('button', { class: 'btn btn-quiet', type: 'button', onclick: toggleFiles }, `${files.length} ${files.length === 1 ? 'file' : 'files'} `, kbd('Alt A')));
   }
-  els.head.replaceChildren(title, status, h('div', { class: 'head-actions' }, t.kind === 'card' ? null : projectPicker(t), actions));
+  if (t.state !== 'working') actions.push(deleteButton(t));
+  els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, actions), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
 }
 
 function renderComposer() {
   const t = S.current ? S.threads.get(S.current) : null;
   els.composer.hidden = Boolean(S.pad) || t?.kind === 'card';
-  const next = nextReady(S.current);
+  // A spin-off needs a thread to start from.
+  els.spin.hidden = !t;
+  els.spin.textContent = phone.matches ? 'Spin off' : 'Send into spin-off';
   if (!t) {
     els.input.placeholder = 'What should Claude work on?';
-    els.send.textContent = next ? `Start, then open “${clip(next.title)}”` : 'Start thread';
+    els.send.textContent = 'Start';
   } else if (t.state === 'working') {
     els.input.placeholder = 'Add to this thread. Claude gets it when this turn ends.';
-    els.send.textContent = next ? `Add, then open “${clip(next.title)}”` : 'Add to thread';
+    els.send.textContent = 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.' : 'Reply.';
-    els.send.textContent = next ? `Send, then open “${clip(next.title)}”` : 'Send';
+    els.send.textContent = 'Send';
   }
 }
 
@@ -712,7 +870,7 @@ function renderEmpty() {
   let line = 'Nothing is waiting for you.';
   if (busy) line += ` Claude is working on ${busy} ${busy === 1 ? 'thread' : 'threads'}; the first one to finish opens here.`;
   els.messages.replaceChildren(h('div', { class: 'empty' },
-    h('p', { class: 'empty-lead' }, S.newProject ? `Start a thread on ${S.newProject}. Claude begins with the project’s notes loaded.` : ready ? 'Start something new, or pick a thread from the list at the right edge.' : line),
+    h('p', { class: 'empty-lead' }, S.newProject ? `Start a thread on ${S.newProject}. Claude begins with the project’s notes loaded.` : ready ? 'Start something new here, or pick a thread from the inbox.' : line),
     h('p', { class: 'empty-sub' }, 'Each thread is its own conversation. Claude reads your brain before answering, and nothing reaches the brain until you update it.'),
   ));
 }
@@ -746,18 +904,23 @@ async function renderCard(t) {
         await navigator.clipboard.writeText(area.value).catch(() => {});
         if (card.link) window.open(card.link, '_blank', 'noopener');
       }
-      const out = await api('POST', `/api/threads/${t.id}/card`, { outcome });
+      const out = await api('POST', `/api/threads/${t.id}/card`, { outcome, reason: reason.value });
       S.threads.set(t.id, out.thread);
       toast(outcome === 'accepted' ? 'Accepted. The text is copied.' : 'Declined.');
       advance(t.id);
     } catch (err) { toast(err.message); }
   };
 
+  // What he wants to say about the card, for either verdict: why not, or what it got wrong.
+  const reason = h('textarea', { class: 'card-reason', rows: '1', maxlength: '1000', spellcheck: 'true',
+    placeholder: 'Optional: your reason, or what is outdated here',
+    title: 'Kept with your decision, and it reaches the brain with the next update',
+    'aria-label': 'Your reason, optional', oninput: (e) => grow(e.target) });
   let area = null;
   let flush = async () => {};
   let bodyEl;
   if (parseMail(raw)) {
-    bodyEl = mailCard(t.id, 'Message.md', raw, info, { onDecided: () => advance(t.id) });
+    bodyEl = mailCard(t.id, 'Message.md', raw, info, { onDecided: () => advance(t.id), reason: () => reason.value });
   } else {
     area = h('textarea', { class: 'card-text', spellcheck: 'true', disabled: decided, 'aria-label': 'The message. Edit it here.' });
     area.value = raw.trim();
@@ -772,7 +935,7 @@ async function renderCard(t) {
     bodyEl = area;
     requestAnimationFrame(() => grow(area));
   }
-  const buttons = decided ? h('p', { class: 'card-done' }, `You ${card.outcome || 'decided'} this${card.how ? ` (${card.how})` : ''}.`)
+  const buttons = decided ? h('p', { class: 'card-done' }, `You ${card.outcome || 'decided'} this${card.how ? ` (${card.how})` : ''}.${card.reason ? ` You wrote: “${card.reason}”` : ''}`)
     : h('div', { class: 'card-actions' },
       parseMail(raw) ? null : h('button', { class: 'btn btn-send', type: 'button', onclick: () => decide('accepted') }, 'Accept and copy ', kbd('Y')),
       h('button', { class: 'btn', type: 'button', onclick: () => decide('declined') }, 'Decline ', kbd('N')),
@@ -780,7 +943,7 @@ async function renderCard(t) {
     );
   S.cardDecide = decided ? null : decide;
   S.cardIsMail = Boolean(parseMail(raw));
-  els.messages.replaceChildren(h('div', { class: 'card' }, head, bodyEl, buttons));
+  els.messages.replaceChildren(h('div', { class: 'card' }, ...[head, bodyEl, decided ? null : reason, buttons].filter(Boolean)));
   enter(els.messages);
 }
 
@@ -797,12 +960,15 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   const token = ++openToken;
   S.pad = null;
   S.current = id;
+  S.newProject = '';
   S.view = null;
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
+  els.openScratch.classList.remove('is-on');
   if (!keepPanel && S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
+  renderTree();
   renderHead();
   renderComposer();
   restoreDraft();
@@ -845,8 +1011,10 @@ function openNew(project = '') {
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
+  els.openScratch.classList.remove('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
+  renderTree();
   renderHead();
   renderComposer();
   restoreDraft();
@@ -856,46 +1024,49 @@ function openNew(project = '') {
   focusInput();
 }
 
-// A pad: a plain page to write in. It saves as you type.
-const PADS = {
-  scratchpad: { title: 'Scratchpad', about: 'Yours alone. It saves as you type. Claude never reads it, in any thread or run.' },
-  notes: { title: 'Notes for Claude', about: 'Half-sentences, updated facts, nudges about how Claude works. The next brain update files them and empties this page, so an empty page means they went in.' },
-  profile: { title: 'What the queue has learned', about: 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then; correct it or add your own lines, and they are kept.' },
-};
+// The scratchpad: a plain page to write in. It saves as you type. Claude never reads it.
+function leavePad() {
+  const back = S.lastThread && S.threads.has(S.lastThread) ? S.lastThread : inbox()[0]?.id;
+  if (back) openThread(back, { byQueue: true });
+  else openNew();
+}
 
-async function openPad(name) {
+async function openPad() {
+  if (S.pad) { leavePad(); return; }
   saveDraft();
   if (phone.matches) setRail(false);
   const token = ++openToken;
-  S.pad = name;
+  S.lastThread = S.current;
+  S.pad = 'scratchpad';
   S.current = null;
   S.view = null;
   S.live = null;
   S.cardDecide = null;
+  els.openScratch.classList.add('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
+  renderTree();
   renderComposer();
-  const pad = PADS[name];
   const state = h('span', { class: 'status' });
-  els.head.replaceChildren(h('h1', { class: 'thread-title is-static' }, pad.title), state,
-    h('div', { class: 'head-actions' }, name === 'scratchpad' ? null : h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openPad(name === 'notes' ? 'profile' : 'notes') }, name === 'notes' ? 'What the queue has learned' : 'Notes for Claude')));
+  els.head.replaceChildren(h('h1', { class: 'thread-title is-static' }, 'Scratchpad'), state,
+    h('div', { class: 'head-actions' }, h('button', { class: 'btn btn-quiet', type: 'button', onclick: leavePad }, 'Back ', kbd('Alt P'))));
   els.messages.className = 'messages is-pad';
   els.messages.replaceChildren(h('p', { class: 'pad-about' }, 'Loading…'));
   let text = '';
   try {
-    text = (await api('GET', `/api/pads/${name}`)).text;
+    text = (await api('GET', '/api/pads/scratchpad')).text;
   } catch (err) { toast(err.message); }
   if (token !== openToken) return;
-  const area = h('textarea', { class: 'pad', spellcheck: 'true', 'aria-label': pad.title, placeholder: name === 'notes' ? 'e.g. the room for the meetup is booked. stop suggesting LinkedIn notes to people I already met.' : '' });
+  const area = h('textarea', { class: 'pad', spellcheck: 'true', 'aria-label': 'Scratchpad' });
   area.value = text;
   const save = debounce(async () => {
     try {
-      await api('PUT', `/api/pads/${name}`, { text: area.value });
+      await api('PUT', '/api/pads/scratchpad', { text: area.value });
       state.textContent = `Saved ${clock(Date.now())}`;
     } catch (err) { state.textContent = 'Not saved'; toast(err.message); }
   }, 500);
   area.addEventListener('input', () => { state.textContent = ''; save(); });
-  els.messages.replaceChildren(h('p', { class: 'pad-about' }, pad.about), area);
+  els.messages.replaceChildren(h('p', { class: 'pad-about' }, 'Yours alone. It saves as you type. Claude never reads it, in any thread or run.'), area);
   enter(els.messages);
   area.focus();
   area.setSelectionRange(area.value.length, area.value.length);
@@ -921,6 +1092,46 @@ async function send() {
   } finally {
     els.send.disabled = false;
   }
+}
+
+// "Send into spin-off": the message starts a new thread that begins as a copy of this
+// one. Nothing is sent here; this thread goes to the back of the queue.
+async function spinOff() {
+  const text = els.input.value.trim();
+  const from = S.current;
+  if (!from || S.pad) return;
+  if (!text) { toast('Write what the spin-off should do first.'); return; }
+  els.spin.disabled = true;
+  try {
+    const out = await api('POST', `/api/threads/${from}/spinoff`, { text });
+    S.threads.set(out.thread.id, out.thread);
+    S.threads.set(out.from.id, out.from);
+    els.input.value = '';
+    S.drafts.delete(from);
+    toast(`Spun off: “${clip(out.thread.title, 48)}”`);
+    advance(from);
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    els.spin.disabled = false;
+  }
+}
+
+function onThreadDeleted({ id }) {
+  if (!S.threads.delete(id)) return;
+  S.drafts.delete(id);
+  if (S.lastThread === id) S.lastThread = null;
+  if (S.current === id) {
+    if (S.panel) closePanel();
+    const next = inbox()[0];
+    if (next) openThread(next.id, { byQueue: true });
+    else openNew();
+  } else {
+    renderRail();
+    renderTree();
+    renderComposer();
+  }
+  if (S.brain) { S.brain.waiting = all().filter(isUnfiled).length; renderBrain(); }
 }
 
 async function requeue() {
@@ -993,9 +1204,7 @@ async function openPanel(panel) {
   if (panel.kind === 'artifact') return showArtifact(panel);
   if (panel.kind === 'note') return showNote(panel);
   if (panel.kind === 'run') return showRun(panel.run);
-  if (panel.kind === 'files') return showFiles();
-  if (panel.kind === 'connections') return showConnections();
-  return showKeys();
+  return showFiles();
 }
 
 function toggleFiles() {
@@ -1127,10 +1336,30 @@ function showRun(run) {
   panelFrame(`Brain update, ${stamp(run.finishedAt)}`, [], body);
 }
 
-async function showConnections() {
-  const panel = S.panel;
-  const body = h('div', { class: 'panel-body' });
-  panelFrame('Connections', [], body);
+// ---------- the settings window ----------
+
+let settingsToken = 0;
+
+function openSettings(tab = S.settingsTab) {
+  S.settingsTab = tab;
+  if (phone.matches) setRail(false);
+  for (const b of els.settings.querySelectorAll('.window-tab')) b.classList.toggle('is-on', b.dataset.tab === tab);
+  if (!els.settings.open) els.settings.showModal();
+  const token = ++settingsToken;
+  els.settingsBody.replaceChildren();
+  els.settingsBody.scrollTop = 0;
+  if (tab === 'queue') return fillQueue(els.settingsBody, token);
+  if (tab === 'keys') return fillKeys(els.settingsBody);
+  return fillConnections(els.settingsBody, token);
+}
+
+for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener('click', () => openSettings(b.dataset.tab));
+els.settingsClose.addEventListener('click', () => els.settings.close());
+els.settings.addEventListener('click', (e) => { if (e.target === els.settings) els.settings.close(); });
+els.openSettings.addEventListener('click', () => openSettings());
+
+async function fillConnections(body, token) {
+  body.append(h('h3', { class: 'window-head' }, 'Connections'));
   let c;
   try {
     c = await api('GET', '/api/connections');
@@ -1138,7 +1367,7 @@ async function showConnections() {
     body.append(h('p', { class: 'panel-note is-error' }, err.message));
     return;
   }
-  if (S.panel !== panel) return;
+  if (token !== settingsToken) return;
   S.connections = c;
   const block = (title, state, ...rest) => h('section', { class: 'conn' },
     h('h3', { class: 'conn-title' }, title, h('span', { class: `conn-state${state.on ? ' is-on' : ''}${state.bad ? ' is-error' : ''}` }, state.text)), ...rest);
@@ -1148,10 +1377,10 @@ async function showConnections() {
   if (g.connected) {
     body.append(block('Gmail and Calendar', { on: true, text: 'connected' },
       note(`Signed in${g.email ? ` as ${g.email}` : ''}. Threads can search and read your mail, read your calendar and add entries. Only the buttons on a mail put it into Gmail or send it, and only when you press them.`),
-      h('button', { class: 'btn', type: 'button', onclick: async () => { await api('POST', '/api/google/disconnect', {}); toast('Disconnected.'); openPanel({ kind: 'connections' }); } }, 'Disconnect')));
+      h('button', { class: 'btn', type: 'button', onclick: async () => { await api('POST', '/api/google/disconnect', {}); toast('Disconnected.'); openSettings('connections'); } }, 'Disconnect')));
   } else if (g.configured) {
     body.append(block('Gmail and Calendar', { text: 'not connected' },
-      note('Sign in with Google once. Threads can then read your mail and calendar, the brain update reads new mail, and the buttons on a mail work.'),
+      note('Sign in with Google once. Threads can then read your mail and calendar, "Update Gmail" takes in new mail, and the buttons on a mail work.'),
       h('a', { class: 'btn btn-brain', href: '/auth/google' }, 'Connect Google')));
   } else {
     body.append(block('Gmail and Calendar', { text: 'not set up' },
@@ -1161,7 +1390,7 @@ async function showConnections() {
   const d = c.data;
   body.append(block('Saving the app’s state', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
     note(d.error || (d.enabled
-      ? `Threads, water levels, pads, the mood line and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
+      ? `Threads, water levels, the scratchpad, the mood line and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
       : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
   if (c.app?.commit) {
@@ -1170,39 +1399,91 @@ async function showConnections() {
   }
 
   const v = c.voice;
-  body.append(block('Calling the inbox', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
+  body.append(block('Calling by phone', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
     note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
       : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
-        : 'Off. Walk mode does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
+        : 'Off. The Talk page does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
 
   const r = c.remote;
   body.append(block('Where the app runs', { on: true, text: r.local ? 'this computer' : 'another computer' },
     note(r.local
-      ? (r.allowedHosts.length ? `Also reachable as ${r.allowedHosts.join(', ')}.` : 'Only this computer can reach it. To reach it from your phone (for walk mode) or run it on a Raspberry Pi, see docs/pi.md.')
+      ? (r.allowedHosts.length ? `Also reachable as ${r.allowedHosts.join(', ')}.` : 'Only this computer can reach it. To reach it from your phone or run it on a Raspberry Pi, see docs/pi.md.')
       : `You are reaching it at ${location.host}.`)));
 }
 
-function showKeys() {
+async function fillQueue(body, token) {
+  const state = h('span', { class: 'status' });
+  body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
+    h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));
+  let text = '';
+  try { text = (await api('GET', '/api/pads/profile')).text; } catch (err) { toast(err.message); }
+  if (token !== settingsToken) return;
+  const area = h('textarea', { class: 'pad', spellcheck: 'true', 'aria-label': 'What the queue has learned', placeholder: 'Nothing learned yet. It appears after your first thirty choices; you can also write your own lines here.' });
+  area.value = text;
+  const save = debounce(async () => {
+    try { await api('PUT', '/api/pads/profile', { text: area.value }); state.textContent = `Saved ${clock(Date.now())}`; }
+    catch (err) { state.textContent = 'Not saved'; toast(err.message); }
+  }, 500);
+  area.addEventListener('input', () => { state.textContent = ''; save(); });
+  body.append(area);
+}
+
+function fillKeys(body) {
   const rows = [
     ['Enter', 'Send, then open what the queue puts next'],
+    ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
     ['Shift Enter', 'New line'],
     ['Alt N', 'New thread'],
-    ['Alt L', 'Show or hide the thread list (or move the pointer to the right edge)'],
+    ['Alt L', 'Show or hide the inbox (or move the pointer to the left edge)'],
     ['Alt S', 'Requeue: not now, show me the next'],
     ['Alt X', 'Done: close this thread'],
     ['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)'],
-    ['Alt J / Alt K', 'Next / previous thread in the list'],
+    ['Alt J / Alt K', 'Next / previous thread in the inbox'],
     ['Alt A', 'Show or hide the files Claude made in this thread'],
     ['Alt U', 'Update the brain'],
     ['Alt M', 'Jump to the mood line'],
-    ['Alt P', 'Scratchpad'],
-    ['Esc', 'Close the side panel'],
+    ['Alt P', 'Scratchpad, and back'],
+    ['Esc', 'Close the side panel or this window'],
   ];
-  panelFrame('Keyboard shortcuts', [], h('div', { class: 'panel-body' },
+  body.append(h('h3', { class: 'window-head' }, 'Keys'),
     h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])),
-    h('p', { class: 'panel-note' }, 'Select any text in a reply, a file or a vault note to quote it in your reply.'),
-  ));
+    h('p', { class: 'panel-note' }, 'Select any text in a reply, a file or a vault note to quote it in your reply. Drag a thread to reorder the inbox, onto Done to close it, or onto a folder to file it.'));
 }
+
+// ---------- pickers: model and effort ----------
+
+const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } };
+
+function picker(host, { options, value, onPick }) {
+  const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
+  const label = host.dataset.label;
+  const button = h('button', { class: 'pick-btn', type: 'button', 'aria-haspopup': 'listbox', 'aria-label': `${label}: ${name(value)}` },
+    h('span', { class: 'pick-label' }, label), h('span', {}, name(value)), svg(CHEVRON));
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = host.classList.contains('is-open');
+    closePickers();
+    if (wasOpen) return;
+    const menu = h('div', { class: 'pick-menu', role: 'listbox' }, options.map((o) => h('button', {
+      class: `pick-opt${o === value ? ' is-on' : ''}`, type: 'button', role: 'option', 'aria-selected': String(o === value),
+      onclick: () => { closePickers(); if (o !== value) onPick(o); button.focus(); },
+    }, name(o))));
+    menu.addEventListener('keydown', (ev) => {
+      const opts = [...menu.children];
+      const i = opts.indexOf(document.activeElement);
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); opts[(i + 1) % opts.length].focus(); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); opts[(i - 1 + opts.length) % opts.length].focus(); }
+      else if (ev.key === 'Escape') { ev.stopPropagation(); closePickers(); button.focus(); }
+    });
+    host.append(menu);
+    host.classList.add('is-open');
+    (menu.querySelector('.is-on') || menu.firstChild).focus();
+  });
+  host.replaceChildren(button);
+  host.classList.remove('is-open');
+}
+document.addEventListener('click', closePickers);
 
 // ---------- quoting: select text, comment on it ----------
 
@@ -1249,10 +1530,12 @@ els.input.addEventListener('input', autosize);
 els.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    send();
+    if (e.altKey) spinOff(); else send();
   }
 });
 els.composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
+els.spin.addEventListener('click', spinOff);
+els.openScratch.addEventListener('click', () => openPad());
 $('new-thread').addEventListener('click', () => openNew());
 els.tabQueue.addEventListener('click', () => setTab('queue'));
 els.tabProjects.addEventListener('click', () => setTab('projects'));
@@ -1266,15 +1549,12 @@ els.scroller.addEventListener('scroll', hideQuote, { passive: true });
 const saveMood = debounce(() => api('PUT', '/api/settings', { mood: els.mood.value }).catch((e) => toast(e.message)), 500);
 els.mood.addEventListener('input', saveMood);
 els.mood.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); els.mood.blur(); if (!els.composer.hidden) focusInput(); } });
-els.model.addEventListener('change', () => api('PUT', '/api/settings', { model: els.model.value }).catch((e) => toast(e.message)));
-els.effort.addEventListener('change', () => api('PUT', '/api/settings', { effort: els.effort.value }).catch((e) => toast(e.message)));
-
 function renderSettings() {
   const s = S.settings;
   if (document.activeElement !== els.mood) els.mood.value = s.mood || '';
-  const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
-  els.model.replaceChildren(...(s.models || []).map((m) => h('option', { value: m, selected: m === s.model }, name(m))));
-  els.effort.replaceChildren(...(s.efforts || []).map((m) => h('option', { value: m, selected: m === s.effort }, name(m))));
+  const set = (key) => (value) => { S.settings = { ...S.settings, [key]: value }; renderSettings(); api('PUT', '/api/settings', { [key]: value }).catch((e) => toast(e.message)); };
+  picker(els.model, { options: s.models || [], value: s.model, onPick: set('model') });
+  picker(els.effort, { options: s.efforts || [], value: s.effort, onPick: set('effort') });
 }
 
 document.addEventListener('click', (e) => {
@@ -1298,6 +1578,8 @@ let lastKeyAt = 0;
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!els.quote.hidden) { hideQuote(); return; }
+    if (els.settings.open) return; // the window closes itself
+    if (document.querySelector('.pick.is-open')) { closePickers(); return; }
     if (S.panel) { closePanel(); if (!els.composer.hidden) focusInput(); return; }
     if (typing() && S.cardDecide) document.activeElement.blur();
     return;
@@ -1318,11 +1600,11 @@ window.addEventListener('keydown', (e) => {
     KeyN: () => openNew(),
     KeyS: requeue,
     KeyX: markDone,
-    KeyU: updateBrain,
+    KeyU: () => updateBrain(),
     KeyA: toggleFiles,
-    KeyM: () => { setRail(true); els.mood.focus(); els.mood.select(); },
+    KeyM: () => { els.mood.focus(); els.mood.select(); },
     KeyL: () => setRail(!els.app.classList.contains('rail-open')),
-    KeyP: () => openPad('scratchpad'),
+    KeyP: () => openPad(),
     KeyJ: () => step(1),
     KeyK: () => step(-1),
     ArrowDown: () => step(1),
@@ -1409,7 +1691,7 @@ function onThread(t) {
     S.brain.waiting = all().filter(isUnfiled).length;
     renderBrain();
   }
-  if (S.tab === 'projects' && (!before || before.project !== t.project || before.state !== t.state)) loadProjects();
+  if (!before || before.project !== t.project || before.state !== t.state || before.title !== t.title) renderTree();
 }
 
 function onMessage({ threadId, message }) {
@@ -1463,6 +1745,7 @@ function connect() {
   const source = new EventSource('/api/events');
   const on = (name, fn) => source.addEventListener(name, (e) => fn(JSON.parse(e.data)));
   on('thread', onThread);
+  on('thread-deleted', onThreadDeleted);
   on('message', onMessage);
   on('live', onLive);
   on('artifacts', onArtifacts);
@@ -1470,7 +1753,7 @@ function connect() {
   on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
-  on('connections', () => { if (S.panel?.kind === 'connections') openPanel({ kind: 'connections' }); });
+  on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
   // The page listens first and reads the state second, so nothing that happens in
   // between is missed. After a lost connection it reads the state again.
   let started = false;
@@ -1488,6 +1771,9 @@ function connect() {
       if (first) openThread(first.id, { byQueue: true });
       else openNew();
       setInterval(renderRail, 30_000);
+      setInterval(loadProjects, 5 * 60_000);
+      // Back from signing in with Google: show that it worked.
+      if (new URLSearchParams(location.search).has('google')) { history.replaceState(null, '', '/'); openSettings('connections'); }
     } else if (S.current && S.threads.has(S.current)) {
       openThread(S.current, { keepPanel: true, byQueue: true });
     }
@@ -1505,6 +1791,7 @@ async function load() {
   S.brain = state.brain;
   renderSettings();
   renderRail();
+  renderTree();
   renderBrain();
 }
 

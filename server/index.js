@@ -159,12 +159,13 @@ app.get('/auth/google', (req, res) => {
 });
 
 app.get('/auth/google/callback', async (req, res) => {
-  const page = (text) => `<!doctype html><meta charset="utf-8"><title>Inbox</title><body style="background:#1b1d2a;color:#dfe1ee;font:16px system-ui;padding:3rem"><p>${text}</p><p><a style="color:#8cc4ff" href="/">Back to the inbox</a></p>`;
+  const page = (text) => `<!doctype html><meta charset="utf-8"><title>Brain</title><body style="background:#1b1d2a;color:#dfe1ee;font:16px system-ui;padding:3rem"><p>${text}</p><p><a style="color:#8cc4ff" href="/">Back to the app</a></p>`;
   if (req.query.error) return res.status(400).send(page('Google sign-in was cancelled.'));
   try {
     const email = await google.finishAuth({ code: String(req.query.code || ''), state: String(req.query.state || '') });
     store.events.emit('connections', connections(req));
-    res.send(page(`Gmail and Calendar are connected${email ? ` as ${email.replace(/[<>&]/g, '')}` : ''}. New turns in every thread can use them.`));
+    log(`google: connected${email ? ` as ${email}` : ''}`);
+    res.redirect('/?google=connected');
   } catch (err) {
     res.status(400).send(page(String(err.message).replace(/[<>&]/g, '')));
   }

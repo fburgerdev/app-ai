@@ -68,7 +68,7 @@ In the app's data folder:
 - `language`: the language you speak on calls and that is read to you (`de-DE` for German). One language per call.
 - Optional: `speechTimeoutMs` (default 2500) is how long a pause may be before Twilio hands over what you said; `digestModel` (default `haiku`) writes the spoken summaries.
 
-Restart the app. **Connections** should show "Calling the inbox: ready".
+Restart the app. **Connections** should show "Calling by phone: ready" (Settings → Connections).
 
 ### 3. Point the number at the app
 
@@ -81,7 +81,7 @@ Call the number from an allowed phone. If you hear Twilio's "application error" 
 | What happens | Cause |
 |---|---|
 | Twilio reports 403 | `publicUrl` is not exactly the address in the webhook (without `/voice/twiml`), or the Auth Token is wrong |
-| Twilio reports 404 | Calling is not "ready" in Connections |
+| Twilio reports 404 | Calling is not "ready" in Settings → Connections |
 | The call is rejected at once | Your number is not in `allowedCallers` |
 | Silence after connecting | ConversationRelay is not switched on for the account, or the tunnel does not pass WebSockets |
 

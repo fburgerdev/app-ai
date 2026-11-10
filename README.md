@@ -24,37 +24,51 @@ The first start clones the brain into the app's data folder and, if the data rep
 
 To look at the app without your account or your brain: `npm run demo`. It uses a throwaway vault and a stand-in for Claude that gives canned answers.
 
+## The screen
+
+- **The top bar** is always there: the inbox button with the number waiting, the mood line, Talk, Scratchpad and Settings.
+- **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
+- **The folder outline** on the right shows the vault's areas and projects as folders, and which one the open thread is in (see Folders below).
+- **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
+
 ## The queue
 
-The thread list is out of the way until you want it: move the pointer to the right edge of the window and it slides in; move away and it leaves. The small tab on that edge shows how many threads wait. Alt+L shows it from the keyboard, and "Keep open" at its top makes it a fixed column again. On a phone it is behind the **Threads** button.
+The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from three things.
 
-It shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from three things.
-
-- **The mood line** at the top of the list (Alt+M). Type what you feel like ("maths", "research, no mails"). It saves as you type and nothing is sent; the queue reorders within a few seconds. Empty it to go back to normal.
-- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, open by hand instead of what was offered, and which cards you accept or decline. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Notes for Claude → "What the queue has learned". Your own lines are kept.
+- **The mood line** in the top bar (Alt+M). Type what you feel like ("maths", "research, no mails"). It saves as you type and nothing is sent; the queue reorders within a few seconds. Empty it to go back to normal.
+- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → Queue. Your own lines are kept.
 - **Otherwise:** things with a date or that block others first, then what has waited longest, kinds mixed.
 
 The order is worked out in the background, so moving on never waits for a model. Under the heading you see in a few words why the first one is first. You can always click any thread yourself.
 
-**Drag a thread** to where you want it (with a finger: press and hold, then move). It stays at that place until you have dealt with it, whatever the model thinks; the rest is ordered around it. The drag is recorded as a choice the queue learns from.
+**Drag a thread** (with a finger: press and hold, then move):
+
+- to another place in **Next up**. It stays there until you have dealt with it, whatever the model thinks; the rest is ordered around it.
+- onto **Done** to close it, and from Done back into Next up to reopen it.
+- onto a **folder** in the outline to file it under that project. A closed folder opens when the thread rests on it.
 
 **Requeue** (Alt+S) means "not now": the thread goes to the back for 20 minutes and you get the next one.
+
+**Send into spin-off** (Alt+Enter), next to Send: your message starts a new thread that begins as a copy of this one, files included. Nothing is sent to the thread you are in; it goes to the back of the queue, since you have just dealt with it. The spin-off gets the conversation so far as text, not Claude's working memory of it. The brain update files the copied part from the original only.
+
+**Delete**, in a thread's header, removes it for good after a second click: for chats that were a test, random, or nothing for the brain. What an update already filed from it stays in the brain.
 
 | Key | What it does |
 |---|---|
 | Enter | Send, then open what the queue puts next |
+| Alt+Enter | Send into a spin-off |
 | Shift+Enter | New line |
 | Alt+N | New thread |
 | Alt+S | Requeue |
 | Alt+X | Done: close this thread |
 | Y / N | On a card: accept / decline. While typing in the card: Ctrl+Enter accepts, Alt+N declines |
-| Alt+J / Alt+K | Next / previous thread in the list |
+| Alt+J / Alt+K | Next / previous thread in the inbox |
 | Alt+A | Show or hide the files Claude made in this thread |
 | Alt+U | Update the brain |
-| Alt+L | Show or hide the thread list |
+| Alt+L | Show or hide the inbox |
 | Alt+M | Jump to the mood line |
-| Alt+P | Scratchpad |
-| Esc | Close the side panel |
+| Alt+P | Scratchpad, and back |
+| Esc | Close the side panel or the settings window |
 
 ### Model and effort
 
@@ -67,6 +81,7 @@ A card is one finished message: a LinkedIn note, a first mail, a follow-up on so
 - Click into the text and change it right there. No editor opens.
 - **Y** accepts: the text is copied and the person's page opens, if there is one. **N** declines. Either way the card is done and the next thing comes up.
 - A mail card has **Put in Gmail** and **Send** instead; using either accepts the card.
+- **A line for your reason**, under the text, for either verdict: why not, or what the card got wrong ("this is outdated, we already met"). It is optional. It is kept with the decision, the queue and the next card run read it, and the next brain update files it: a reason as a rule about that kind of card, a correction as a fact in the note it concerns.
 
 Cards are made in the background by a run that reads the vault and searches the web for the right person. It starts by itself when fewer than three unseen cards are left while you work the queue, at most every 45 minutes, or when you press "Look for opportunities". Chase cards come from rows in `Brain/Waiting For.md` whose chase date has passed.
 
@@ -89,37 +104,46 @@ This needs Gmail connected, once: [docs/google.md](docs/google.md). Without it t
 
 Every thread has a line: **In the brain up to here**. Everything above it has been filed.
 
-"Update brain" (Alt+U) raises that line, in every thread at once, to where each thread stood when you pressed. You can keep working while it runs; whatever you write after pressing stays below the line and waits for the next update.
+"Update brain" (Alt+U, at the bottom of the inbox) raises that line, in every thread at once, to where each thread stood when you pressed. You can keep working while it runs; whatever you write after pressing stays below the line and waits for the next update.
 
 The same press also takes in:
 
-- **New mail.** With Gmail connected, everything received and sent since the last update. What matters is filed. A mail that needs your answer becomes a thread in the queue, with Claude already drafting the reply.
-- **Notes for Claude.** A page (at the bottom of the thread list) for half-sentences, updated facts and nudges about how Claude works. The update files them and empties the page, so an empty page means they went in.
-- **Cards you decided**, so sent messages and their Waiting For rows land in the vault.
+- **New mail**, as "Update Gmail" below does.
+- **Cards you decided**, with your reasons, so sent messages and their Waiting For rows land in the vault.
+
+For every thread in which Claude made something (a mail, a document, a deck, a script) the update also does the first two stages of the vault's `Claude/Learning From Feedback.md`:
+
+- **Capture, every time.** Your feedback rounds in your words, the first and the latest version as outlines, your own edits, and what you praised go into the piece's capture file under `Artifacts/<Format>/`. A thinking session gets its session file in `Artifacts/Thinking/`.
+- **Extract, once you closed the thread.** A thread marked Done means the piece is finished: its learnings go into that format's `Pool.md`.
+- Turning a pool into rules ("improve on mails" and the like) stays your call and is not something the update does.
 
 Then the app makes one `thinking:` commit and pushes. What the vault says needs your confirmation is not written; it comes back as a thread called "Brain update …: questions".
 
-The update is the only thing in the app that writes the vault, and it runs only when you press the button.
+**Update Gmail**, next to it, is the mail part by itself, with its own water level: everything received and sent since mail was last taken in (the first time: the last day). What matters is filed in the brain, sent mail gets its Waiting For row, and a mail that needs your answer becomes a thread in the queue with Claude already drafting the reply. Under the buttons you see up to when mail has been taken in.
 
-## Projects
+These two buttons are the only things in the app that write the vault, and they run only when you press them.
 
-The **Projects** tab shows the vault's areas and projects, read from `Brain/Projects/Projects Index.md`. The app keeps no list of its own: a project is here exactly when it is in the vault.
+## Folders
 
-- Each line shows how many open threads it has and when it was last touched, so you see what has gone quiet.
-- "New thread here" starts a thread on that project. Claude begins with the project's note and its area's note already loaded.
-- Any thread can be moved to a project with the picker in its header.
+The outline on the right shows the vault's areas and projects, read from `Brain/Projects/Projects Index.md`, plus "No project". The app keeps no list of its own: a project is here exactly when it is in the vault.
+
+- The folder of the open thread is lit and open, and the thread's header shows the same path under its name.
+- A folder opens while the pointer rests on it and closes again when the pointer leaves the outline; a click keeps it open. Inside are its threads, and "New thread", "Move this thread here" and "Note".
+- A number on a folder says how many threads in it wait for you.
+- A new thread started from a folder begins with the project's note and its area's note already loaded.
+- When the window is too narrow for the outline (and on the phone), it is the **Folders** tab in the inbox.
 
 ## Scratchpad
 
-A page to write in, like the one in Obsidian (Alt+P). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
+A page to write in, like the one in Obsidian, one click away in the top bar (Alt+P; again to go back). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
 
 ## Talk: the host
 
-`/walk`, "Talk" at the bottom of the thread list, or the **Talk** button on the phone. You speak or type to the **host**, a small model (Haiku) that sits between you and the threads. For everything you say it decides where it goes:
+`/walk`, or **Talk** in the top bar. You speak or type to the **host**, a small model (Haiku) that sits between you and the threads. For everything you say it decides where it goes:
 
 - **To the open thread.** After a thread has been read to you, what you say is your reply to it. It is sent, and the next thread is read out. No closing keyword is needed.
 - **To a new thread**, when it is a new piece of work for Claude ("ask Claude to find out when the board meets").
-- **To the app**, when it is a command: next, done, repeat, read all, new thread, cancel, goodbye. A thread by name works too ("open the grant one"), and so do "my mood is …" and "note for Claude: …".
+- **To the app**, when it is a command: next, done, repeat, read all, new thread, cancel, goodbye. A thread by name works too ("open the grant one"), and so does "my mood is …".
 - **Nowhere: it answers itself.** Ask what is waiting, what a thread said, or anything a chatbot can answer. Questions that need more (something current from the web, careful thought) go to a stronger model (Sonnet), which may search the web. The host keeps the conversation in mind, so you can ask follow-ups, and "make that a thread" turns the conversation into one.
 
 The short commands and "…and send it" at the end of a sentence work without the model, at once. If the model fails, nothing is lost: say "send" to give what you said to the open thread as it is.
@@ -140,13 +164,13 @@ Good to know:
 - Speaking needs Chrome (Android or computer) and, on the phone, the app reachable over https: [docs/pi.md](docs/pi.md) (the Tailscale part works for a laptop too). Typing works everywhere.
 - Chrome stops listening when the screen goes off. The page keeps the screen on; "Lock for the pocket" covers it with a dark shield that ignores touches.
 - Cards are left out; they are for reading and editing.
-- Every thing you say costs one small Haiku request. The conversation with the host itself is not kept and does not go into the brain; only what it passes to a thread, the mood line or the notes does.
+- Every thing you say costs one small Haiku request. The conversation with the host itself is not kept and does not go into the brain; only what it passes to a thread or the mood line does.
 
 A real phone number does the same through Twilio, for a per-minute price: [docs/calling.md](docs/calling.md).
 
 ## On the phone
 
-The whole app works in the phone's browser under the same address as Talk. One column: the thread on top, the reply box at the bottom, the thread list behind **Threads**. On a card, swipe right to accept and left to decline, or use the buttons; the text is edited in place. "Add to Home screen" in the browser's menu makes it open like an app.
+The whole app works in the phone's browser under the same address as Talk. One column: the top bar, the thread, the reply box at the bottom. The inbox and the folders are behind the inbox button. On a card, swipe right to accept and left to decline, or use the buttons; the text is edited in place. "Add to Home screen" in the browser's menu makes it open like an app.
 
 ## How the brain is handled
 
@@ -170,7 +194,7 @@ App data is in its own folder, outside the vault:
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-That folder is a git repository. Every five minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad and notes, the mood line, model and effort, the queue's record and profile, the card log. Connections shows when it last saved.
+That folder is a git repository. Every five minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, the mood line, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
 
 Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, logs.
 

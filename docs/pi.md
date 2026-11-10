@@ -100,7 +100,7 @@ On the laptop or phone: the address from step 3. Install it as an app from the b
 
 ## Without a Pi: reaching the laptop from the phone
 
-Walk mode needs the app reachable from your phone over https. The Tailscale part alone does that for a laptop: install Tailscale on the laptop and the phone, run `tailscale serve --bg 4317` on the laptop, put the address it prints into `allowedHosts`, restart the app, and open that address on the phone. It works while the laptop is awake.
+The Talk page needs the app reachable from your phone over https. The Tailscale part alone does that for a laptop: install Tailscale on the laptop and the phone, run `tailscale serve --bg 4317` on the laptop, put the address it prints into `allowedHosts`, restart the app, and open that address on the phone. It works while the laptop is awake.
 
 ## What is different on the Pi
 

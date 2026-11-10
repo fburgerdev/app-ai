@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#1b1d2a">
-  <title>Inbox</title>
+  <title>Brain</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/vendor/fonts/literata/wght.css">
@@ -16,58 +16,84 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="app" class="app">
-    <nav class="rail" aria-label="Threads">
-      <div class="rail-top">
-        <div class="rail-bar">
-          <button id="rail-pin" class="link" type="button" aria-pressed="false">Keep open</button>
-          <button id="rail-close" class="link rail-close" type="button">Close</button>
-        </div>
-        <button id="new-thread" class="btn btn-new" type="button">New thread <kbd>Alt N</kbd></button>
-        <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
-               placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
-        <div class="tabs" role="tablist">
-          <button id="tab-queue" class="tab is-on" type="button" role="tab">Queue</button>
-          <button id="tab-projects" class="tab" type="button" role="tab">Projects</button>
-        </div>
-      </div>
-      <div id="rail-lists" class="rail-lists"></div>
-      <div id="brain" class="brain"></div>
-    </nav>
+  <div class="shell">
+    <header class="topbar">
+      <button id="open-inbox" class="top-btn top-inbox" type="button" title="The inbox (Alt L, or move the pointer to the left edge)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7h11L20 13v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5zM4 13h4.5a3.5 3.5 0 007 0H20"/></svg>
+        <span class="top-label">Inbox</span><span id="inbox-count" class="top-count"></span>
+      </button>
+      <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
+             placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
+      <span class="top-space"></span>
+      <a class="top-btn" href="/walk" title="Talk to the host">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
+        <span class="top-label">Talk</span>
+      </a>
+      <button id="open-scratch" class="top-btn" type="button" title="Scratchpad (Alt P)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l1-4L16.5 4.5a2 2 0 013 3L9 18l-4 1zM14.5 6.5l3 3"/></svg>
+        <span class="top-label">Scratchpad</span>
+      </button>
+      <button id="open-settings" class="top-btn top-icon" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+      </button>
+    </header>
 
-    <main class="stage">
-      <div class="phone-bar">
-        <a class="phone-btn phone-talk" href="/walk">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>Talk
-        </a>
-        <button id="phone-new" class="phone-btn" type="button">New</button>
-        <button id="phone-threads" class="phone-btn phone-threads" type="button">Threads <span id="phone-count" class="phone-count"></span></button>
-      </div>
-      <header id="thread-head" class="thread-head"></header>
-      <div id="scroller" class="scroller">
-        <div id="messages" class="messages quotable"></div>
-      </div>
-      <form id="composer" class="composer" autocomplete="off">
-        <textarea id="input" rows="1" placeholder="Reply…" aria-label="Your message"></textarea>
-        <div class="composer-foot">
-          <label class="pick">Model
-            <select id="model" class="select"></select>
-          </label>
-          <label class="pick">Effort
-            <select id="effort" class="select"></select>
-          </label>
-          <button id="send" class="btn btn-send" type="submit">Send</button>
+    <div id="app" class="app">
+      <nav class="rail" aria-label="Inbox">
+        <div class="rail-top">
+          <div class="rail-bar">
+            <button id="rail-pin" class="link" type="button" aria-pressed="false">Keep open</button>
+            <button id="rail-close" class="link rail-close" type="button">Close</button>
+          </div>
+          <button id="new-thread" class="btn btn-new" type="button">New thread <kbd>Alt N</kbd></button>
+          <div class="tabs" role="tablist">
+            <button id="tab-queue" class="tab is-on" type="button" role="tab">Inbox</button>
+            <button id="tab-projects" class="tab" type="button" role="tab">Folders</button>
+          </div>
         </div>
-      </form>
-    </main>
+        <div id="rail-lists" class="rail-lists"></div>
+        <div id="brain" class="brain"></div>
+      </nav>
 
-    <aside id="panel" class="panel" hidden aria-label="Side panel"></aside>
+      <main class="stage">
+        <header id="thread-head" class="thread-head"></header>
+        <div id="scroller" class="scroller">
+          <div id="messages" class="messages quotable"></div>
+        </div>
+        <form id="composer" class="composer" autocomplete="off">
+          <textarea id="input" rows="1" placeholder="Reply…" aria-label="Your message"></textarea>
+          <div class="composer-foot">
+            <div id="model" class="pick" data-label="Model"></div>
+            <div id="effort" class="pick" data-label="Effort"></div>
+            <span class="foot-space"></span>
+            <button id="spin" class="btn btn-quiet btn-spin" type="button" title="Send this into a spin-off: a new thread that starts as a copy of this one. Nothing is sent here, and this thread goes to the back of the queue. (Alt Enter)">Send into spin-off</button>
+            <button id="send" class="btn btn-send" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+
+      <aside id="panel" class="panel" hidden aria-label="Side panel"></aside>
+      <aside id="tree" class="tree" aria-label="Folders"></aside>
+
+      <button id="rail-edge" class="rail-edge" type="button" tabindex="-1" aria-label="Show the inbox"></button>
+      <div id="rail-backdrop" class="rail-backdrop" hidden></div>
+    </div>
   </div>
 
-  <button id="rail-edge" class="rail-edge" type="button" aria-label="Show the threads">
-    <span id="edge-count" class="edge-count"></span>
-  </button>
-  <div id="rail-backdrop" class="rail-backdrop" hidden></div>
+  <dialog id="settings" class="window" aria-label="Settings">
+    <div class="window-side">
+      <h2 class="window-title">Settings</h2>
+      <button class="window-tab" type="button" data-tab="connections">Connections</button>
+      <button class="window-tab" type="button" data-tab="queue">Queue</button>
+      <button class="window-tab" type="button" data-tab="keys">Keys</button>
+    </div>
+    <div class="window-main">
+      <button id="settings-close" class="window-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div id="settings-body" class="window-body"></div>
+    </div>
+  </dialog>
 
   <button id="quote-btn" class="quote-btn" type="button" hidden>Quote in reply</button>
   <div id="toast" class="toast" role="status" hidden></div>
