@@ -1,0 +1,28 @@
+{
+  "name": "app-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Florian's inbox for working with Claude: threads you steer by feedback, tied to the brain repo.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js --open",
+    "serve": "node server/index.js",
+    "login": "node scripts/login.mjs",
+    "demo": "node scripts/demo.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.321",
+    "@fontsource-variable/instrument-sans": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@fontsource-variable/literata": "^5.2.8",
+    "@highlightjs/cdn-assets": "^11.11.1",
+    "dompurify": "^3.3.0",
+    "express": "^5.1.0",
+    "katex": "^0.19.1",
+    "marked": "^18.2.0"
+  }
+}

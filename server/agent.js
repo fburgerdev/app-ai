@@ -1,0 +1,338 @@
+// Runs one turn of Claude through the Claude Agent SDK and reports what happens as
+// simple events. The rest of the app never touches the SDK directly, so an SDK change
+// lands in this one file.
+//
+// Permissions are decided here, in code, not by asking: nobody is sitting at a prompt.
+//   thread   reads the vault, searches the web, writes only into its artifacts folder
+//   extract  the brain update: reads and writes the vault, no web, no git history
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { log } from './config.js';
+
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
+const FREE_TOOLS = new Set(['WebSearch', 'WebFetch', 'TodoWrite', 'Agent', 'Task', 'Skill', 'ToolSearch', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'KillBash', 'Monitor']);
+const NEVER = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'CronCreate', 'CronDelete', 'CronList'];
+const GIT_HISTORY = /\bgit\b[^|;&\n]*\b(commit|push|pull|fetch|reset|rebase|checkout|switch|restore|clean|stash|merge|branch|remote|config)\b/;
+
+function isInside(file, root) {
+  const rel = path.relative(path.resolve(root), path.resolve(file));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function allow(input) {
+  return { behavior: 'allow', updatedInput: input };
+}
+
+function deny(message) {
+  return { behavior: 'deny', message };
+}
+
+// Builds the function the SDK calls before every tool use that needs a decision.
+export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false }) {
+  const readable = [cwd, artifactsDir, ...readDirs].filter(Boolean);
+  const target = (input) => {
+    const p = input.file_path || input.notebook_path || input.path;
+    return p ? path.resolve(cwd, String(p)) : null;
+  };
+
+  return async (toolName, input) => {
+    if (WRITE_TOOLS.has(toolName)) {
+      const file = target(input);
+      if (!file) return deny('No file path given.');
+      if (mode === 'thread') {
+        if (isInside(file, artifactsDir)) return allow(input);
+        return deny(
+          `Threads in this app cannot write there. Write files only into the artifacts folder: ${artifactsDir}. ` +
+          'The vault is written by the brain update, which Florian starts himself.',
+        );
+      }
+      if (!isInside(file, cwd)) return deny('The brain update writes only inside the vault.');
+      for (const p of protectedPaths) {
+        if (isInside(file, path.join(cwd, p))) return deny(`"${p}" is Florian's own or shared; the brain update never writes it.`);
+      }
+      return allow(input);
+    }
+
+    if (READ_TOOLS.has(toolName)) {
+      const file = target(input);
+      if (!file || readable.some((root) => isInside(file, root))) return allow(input);
+      return deny('That path is outside the vault and this thread\'s folders.');
+    }
+
+    if (FREE_TOOLS.has(toolName)) {
+      if (mode === 'extract' && (toolName === 'WebSearch' || toolName === 'WebFetch')) {
+        return deny('The brain update works only from the transcripts and the vault.');
+      }
+      return allow(input);
+    }
+
+    if (SHELL_TOOLS.has(toolName)) {
+      if (mode === 'thread') {
+        return shell ? allow(input) : deny('Shell commands are turned off for threads in this app.');
+      }
+      const command = String(input.command || '');
+      if (GIT_HISTORY.test(command)) {
+        return deny('Do not use git here beyond "git mv" and "git rm": the app commits and pushes when you finish.');
+      }
+      return allow(input);
+    }
+
+    return deny(`${toolName} is not available in this app.`);
+  };
+}
+
+// A short line for the interface saying what a tool call does.
+export function describeTool(name, input = {}, cwd = '') {
+  const rel = (p) => {
+    if (!p) return '';
+    const r = path.relative(cwd, path.resolve(cwd, String(p)));
+    return (r.startsWith('..') ? path.basename(String(p)) : r).split(path.sep).join('/');
+  };
+  const clip = (s, n = 90) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
+  switch (name) {
+    case 'Read': return `Read ${rel(input.file_path)}`;
+    case 'Write': return `Wrote ${rel(input.file_path)}`;
+    case 'Edit':
+    case 'MultiEdit': return `Edited ${rel(input.file_path)}`;
+    case 'Glob': return `Looked for files matching ${clip(input.pattern, 60)}`;
+    case 'Grep': return `Searched the vault for "${clip(input.pattern, 60)}"`;
+    case 'WebSearch': return `Searched the web for "${clip(input.query, 70)}"`;
+    case 'WebFetch': {
+      try { return `Read ${new URL(String(input.url)).hostname}`; } catch { return 'Read a web page'; }
+    }
+    case 'Bash':
+    case 'PowerShell': return `Ran ${clip(input.command, 80)}`;
+    case 'Agent':
+    case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
+    case 'TodoWrite':
+    case 'TaskCreate':
+    case 'TaskUpdate':
+    case 'TaskList':
+    case 'TaskGet':
+    case 'ToolSearch': return null;
+    default: return name;
+  }
+}
+
+function friendlyError(text) {
+  const t = String(text || 'Claude stopped with an error.');
+  if (/login|api key|authenticat|unauthori[sz]ed|oauth|credential/i.test(t)) {
+    return `Claude is not signed in on this computer. Run "npm run login" in the app's folder, then send your message again. (${t.trim()})`;
+  }
+  if (/rate limit|usage limit|overloaded|quota/i.test(t)) {
+    return `Claude's usage limit was reached or the service is busy. Send your message again later. (${t.trim()})`;
+  }
+  return t.trim();
+}
+
+/**
+ * Runs one turn.
+ * @returns {Promise<{sessionId: string|null, text: string, error: string, durationMs: number, aborted: boolean}>}
+ */
+export async function runAgent(params) {
+  const started = Date.now();
+  const run = params.fake ? runFake : runReal;
+  try {
+    const out = await run(params);
+    return { ...out, durationMs: Date.now() - started };
+  } catch (err) {
+    if (params.signal?.aborted) {
+      return { sessionId: params.resume || null, text: '', error: '', aborted: true, durationMs: Date.now() - started };
+    }
+    log(`agent error: ${err.stack || err.message}`);
+    return { sessionId: params.resume || null, text: '', error: friendlyError(err.message), aborted: false, durationMs: Date.now() - started };
+  }
+}
+
+async function runReal({ prompt, cwd, resume, systemAppend, model, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent }) {
+  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const abortController = new AbortController();
+  if (signal) {
+    if (signal.aborted) abortController.abort();
+    else signal.addEventListener('abort', () => abortController.abort(), { once: true });
+  }
+
+  const disallowedTools = [...NEVER];
+  if (mode === 'extract') disallowedTools.push('WebSearch', 'WebFetch');
+  if (mode === 'thread' && !shell) disallowedTools.push('Bash', 'PowerShell');
+
+  const options = {
+    cwd,
+    abortController,
+    includePartialMessages: true,
+    // 'project' loads the vault's CLAUDE.md. The user's own Claude Code settings,
+    // plugins and MCP servers stay out, so a thread behaves the same every time.
+    settingSources: ['project'],
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
+    permissionMode: 'default',
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell }),
+    additionalDirectories: [artifactsDir, ...(readDirs || [])].filter(Boolean),
+    disallowedTools,
+  };
+  if (resume) options.resume = resume;
+  else if (title) options.title = title;
+  if (model) options.model = model;
+
+  // The permission callback needs the streaming form of the prompt.
+  async function* input() {
+    yield { type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null, session_id: resume || '' };
+  }
+
+  let sessionId = resume || null;
+  let text = '';
+  let lastText = '';
+  let error = '';
+  let sawDelta = false;
+
+  for await (const msg of query({ prompt: input(), options })) {
+    if (msg.session_id && msg.session_id !== sessionId) {
+      sessionId = msg.session_id;
+      onEvent?.({ type: 'session', sessionId });
+    }
+    if (msg.type === 'stream_event') {
+      if (msg.parent_tool_use_id) continue; // a helper's own text is not shown
+      const ev = msg.event;
+      if (ev.type === 'content_block_start' && ev.content_block?.type === 'text') {
+        lastText = '';
+        onEvent?.({ type: 'text-start' });
+      } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+        sawDelta = true;
+        text += ev.delta.text;
+        lastText += ev.delta.text;
+        onEvent?.({ type: 'text', delta: ev.delta.text });
+      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'thinking') {
+        onEvent?.({ type: 'activity', text: 'Thinking' });
+      }
+    } else if (msg.type === 'assistant') {
+      if (msg.error) error = friendlyError(msg.error);
+      for (const block of msg.message?.content || []) {
+        if (block.type === 'tool_use') {
+          const summary = describeTool(block.name, block.input, cwd);
+          if (summary) onEvent?.({ type: 'tool', name: block.name, summary, helper: Boolean(msg.parent_tool_use_id) });
+        } else if (block.type === 'text' && !msg.parent_tool_use_id && !sawDelta) {
+          // No partial messages arrived for this block: show it whole.
+          text += block.text;
+          lastText = block.text;
+          onEvent?.({ type: 'text-start' });
+          onEvent?.({ type: 'text', delta: block.text });
+        }
+      }
+      sawDelta = false;
+    } else if (msg.type === 'user' && !msg.parent_tool_use_id) {
+      onEvent?.({ type: 'tool-result' });
+    } else if (msg.type === 'result') {
+      if (msg.is_error || msg.subtype !== 'success') {
+        error = friendlyError(msg.result || (msg.errors || []).join(' ') || msg.subtype);
+      } else {
+        error = '';
+        if (!lastText && msg.result) lastText = msg.result;
+      }
+    }
+  }
+  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted };
+}
+
+// ---------- a stand-in for Claude, for trying the app without an account ----------
+//
+// Started with APP_AI_FAKE=1. It streams canned text, pretends to use tools, writes an
+// artifact when the message mentions a draft, and in a brain update edits one file.
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function runFake({ prompt, cwd, resume, mode, artifactsDir, readDirs, signal, onEvent }) {
+  const sessionId = resume || `fake-${Date.now().toString(36)}`;
+  onEvent?.({ type: 'session', sessionId });
+  const speed = Number(process.env.APP_AI_FAKE_SPEED || 1);
+  const say = async (full) => {
+    onEvent?.({ type: 'text-start' });
+    for (const piece of full.match(/[\s\S]{1,14}/g) || []) {
+      if (signal?.aborted) throw new Error('aborted');
+      onEvent?.({ type: 'text', delta: piece });
+      await sleep(12 * speed);
+    }
+    return full;
+  };
+
+  if (mode === 'extract') {
+    onEvent?.({ type: 'tool', name: 'Read', summary: 'Read CLAUDE.md' });
+    await sleep(150 * speed);
+    const dir = path.join(cwd, 'Brain');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'App Test.md');
+    const stamp = new Date().toISOString();
+    fs.appendFileSync(file, `- stand-in brain update at ${stamp}\n`);
+    onEvent?.({ type: 'tool', name: 'Edit', summary: 'Edited Brain/App Test.md' });
+    const transcripts = (readDirs || []).flatMap((dir) => fs.readdirSync(dir)
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => fs.readFileSync(path.join(dir, name), 'utf8')));
+    const wantsQuestions = transcripts.some((t) => /QUESTION-TEST/.test(t.split('## New')[1] || ''));
+    const report = [
+      wantsQuestions ? 'STATUS: questions' : 'STATUS: updated',
+      'COMMIT: thinking: stand-in brain update from the app',
+      '',
+      '## Written',
+      '- Brain/App Test.md — one test line',
+      ...(wantsQuestions ? ['', '## Questions', '**App test**', '1. Add "Call the office" to Next Actions?'] : []),
+    ].join('\n');
+    await say(report);
+    return { sessionId, text: report, finalText: report, error: '', aborted: false };
+  }
+
+  if (/FAIL-TEST/.test(prompt)) {
+    return { sessionId, text: '', finalText: '', error: friendlyError('Invalid API key · Please run /login'), aborted: false };
+  }
+
+  let text = '';
+  text += await say('Let me look at what the vault has on this.\n\n');
+  onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Brain/Next Actions.md' });
+  await sleep(400 * speed);
+  onEvent?.({ type: 'tool', name: 'Grep', summary: 'Searched the vault for "deadline"' });
+  await sleep(400 * speed);
+  onEvent?.({ type: 'tool', name: 'WebSearch', summary: 'Searched the web for "example query"' });
+  await sleep(400 * speed);
+
+  if (/draft|entwurf|mail/i.test(prompt)) {
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    const file = path.join(artifactsDir, 'Mail an das Büro.md');
+    const round = fs.existsSync(file) ? 2 : 1;
+    const body = round === 1
+      ? '# Mail an das Büro\n\n**Betreff:** Konzept, nächste Schritte\n\nHallo Frau Beispiel,\n\nvielen Dank für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nIch schlage vor, dass wir die offenen Punkte in der kommenden Woche besprechen.\n\nViele Grüße\nFlorian\n'
+      : '# Mail an das Büro\n\n**Betreff:** Konzept, nächste Schritte\n\nHallo Frau Beispiel,\n\ndanke für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nPasst Ihnen Donnerstag, 14 Uhr, um die offenen Punkte durchzugehen?\n\nViele Grüße\nFlorian\n';
+    fs.writeFileSync(file, body);
+    onEvent?.({ type: 'tool', name: 'Write', summary: 'Wrote Mail an das Büro.md' });
+    await sleep(200 * speed);
+    text += await say(round === 1
+      ? 'The draft is in **Mail an das Büro.md**. One thing to decide: do you want to propose a date yourself, or leave it open?'
+      : 'Updated the draft: shorter opening, and it now proposes Thursday 14:00.');
+  } else {
+    text += await say([
+      '## Where this stands',
+      '',
+      'The decision noted in [[Next Actions]] is the gate for everything else. Two things follow from the notes:',
+      '',
+      '1. **Announcement timing** depends on the board date.',
+      '2. *Partners* should be on board before the press line goes out.',
+      '',
+      '> Your earlier position: lead with taste, not ethics.',
+      '',
+      '| Option | Effort | Risk |',
+      '|---|---|---|',
+      '| Quiet rollout | low | backlash arrives unprepared |',
+      '| Announced with partners | medium | needs one more sign-off |',
+      '',
+      'If each site converts with probability $p$, the expected number converted is $n \\cdot p$:',
+      '',
+      '$$\\mathbb{E}[X] = \\sum_{k=0}^{n} k \\binom{n}{k} p^k (1-p)^{n-k} = np$$',
+      '',
+      '```js',
+      'const ready = threads.filter((t) => t.state === "ready");',
+      '```',
+      '',
+      'Which of the two options do you want me to work out?',
+    ].join('\n'));
+  }
+  return { sessionId, text, finalText: text, error: '', aborted: false };
+}
