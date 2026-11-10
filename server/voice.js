@@ -86,10 +86,6 @@ const app = {
   done: (id) => { recordDecision('done', store.getThread(id), { by: 'voice' }); store.updateThread(id, { state: 'done', doneAt: Date.now(), error: '' }); },
   mood: () => getState().mood || '',
   setMood: (text) => setState({ mood: String(text) }),
-  addNote: (text) => {
-    const before = (readPad('notes') || '').replace(/\s+$/, '');
-    writePad('notes', `${before ? `${before}\n` : ''}- ${String(text).trim()}\n`);
-  },
   words,
   // The quick model that decides where speech goes.
   ask: ({ system, prompt }) => model({ system, prompt, model: config.voice.hostModel }),

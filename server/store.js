@@ -78,6 +78,25 @@ export function isUnfiled(thread) {
   return (thread.lastUserAt || 0) > (thread.extractedCount || 0);
 }
 
+// A spin-off: a new thread that starts as a copy of another one's conversation and
+// files. The copy counts as already seen by the brain update, which files those
+// messages from the original; only what is said in the spin-off itself is new there.
+export function copyThread(sourceId, { title }) {
+  const source = threads.get(sourceId);
+  if (!source) return null;
+  const copy = createThread({ title, project: source.project });
+  for (const name of ['messages.jsonl', 'artifacts.json']) {
+    const from = path.join(threadDir(sourceId), name);
+    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(threadDir(copy.id), name));
+  }
+  for (const dir of ['artifacts', 'versions']) {
+    const from = path.join(threadDir(sourceId), dir);
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(threadDir(copy.id), dir), { recursive: true });
+  }
+  const count = readMessages(copy.id).length;
+  return updateThread(copy.id, { messageCount: count, extractedCount: count, spunFrom: sourceId, spunTitle: source.title, spunAt: count });
+}
+
 export function createThread({ title, kind = 'chat', sessionId = null, project = '', card = null }) {
   const id = newId();
   const now = Date.now();
@@ -108,6 +127,16 @@ export function createThread({ title, kind = 'chat', sessionId = null, project =
   threads.set(id, meta);
   events.emit('thread', meta);
   return meta;
+}
+
+// Removes a thread for good: its conversation, its files and their versions. What a
+// brain update has already filed from it stays in the brain.
+export function deleteThread(id) {
+  if (!threads.has(id)) return false;
+  threads.delete(id);
+  fs.rmSync(threadDir(id), { recursive: true, force: true });
+  events.emit('thread-deleted', { id });
+  return true;
 }
 
 // `quiet` skips the disk write and is for fast-changing display fields only.

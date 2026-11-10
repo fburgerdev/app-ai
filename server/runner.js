@@ -108,14 +108,20 @@ function threadInstructions(thread) {
   });
 }
 
-// When Claude Code no longer has the session on disk, the conversation so far is handed
-// over as text instead, so the thread carries on rather than failing.
+// When Claude Code has no session for a thread that already has a conversation, the
+// conversation so far is handed over as text, so the thread carries on. That is the case
+// when the session is gone from disk, and for a spin-off, which starts as a copy of
+// another thread's conversation.
 function recap(threadId, newPrompt) {
+  const thread = store.getThread(threadId);
   const earlier = store.readMessages(threadId).slice(0, -1);
-  const lines = earlier.map((m) => `### ${m.role === 'user' ? 'Florian' : 'Claude'}, ${dateTimeDMY(m.ts)}\n\n${messageText(m)}`);
+  const lines = earlier.map((m) => `### ${m.role === 'user' ? (m.auto ? 'The app' : 'Florian') : 'Claude'}, ${dateTimeDMY(m.ts)}\n\n${messageText(m)}`);
   let body = lines.join('\n\n');
   if (body.length > 60_000) body = `(the beginning is cut)\n\n${body.slice(-60_000)}`;
-  return `This thread's earlier session could not be reopened, so here is the conversation so far.\n\n${body}\n\n---\n\nFlorian's new message:\n\n${newPrompt}`;
+  const lead = thread?.spunFrom && earlier.length <= (thread.spunAt || 0)
+    ? `Florian spun this thread off from the thread "${thread.spunTitle}". Below is that conversation up to the moment he did; the files made there are copied into this thread's files folder. The original thread carries on separately and does not see what happens here. His message at the end is the task for this spin-off: do that, not the original thread's work.`
+    : 'This thread\'s earlier session could not be reopened, so here is the conversation so far.';
+  return `${lead}\n\n${body}\n\n---\n\nFlorian's new message:\n\n${newPrompt}`;
 }
 
 async function runTurn(threadId, prompt) {
@@ -182,7 +188,9 @@ async function runTurn(threadId, prompt) {
       onEvent,
       mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer() } : undefined,
     };
-    let result = await runAgent({ ...base, prompt, resume: thread.sessionId || undefined });
+    // No session yet but a conversation already: start from its text.
+    const cold = !thread.sessionId && store.readMessages(threadId).length > 1;
+    let result = await runAgent({ ...base, prompt: cold ? recap(threadId, prompt) : prompt, resume: thread.sessionId || undefined });
     if (thread.sessionId && result.error && /no conversation found|session.*(not found|does not exist)/i.test(result.error)) {
       log(`session ${thread.sessionId} is gone; continuing thread ${threadId} from its transcript`);
       run.parts.length = 0;

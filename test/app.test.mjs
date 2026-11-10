@@ -238,7 +238,8 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   const text = await artifactText(opp.id, 'Message.md');
   const cut = text.replace('Dieser zweite Absatz ist vielleicht zu viel.\n\n', '');
   await call('POST', `/api/threads/${opp.id}/artifact/save`, { name: 'Message.md', content: cut });
-  const accepted = (await call('POST', `/api/threads/${opp.id}/card`, { outcome: 'accepted' })).data.thread;
+  const accepted = (await call('POST', `/api/threads/${opp.id}/card`, { outcome: 'accepted', reason: '  we already met at the summit,\n so I shortened it ' })).data.thread;
+  assert.equal(accepted.card.reason, 'we already met at the summit, so I shortened it');
   assert.equal(accepted.state, 'done');
   assert.equal(accepted.card.outcome, 'accepted');
   assert.equal((await call('POST', `/api/threads/${opp.id}/card`, { outcome: 'declined' })).status, 409);
@@ -254,7 +255,34 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   assert.equal(log[0].edited, true);
   assert.match(log[0].proposed, /zweite Absatz/);
   assert.doesNotMatch(log[0].final, /zweite Absatz/);
+  assert.equal(log[0].reason, 'we already met at the summit, so I shortened it', 'what he wrote about a card is kept with its outcome');
   assert.equal((await state()).brain.cards, 2, 'both outcomes wait for the next brain update');
+});
+
+test('a spin-off starts as a copy; the original goes to the back untouched; a thread can be deleted', async () => {
+  const source = await thread(planThread);
+  const out = await call('POST', `/api/threads/${planThread}/spinoff`, { text: 'Separately: draft the invitation for the kick-off' });
+  assert.equal(out.status, 200);
+  const spin = out.data.thread;
+  assert.notEqual(spin.id, planThread);
+  assert.equal(spin.spunFrom, planThread);
+  assert.equal(spin.project, source.thread.project);
+  assert.equal(spin.title, 'Separately: draft the invitation for the kick-off');
+  const after = await thread(planThread);
+  assert.equal(after.messages.length, source.messages.length, 'nothing was sent to the original');
+  assert.ok(after.thread.requeuedAt > 0, 'the original goes to the back of the queue');
+  const done = await ready(spin.id);
+  assert.equal(done.messages.length, source.messages.length + 2, 'the copy, his message, and Claude\'s reply');
+  assert.equal(done.messages[0].text, source.messages[0].text);
+  assert.equal(done.thread.extractedCount, source.messages.length, 'the copied part is not filed a second time');
+  assert.ok(done.thread.lastUserAt > done.thread.extractedCount, 'what he said in the spin-off is');
+  assert.ok(done.artifacts.length >= source.artifacts.length, 'the files come along');
+  assert.equal((await call('POST', '/api/brain/extract', { only: 'mail' })).data.reason, 'Gmail is not connected. Connect it in the settings.');
+
+  assert.equal((await call('DELETE', `/api/threads/${spin.id}`, {})).data.deleted, true);
+  assert.equal((await call('GET', `/api/threads/${spin.id}`)).status, 404);
+  assert.ok(!(await state()).threads.some((t) => t.id === spin.id));
+  assert.ok(!fs.existsSync(path.join(data, 'threads', spin.id)), 'its conversation and files are gone from disk');
 });
 
 test('the queue records choices and rewrites its profile from them', async () => {
@@ -291,9 +319,8 @@ test('walk mode: the host on the page, with a screen to tell and a connection th
   one.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'my mood is short things on the walk', alternatives: ['my mood is short thinks'], lang: 'en-US', last: true }));
   await until(async () => one.heard.find((m) => m.type === 'text' && /Mood line set/.test(m.token)), 'mood confirmed');
   assert.equal((await call('GET', '/api/state')).data.settings.mood, 'short things on the walk');
-  one.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'note for Claude the walk test note', typed: true, last: true }));
-  await until(async () => one.heard.find((m) => m.type === 'text' && /Noted/.test(m.token)), 'note confirmed');
-  assert.match((await call('GET', '/api/pads/notes')).data.text, /- the walk test note/);
+  one.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'what is waiting?', typed: true, last: true }));
+  await until(async () => one.heard.find((m) => m.type === 'text' && /Stand-in answer/.test(m.token)), 'the host answers itself');
 
   // The connection drops; the host answers into the gap; the page comes back and hears it.
   const seen = one.heard.findLast((m) => m.type === 'text').seq;
@@ -302,8 +329,8 @@ test('walk mode: the host on the page, with a screen to tell and a connection th
   const two = await connect({ resume: true, sid: first.sid, seen: seen - 1 });
   const again = await until(async () => two.heard.find((m) => m.type === 'text'), 'what was missed is said again');
   assert.equal(again.seq, seen);
-  assert.match(again.token, /Noted/);
-  assert.ok(!two.heard.some((m) => m.type === 'text' && /waiting\./.test(m.token)), 'no second greeting');
+  assert.match(again.token, /Stand-in answer/);
+  assert.ok(!two.heard.some((m) => m.type === 'text' && /threads? (is|are) waiting\./.test(m.token)), 'no second greeting');
 
   // A page opened anew is shown the last thing said, marked as not to be read out.
   const three = await connect({ resume: true });

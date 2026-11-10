@@ -185,6 +185,7 @@ app.get('/api/events', (req, res) => {
   const send = (event) => (data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const handlers = {
     thread: send('thread'),
+    'thread-deleted': send('thread-deleted'),
     message: send('message'),
     live: send('live'),
     state: send('state'),
@@ -245,6 +246,22 @@ app.post('/api/threads/:id/messages', (req, res) => {
   res.json({ message, thread: store.getThread(thread.id) });
 });
 
+// "Send into a spin-off": the message starts a new thread that begins as a copy of this
+// one. Nothing is sent here; this thread goes to the back of the queue, since he has
+// just dealt with it.
+app.post('/api/threads/:id/spinoff', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const text = cleanText(req.body.text);
+  if (!text) return res.status(400).json({ error: 'Write a message first.' });
+  if (thread.kind === 'card') return res.status(409).json({ error: 'A card cannot be spun off.' });
+  queue.recordDecision('spun off', thread);
+  const copy = store.copyThread(thread.id, { title: runner.titleFrom(text) });
+  if (thread.state === 'ready') store.updateThread(thread.id, { requeuedAt: Date.now() });
+  runner.sendMessage(copy.id, text);
+  res.json({ thread: store.getThread(copy.id), from: store.getThread(thread.id) });
+});
+
 app.post('/api/threads/:id/state', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
@@ -298,6 +315,17 @@ app.post('/api/threads/:id/title', (req, res) => {
   const title = cleanText(req.body.title).slice(0, 120);
   if (!title) return res.status(400).json({ error: 'A thread needs a name.' });
   res.json({ thread: store.updateThread(thread.id, { title }) });
+});
+
+// Deletes a thread for good. For chats that were a test, random, or nothing for the brain.
+app.delete('/api/threads/:id', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  if (thread.state === 'working') runner.stopTurn(thread.id);
+  log(`thread deleted: "${thread.title}"`);
+  store.deleteThread(thread.id);
+  datasync.saveNow('thread deleted').catch(() => {});
+  res.json({ deleted: true });
 });
 
 app.post('/api/threads/:id/stop', (req, res) => {
@@ -382,7 +410,7 @@ app.post('/api/threads/:id/mail/draft', async (req, res) => {
   try {
     const out = config.fake ? { draftId: m.info.mail?.draftId || 'stand-in-draft' } : await google.gmailSaveDraft({ draftId: m.info.mail?.draftId, ...m.mail });
     store.setMailInfo(m.thread.id, m.name, { draftId: out.draftId, draftVersion: m.version, draftAt: Date.now() });
-    if (m.thread.kind === 'card' && m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'put in Gmail as a draft');
+    if (m.thread.kind === 'card' && m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'put in Gmail as a draft', req.body.reason);
     res.json({ ok: true, thread: store.getThread(m.thread.id) });
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -398,7 +426,7 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
     const sentAt = Date.now();
     store.setMailInfo(m.thread.id, m.name, { sentAt, sentVersion: m.version, messageId: out.messageId, draftId: null });
     if (m.thread.kind === 'card') {
-      if (m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'sent');
+      if (m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'sent', req.body.reason);
     } else {
       // A note in the thread, so Claude and the next brain update know it went out.
       store.appendMessage(m.thread.id, {
@@ -420,7 +448,7 @@ app.post('/api/threads/:id/card', (req, res) => {
   if (thread.kind !== 'card' || thread.state !== 'ready') return res.status(409).json({ error: 'This card has already been decided.' });
   const outcome = req.body.outcome === 'accepted' ? 'accepted' : req.body.outcome === 'declined' ? 'declined' : null;
   if (!outcome) return res.status(400).json({ error: 'Accept or decline.' });
-  cards.decideCard(thread, outcome, outcome === 'accepted' ? 'copied' : '');
+  cards.decideCard(thread, outcome, outcome === 'accepted' ? 'copied' : '', req.body.reason);
   res.json({ thread: store.getThread(thread.id) });
 });
 
@@ -432,7 +460,7 @@ app.post('/api/cards/make', (req, res) => {
 
 // ---------- the brain ----------
 app.post('/api/brain/extract', (req, res) => {
-  res.json(extraction.startExtraction());
+  res.json(extraction.startExtraction({ only: req.body.only === 'mail' ? 'mail' : '' }));
 });
 
 app.get('/api/brain/runs', (req, res) => {

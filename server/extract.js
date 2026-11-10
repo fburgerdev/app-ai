@@ -10,6 +10,9 @@
 //   - the "Notes for Claude" pad, which is emptied once filed
 //   - the cards he accepted or declined
 //
+// "Update Gmail" is the mail part by itself: it takes in the mail since the mail level
+// and raises only that level.
+//
 // It runs only when he asks, it is the only thing in the app that writes the vault, and
 // only one can run at a time. It ends in one commit and a push.
 
@@ -64,6 +67,7 @@ export function extractionStatus() {
   const state = getState();
   return {
     running: Boolean(current),
+    mailOnly: Boolean(current?.mailOnly),
     step: current?.step || '',
     startedAt: current?.startedAt || 0,
     waiting: unfiledThreads().length, // threads not yet in the brain
@@ -112,6 +116,7 @@ function writeThreads(dir, changed) {
       `Started: ${dateTimeDMY(thread.createdAt)}`,
       `Project or area: ${thread.project || 'none named'}`,
       `Closed by Florian: ${thread.state === 'done' ? 'yes' : 'no, still open'}`,
+      ...(thread.spunFrom ? [`Spin-off: Florian spun this thread off from the thread "${thread.spunTitle}". Its first ${thread.spunAt} messages are a copy of that thread and are filed from there.`] : []),
       '',
       '## Files Claude made in this thread',
       '',
@@ -138,6 +143,7 @@ function writeCards(dir, cards) {
     `- To: ${c.to || 'not named'}`,
     `- Project or area: ${c.project || 'none named'}`,
     `- Decided: ${dateTimeDMY(c.ts)}${c.how ? ` (${c.how})` : ''}`,
+    ...(c.reason ? [`- Florian wrote about it: ${c.reason}`] : []),
     `- Id: ${c.key}`,
     '',
     '### As proposed',
@@ -197,11 +203,13 @@ export function parseReport(text) {
 // Claude read into a session; the vault says those are never shown to Florian.
 const visibleChanges = (changes) => changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/'));
 
-export function startExtraction() {
+export function startExtraction({ only = '' } = {}) {
   if (current) return { started: false, reason: 'A brain update is already running.' };
   if (!brain.brainStatus().ready) return { started: false, reason: brain.brainStatus().error || 'The brain is not cloned yet.' };
   const status = extractionStatus();
-  if (!status.waiting && !status.notes && !status.cards && !status.mail) {
+  const mailOnly = only === 'mail';
+  if (mailOnly && !status.mail) return { started: false, reason: 'Gmail is not connected. Connect it in the settings.' };
+  if (!mailOnly && !status.waiting && !status.notes && !status.cards && !status.mail) {
     return { started: false, reason: 'Nothing new to file: everything is already in the brain.' };
   }
 
@@ -209,15 +217,15 @@ export function startExtraction() {
   // The press fixes the level: each thread as it stands right now, and this moment for
   // mail and cards. Whatever comes after waits for the next update.
   const pressedAt = Date.now();
-  const changed = unfiledThreads().map((thread) => {
+  const changed = mailOnly ? [] : unfiledThreads().map((thread) => {
     const messages = store.readMessages(thread.id);
     return { thread: { ...thread }, messages, count: messages.length };
   });
-  current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title) };
-  runExtraction(id, changed, pressedAt)
+  current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title), mailOnly };
+  runExtraction(id, changed, pressedAt, mailOnly)
     .catch((err) => {
       log(`brain update failed: ${err.stack || err.message}`);
-      return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads };
+      return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {
       if (record.status === 'failed') await brain.discardChanges();
@@ -232,7 +240,7 @@ export function startExtraction() {
   return { started: true, threads: current.threads };
 }
 
-async function runExtraction(id, changed, pressedAt) {
+async function runExtraction(id, changed, pressedAt, mailOnly = false) {
   const runDir = path.join(EXTRACTIONS_DIR, id);
   const dir = path.join(runDir, 'transcripts');
   fs.mkdirSync(dir, { recursive: true });
@@ -248,13 +256,13 @@ async function runExtraction(id, changed, pressedAt) {
       material.push(`- ${changed.length} thread file${changed.length === 1 ? '' : 's'} ("Thread NN ….md"), each with its files in a folder next to it`);
     }
 
-    const notes = (readPad('notes') || '');
+    const notes = mailOnly ? '' : (readPad('notes') || '');
     if (notes.trim()) {
       fs.writeFileSync(path.join(dir, 'Notes for Claude.md'), `# Notes for Claude\n\nWritten by Florian in the app, up to ${dateTimeDMY(pressedAt)}.\n\n${notes.trim()}\n`);
       material.push('- `Notes for Claude.md`');
     }
 
-    const cards = readCardLog().filter((e) => e.ts > state.cardsLevel && e.ts <= pressedAt);
+    const cards = mailOnly ? [] : readCardLog().filter((e) => e.ts > state.cardsLevel && e.ts <= pressedAt);
     if (cards.length) {
       writeCards(dir, cards);
       material.push('- `Cards.md`');
@@ -288,7 +296,7 @@ async function runExtraction(id, changed, pressedAt) {
         if (thread.state === 'done' && thread.messageCount <= c.count) patch.archived = true;
         store.updateThread(c.thread.id, patch);
       }
-      const levels = { cardsLevel: pressedAt };
+      const levels = mailOnly ? {} : { cardsLevel: pressedAt };
       if (mailRead) levels.mailLevel = pressedAt;
       setState(levels);
       // The notes pad is emptied of what was filed; anything typed since stays.
@@ -298,7 +306,9 @@ async function runExtraction(id, changed, pressedAt) {
       }
     };
 
-    const base = { id, startedAt: pressedAt, threads: changed.map((c) => c.thread.title), mailCount: mailThreads.length, mailError, notes: Boolean(notes.trim()), cardCount: cards.length };
+    if (mailOnly && mailError) throw new Error(`Gmail could not be read: ${mailError}`);
+
+    const base = { id, mailOnly, startedAt: pressedAt, threads: changed.map((c) => c.thread.title), mailCount: mailThreads.length, mailError, notes: Boolean(notes.trim()), cardCount: cards.length };
 
     if (!material.length) {
       finishLevels();
@@ -316,7 +326,7 @@ async function runExtraction(id, changed, pressedAt) {
       artifactsDir: null,
       readDirs: [dir],
       protectedPaths: config.protectedPaths,
-      title: `Brain update ${dateDMY()}`,
+      title: `${mailOnly ? 'Gmail update' : 'Brain update'} ${dateDMY()}`,
       fake: config.fake,
       onEvent: (ev) => {
         if (ev.type === 'tool-input') logToolRead({ vaultDir: brain.brainDir(), by: 'brain-update', tool: ev.name, input: ev.input });
@@ -338,7 +348,7 @@ async function runExtraction(id, changed, pressedAt) {
     let questionsThread = null;
     if (report.questions) {
       const thread = store.createThread({
-        title: `Brain update ${dateDMY()}: questions`,
+        title: `${mailOnly ? 'Gmail update' : 'Brain update'} ${dateDMY()}: questions`,
         kind: 'brain-update',
         sessionId: config.fake ? null : result.sessionId,
       });

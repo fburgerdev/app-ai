@@ -314,7 +314,6 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       const word = /^open the (\w+)/.exec(low)[1];
       decision = { do: 'open', thread: waiting.find((w) => w.line.includes(word))?.n || 99 };
     } else if (/^my mood is (.*)$/.test(low)) decision = { do: 'mood', text: /^my mood is (.*)$/i.exec(said)[1] };
-    else if (/^note for claude (.*)$/.test(low)) decision = { do: 'note', text: /^note for claude (.*)$/i.exec(said)[1] };
     else if (/^(ask claude to|start a thread)\b/.test(low)) decision = { do: 'new', text: said };
     else if (/^close this one$/.test(low)) decision = { do: 'command', name: 'done' };
     else decision = open ? { do: 'reply', fix: { 'case TW': 'KStW' } } : { do: 'new', text: said };

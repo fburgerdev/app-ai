@@ -45,6 +45,7 @@ export function initQueue(cfg) {
     if (t.state === 'ready' || order.includes(t.id)) schedule();
   });
   store.events.on('state', () => schedule());
+  store.events.on('thread-deleted', ({ id }) => { if (pins.delete(id)) savePins(); schedule(); });
 }
 
 const waiting = () => store.listThreads().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt);
@@ -174,7 +175,7 @@ async function rank() {
 
 // ---------- learning ----------
 
-// One choice. `action` is replied | requeued | done | opened | moved | accepted | declined.
+// One choice. `action` is replied | requeued | done | opened | moved | spun off | accepted | declined.
 export function recordDecision(action, thread, extra = {}) {
   const now = new Date();
   const entry = {
@@ -216,6 +217,7 @@ async function maybeLearn() {
       if (d.project) bits.push(`project ${d.project}`);
       if (d.position > 1) bits.push(`was offered as number ${d.position}`);
       if (d.to) bits.push(`dragged by hand to place ${d.to}`);
+      if (d.reason) bits.push(`his reason: ${d.reason}`);
       if (d.edited) bits.push(`edited before deciding: ${d.edited}`);
       if (d.mood) bits.push(`mood line "${d.mood}"`);
       return `- ${bits.join(', ')}`;

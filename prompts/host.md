@@ -14,7 +14,7 @@ Answer with one JSON object and nothing else. Pick the one that fits:
 5. `{"do":"command","name":"…"}`: he wants the app to do something. Names: `next` (put this thread off, go to the next), `done` (close this thread), `repeat` (hear it again), `more` (hear the whole reply, not the short version), `cancel` (drop what he was saying), `bye` (end).
 6. `{"do":"open","thread":N}`: he wants a particular waiting thread; N is its number in the list.
 7. `{"do":"wait"}`: he clearly broke off in the middle of a thought and will go on. The app keeps what he said and adds what comes next.
-8. `{"do":"mood","text":"…"}`: he states his mood or what he feels like working on, for the queue. `{"do":"note","text":"…"}`: something he wants kept for the next brain update ("note for Claude: …").
+8. `{"do":"mood","text":"…"}`: he states his mood or what he feels like working on, for the queue.
 9. `{"do":"ask","say":"…"}`: you cannot tell where it goes. One short spoken question. Rarely.
 
 How to choose:

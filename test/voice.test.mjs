@@ -61,7 +61,6 @@ function fakeApp(decide = () => ({ do: 'reply' })) {
     done: (id) => { log.push(['done', id]); threads.find((t) => t.id === id).state = 'done'; },
     mood: () => '',
     setMood: (text) => log.push(['mood', text]),
-    addNote: (text) => log.push(['note', text]),
     words: () => 'KStW, Plant-based Universities',
     ask: async ({ prompt }) => {
       asked.push(prompt);
@@ -115,7 +114,6 @@ test('the host answers its own questions and hands on the hard ones', async () =
     if (/how many/.test(said)) return { do: 'answer', say: 'Two are waiting.' };
     if (/protein/.test(said)) return { do: 'think', question: 'How much protein is in tofu?' };
     if (/mood/.test(said)) return { do: 'mood', text: 'short things only' };
-    if (/note/.test(said)) return { do: 'note', text: 'ask Lutz about Friday' };
     return { do: 'reply' };
   };
   const { app, said, host } = hostWith(decide);
@@ -129,8 +127,7 @@ test('the host answers its own questions and hands on the hard ones', async () =
   assert.match(app.log.at(-1)[1], /The question to answer: How much protein is in tofu\?/);
   await host.heard('my mood is short things only');
   assert.deepEqual(app.log.at(-1), ['mood', 'short things only']);
-  await host.heard('note for Claude ask Lutz about Friday');
-  assert.deepEqual(app.log.at(-1), ['note', 'ask Lutz about Friday']);
+  await host.heard('and how many now');
   assert.match(app.asked.at(-1), /Host: Mood line set\./, 'the host remembers the conversation');
   assert.equal(host.current, 'a', 'and the thread stays open through all of it');
 });

@@ -104,7 +104,7 @@ export async function makeCards() {
   fs.mkdirSync(outDir, { recursive: true });
   try {
     await brain.refresh();
-    const made = [...readCardLog().map((e) => `- ${e.key} (${e.outcome}): ${e.title}`), ...openCards().map((t) => `- ${t.card.key} (waiting for him now): ${t.title}`)];
+    const made = [...readCardLog().map((e) => `- ${e.key} (${e.outcome}${e.reason ? `; he wrote: ${e.reason}` : ''}): ${e.title}`), ...openCards().map((t) => `- ${t.card.key} (waiting for him now): ${t.title}`)];
     const profile = (readPad('profile') || '').trim();
     const state = getState();
     const result = await runAgent({
@@ -153,7 +153,9 @@ export async function makeCards() {
 }
 
 // Florian's verdict on a card. `how` says what accepting meant: copied, drafted, sent.
-export function decideCard(thread, outcome, how = '') {
+// `reason` is what he wrote about it, if anything: why not, or what the card got wrong.
+export function decideCard(thread, outcome, how = '', reason = '') {
+  reason = String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
   const first = cardText(thread, 1).text;
   const final = cardText(thread).text;
   const edited = first !== final;
@@ -167,6 +169,7 @@ export function decideCard(thread, outcome, how = '') {
     to: thread.card.to || '',
     outcome,
     how,
+    reason,
     edited,
     mood: getState().mood.trim(),
     proposed: first,
@@ -176,8 +179,8 @@ export function decideCard(thread, outcome, how = '') {
   // For the queue's learning: what kind of change he made, in a few words.
   let change = '';
   if (edited) change = final.length < first.length * 0.85 ? 'shortened it' : final.length > first.length * 1.15 ? 'added to it' : 'reworded it';
-  recordDecision(outcome, thread, change ? { edited: change } : {});
-  store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), archived: true, card: { ...thread.card, outcome, how } });
+  recordDecision(outcome, thread, { ...(change ? { edited: change } : {}), ...(reason ? { reason } : {}) });
+  store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), archived: true, card: { ...thread.card, outcome, how, reason } });
   maybeMakeCards();
   return entry;
 }

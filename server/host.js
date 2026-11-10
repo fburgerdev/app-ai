@@ -120,7 +120,6 @@ const PHRASES = {
     bye: 'Goodbye.',
     moment: 'One moment.',
     moodSet: 'Mood line set.',
-    noted: 'Noted for the next brain update.',
     unsorted: 'I could not work out where that goes. Say send to give it to the open thread as it is, or say it again.',
     unsortedNew: 'I could not work out where that goes. Say send to start a thread with it, or say it again.',
     noAnswer: 'I could not get an answer to that right now. Say new thread and the question, and Claude will find out.',
@@ -149,7 +148,6 @@ const PHRASES = {
     bye: 'Tschüss.',
     moment: 'Einen Moment.',
     moodSet: 'Stimmung gesetzt.',
-    noted: 'Notiert für das nächste Brain-Update.',
     unsorted: 'Ich konnte das nicht einordnen. Sag senden, um es so an den offenen Thread zu geben, oder sag es noch einmal.',
     unsortedNew: 'Ich konnte das nicht einordnen. Sag senden, um damit einen Thread zu starten, oder sag es noch einmal.',
     noAnswer: 'Darauf bekomme ich gerade keine Antwort. Sag neuer Thread und die Frage, dann findet Claude es heraus.',
@@ -464,13 +462,6 @@ export class HostSession {
       this.speak(t.moodSet);
       return;
     }
-    if (kind === 'note' && typeof decision.text === 'string') {
-      this.notify({ type: 'heard', text: said, kind: 'command', note: 'note' });
-      this.app.addNote(decision.text);
-      this.speak(t.noted);
-      return;
-    }
-
     // The model was unavailable or answered with something unusable. Nothing is lost:
     // he can send it as it is.
     this.held = [whole];
