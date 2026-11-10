@@ -13,7 +13,7 @@ import * as store from './store.js';
 import { DATA_DIR, log } from './config.js';
 import * as google from './google.js';
 import { logRead, logToolRead } from './reads.js';
-import { messageText, readPrompt, todayLine, dateTimeDMY } from './util.js';
+import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState } from './state.js';
 import { projectContext } from './projects.js';
 
@@ -216,7 +216,8 @@ async function runTurn(threadId, prompt) {
         error: result.error || '',
         gist: lastText.replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(-220),
       });
-      if (config.voice.enabled) spokenDigest(threadId).catch(() => {});
+      const walking = Date.now() - voiceActivity.at < 2 * 60 * 60_000;
+      if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
     }
   } finally {
     running.delete(threadId);
@@ -240,26 +241,32 @@ function plainSpeech(text) {
     .trim();
 }
 
-// The spoken version of a thread's latest reply. Made once per reply and kept with the
-// thread, so a call can read it out without waiting for a model.
-export function spokenDigest(threadId) {
+// The spoken version of a thread's latest reply, in the language the listener speaks.
+// Made once per reply and kept with the thread, so it can be read out without waiting
+// for a model.
+const LANGUAGES = { en: 'English', de: 'German' };
+
+export function spokenDigest(threadId, lang = 'en') {
   const thread = store.getThread(threadId);
   if (!thread) return Promise.resolve('');
-  if (thread.spoken && thread.spoken.at === thread.messageCount) return Promise.resolve(thread.spoken.text);
-  if (digesting.has(threadId)) return digesting.get(threadId);
+  if (thread.spoken && thread.spoken.at === thread.messageCount && (thread.spoken.lang || 'en') === lang) return Promise.resolve(thread.spoken.text);
+  const key = `${threadId}:${lang}`;
+  if (digesting.has(key)) return digesting.get(key);
   const job = (async () => {
     const at = thread.messageCount;
     const last = store.readMessages(threadId).filter((m) => m.role === 'assistant').at(-1);
     if (!last) return '';
     let text;
     if (last.error && !(last.parts || []).length) {
-      text = 'Claude stopped with an error in this thread. Have a look at it on a screen.';
+      text = lang === 'de'
+        ? 'Claude hat in diesem Thread mit einem Fehler aufgehört. Schau ihn dir am Bildschirm an.'
+        : 'Claude stopped with an error in this thread. Have a look at it on a screen.';
     } else {
       const reply = messageText(last);
       const result = await runAgent({
         prompt: `The reply to turn into speech:\n\n---\n\n${reply.slice(0, 30_000)}`,
         cwd: DATA_DIR,
-        systemAppend: readPrompt('digest.md'),
+        systemAppend: readPrompt('digest.md', { language: LANGUAGES[lang] || 'English' }),
         model: config.voice.digestModel,
         mode: 'plain',
         fake: config.fake,
@@ -267,9 +274,9 @@ export function spokenDigest(threadId) {
       // If the model is unavailable, the start of the reply itself is better than silence.
       text = plainSpeech(result.finalText || result.text) || `${plainSpeech(reply).slice(0, 500)}`;
     }
-    store.updateThread(threadId, { spoken: { at, text } });
+    store.updateThread(threadId, { spoken: { at, text, lang } });
     return text;
-  })().finally(() => digesting.delete(threadId));
-  digesting.set(threadId, job);
+  })().finally(() => digesting.delete(key));
+  digesting.set(key, job);
   return job;
 }

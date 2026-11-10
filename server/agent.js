@@ -6,6 +6,7 @@
 //   thread   reads the vault, searches the web, writes only into its artifacts folder
 //   extract  the brain update: reads and writes the vault, no web, no git history
 //   plain    no tools at all (used to turn a reply into something to listen to)
+//   lookup   like plain, but it may search and read the web (the voice host's harder questions)
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -169,17 +170,18 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   if (mode === 'extract') disallowedTools.push('WebSearch', 'WebFetch');
   if (mode === 'thread' && !shell) disallowedTools.push('Bash', 'PowerShell');
 
-  // "plain" is Claude with no tools and no vault: text in, text out.
-  const plain = mode === 'plain';
+  // "plain" is Claude with no tools and no vault: text in, text out. "lookup" adds the web.
+  const plain = mode === 'plain' || mode === 'lookup';
+  const web = mode === 'lookup' ? ['WebSearch', 'WebFetch'] : [];
   const google = Boolean(mcpServers?.google);
   const options = plain ? {
     cwd,
     abortController,
     settingSources: [],
     systemPrompt: systemAppend,
-    tools: [],
+    tools: web,
     permissionMode: 'default',
-    canUseTool: async (name) => deny(`${name} is not available here.`),
+    canUseTool: async (name, input) => (web.includes(name) ? allow(input) : deny(`${name} is not available here.`)),
     persistSession: false,
   } : {
     cwd,
@@ -267,8 +269,9 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode, artifactsDir, readDirs, signal, onEvent }) {
-  // In the no-tools mode the instructions are the system prompt; the stand-in reads both.
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent }) {
+  // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
+  const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
   const sessionId = resume || `fake-${Date.now().toString(36)}`;
   onEvent?.({ type: 'session', sessionId });
@@ -294,6 +297,32 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode, ar
   }
   if (mode === 'plain' && /LEARN-PROFILE/.test(prompt)) {
     const out = '- Stand-in profile: accepts short messages, requeues long reads.';
+    return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
+  }
+  if (mode === 'plain' && /HOST-ROUTE/.test(prompt)) {
+    // A stand-in host: a few plain rules instead of judgement.
+    const said = /^Florian said: (.*)$/m.exec(userPrompt)?.[1] || '';
+    const low = said.toLowerCase();
+    const open = !/^Open thread: none$/m.test(userPrompt);
+    const waiting = [...userPrompt.matchAll(/^(\d+)\. (.*)$/gm)].map((m) => ({ n: Number(m[1]), line: m[2].toLowerCase() }));
+    let decision;
+    if (/HOST-FAIL/.test(said)) decision = 'not json at all';
+    else if (/\b(um|and then)$/.test(low)) decision = { do: 'wait' };
+    else if (/^look up\b/.test(low)) decision = { do: 'think', question: said };
+    else if (/^(what|how many|who|why|when|is|are|do)\b.*\?$/.test(low)) decision = { do: 'answer', say: `Stand-in answer. ${waiting.length} waiting.` };
+    else if (/^open the (\w+)/.test(low)) {
+      const word = /^open the (\w+)/.exec(low)[1];
+      decision = { do: 'open', thread: waiting.find((w) => w.line.includes(word))?.n || 99 };
+    } else if (/^my mood is (.*)$/.test(low)) decision = { do: 'mood', text: /^my mood is (.*)$/i.exec(said)[1] };
+    else if (/^note for claude (.*)$/.test(low)) decision = { do: 'note', text: /^note for claude (.*)$/i.exec(said)[1] };
+    else if (/^(ask claude to|start a thread)\b/.test(low)) decision = { do: 'new', text: said };
+    else if (/^close this one$/.test(low)) decision = { do: 'command', name: 'done' };
+    else decision = open ? { do: 'reply', fix: { 'case TW': 'KStW' } } : { do: 'new', text: said };
+    const out = typeof decision === 'string' ? decision : JSON.stringify(decision);
+    return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
+  }
+  if (mode === 'plain' && /asked out loud/.test(prompt)) {
+    const out = `Stand-in careful answer to: ${/^The question to answer: (.*)$/m.exec(userPrompt)?.[1] || ''}`;
     return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
   }
   if (mode === 'plain') {

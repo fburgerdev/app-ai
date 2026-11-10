@@ -112,6 +112,8 @@ const DEFAULTS = {
     language: 'en-US',
     speechTimeoutMs: 2500, // how long a pause ends what you are saying
     digestModel: 'haiku', // model that turns a reply into something to listen to
+    hostModel: 'haiku', // the voice you talk to: decides where your speech goes
+    thinkModel: 'sonnet', // answers the questions the host hands on
   },
 };
 

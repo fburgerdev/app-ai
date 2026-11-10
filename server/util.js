@@ -52,3 +52,7 @@ export function messageText(message) {
     .filter(Boolean)
     .join('\n\n');
 }
+
+// When the host was last talked to, and in which language. A thread that becomes ready
+// soon after gets its spoken version prepared at once, so a walk does not wait for it.
+export const voiceActivity = { at: 0, lang: 'en' };

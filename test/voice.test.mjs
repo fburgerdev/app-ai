@@ -10,7 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { CallSession, interpret, twilioSignature } from '../server/voice.js';
+import { HostSession, interpret, twilioSignature } from '../server/voice.js';
+import { parseDecision } from '../server/host.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -33,64 +34,175 @@ test('speech is told apart from commands', () => {
   }
 });
 
-function fakeApp() {
+// The app as the host sees it, with a scripted model: `decide` maps what was said to the
+// decision the small model would return.
+function fakeApp(decide = () => ({ do: 'reply' })) {
   const threads = [
     { id: 'a', title: 'Mail to the office', state: 'ready', queuedAt: 1 },
     { id: 'b', title: 'Grant deadline', state: 'ready', queuedAt: 2 },
   ];
   const log = [];
+  const asked = [];
   return {
     log,
+    asked,
     threads,
     inbox: () => threads.filter((t) => t.state === 'ready').sort((x, y) => x.queuedAt - y.queuedAt),
     workingCount: () => threads.filter((t) => t.state === 'working').length,
+    workingTitles: () => threads.filter((t) => t.state === 'working').map((t) => t.title),
     thread: (id) => threads.find((t) => t.id === id),
     digest: async (id) => `Digest of ${id}.`,
+    cachedDigest: (id) => `Digest of ${id}.`,
+    full: (id) => `The whole reply of ${id}.`,
+    lastUser: () => '',
     reply: (id, text) => { log.push(['reply', id, text]); threads.find((t) => t.id === id).state = 'working'; },
-    create: (text) => { log.push(['create', text]); },
+    create: (text) => { log.push(['create', text]); return 'A new one'; },
     later: (id) => { log.push(['later', id]); threads.find((t) => t.id === id).queuedAt = Date.now(); },
     done: (id) => { log.push(['done', id]); threads.find((t) => t.id === id).state = 'done'; },
+    mood: () => '',
+    setMood: (text) => log.push(['mood', text]),
+    addNote: (text) => log.push(['note', text]),
+    words: () => 'KStW, Plant-based Universities',
+    ask: async ({ prompt }) => {
+      asked.push(prompt);
+      const said = /^Florian said: (.*)$/m.exec(prompt)[1];
+      const decision = decide(said);
+      return typeof decision === 'string' ? decision : JSON.stringify(decision);
+    },
+    think: async (prompt) => { log.push(['think', prompt]); return 'A careful answer.'; },
   };
 }
 
-test('a call walks the inbox: hear, dictate, send, next', async () => {
-  const app = fakeApp();
+function hostWith(decide) {
+  const app = fakeApp(decide);
   const said = [];
+  const seen = [];
   let hungUp = false;
-  const call = new CallSession({ say: (t) => said.push(t), hangUp: () => { hungUp = true; }, app });
-  await call.start();
+  const host = new HostSession({ say: (t) => said.push(t), hangUp: () => { hungUp = true; }, notify: (m) => seen.push(m), app, lang: 'en-US' });
+  return { app, said, seen, host, hungUp: () => hungUp };
+}
+
+test('the model\'s answer is read as a decision, or not at all', () => {
+  assert.deepEqual(parseDecision('{"do":"reply"}'), { do: 'reply' });
+  assert.deepEqual(parseDecision('Sure:\n```json\n{"do":"answer","say":"Two."}\n```'), { do: 'answer', say: 'Two.' });
+  assert.equal(parseDecision('I think he wants the thread'), null);
+  assert.equal(parseDecision('{"say":"no action"}'), null);
+});
+
+test('what he says after a thread goes to that thread, without a keyword', async () => {
+  const { app, said, seen, host } = hostWith(() => ({ do: 'reply', fix: { 'case TW': 'KStW' } }));
+  await host.start();
   assert.match(said.at(-1), /^2 threads are waiting\. Mail to the office\. Digest of a\.$/);
 
-  await call.heard('Make it shorter.');
-  await call.heard('And propose Thursday.');
-  assert.equal(said.length, 1, 'dictation is taken in silently');
-  await call.heard('later');
-  assert.match(said.at(-1), /unsent/, 'an unsent reply is never dropped by accident');
-  await call.key('1');
-  assert.equal(app.log[0][0], 'reply');
-  assert.equal(app.log[0][1], 'a');
-  assert.match(app.log[0][2], /^\[Dictated on a phone call.*\n\nMake it shorter\. And propose Thursday\.$/s);
-  assert.match(said.at(-1), /^Sent\. Grant deadline\. Digest of b\.$/);
+  await host.heard('Make it shorter and mention the case TW meeting.');
+  assert.deepEqual(app.log[0].slice(0, 2), ['reply', 'a']);
+  assert.match(app.log[0][2], /^\[Dictated by voice.*\n\nMake it shorter and mention the KStW meeting\.$/s, 'misheard words are repaired, the rest is his');
+  assert.match(said.at(-1), /^Sent\. Grant deadline\. Digest of b\.$/, 'and the next thread is read out');
+  assert.ok(seen.some((m) => m.type === 'heard' && m.kind === 'reply' && m.note === 'Mail to the office'), 'the screen is told where it went');
+  assert.match(app.asked[0], /Open thread: "Mail to the office"/);
+  assert.match(app.asked[0], /What he heard from it: Digest of a\./);
+  assert.match(app.asked[0], /1\. Mail to the office/);
+  assert.match(app.asked[0], /Names and words he uses: KStW/);
 
-  await call.heard('repeat');
+  await host.heard('Go with the second option and send it');
+  assert.equal(app.asked.length, 1, '"…and send it" needs no model');
+  assert.match(app.log.at(-1)[2], /\n\nGo with the second option$/);
+  assert.match(said.at(-1), /^Sent\. That is everything for now/);
+});
+
+test('the host answers its own questions and hands on the hard ones', async () => {
+  const decide = (said) => {
+    if (/how many/.test(said)) return { do: 'answer', say: 'Two are waiting.' };
+    if (/protein/.test(said)) return { do: 'think', question: 'How much protein is in tofu?' };
+    if (/mood/.test(said)) return { do: 'mood', text: 'short things only' };
+    if (/note/.test(said)) return { do: 'note', text: 'ask Lutz about Friday' };
+    return { do: 'reply' };
+  };
+  const { app, said, host } = hostWith(decide);
+  await host.start();
+  await host.heard('how many are waiting?');
+  assert.equal(said.at(-1), 'Two are waiting.');
+  assert.equal(app.log.length, 0, 'nothing went to a thread');
+  await host.heard('how much protein is in tofu');
+  assert.deepEqual(said.slice(-2), ['One moment.', 'A careful answer.']);
+  assert.match(app.log.at(-1)[1], /Florian: how many are waiting\?\nHost: Two are waiting\./, 'the stronger model gets the conversation');
+  assert.match(app.log.at(-1)[1], /The question to answer: How much protein is in tofu\?/);
+  await host.heard('my mood is short things only');
+  assert.deepEqual(app.log.at(-1), ['mood', 'short things only']);
+  await host.heard('note for Claude ask Lutz about Friday');
+  assert.deepEqual(app.log.at(-1), ['note', 'ask Lutz about Friday']);
+  assert.match(app.asked.at(-1), /Host: Mood line set\./, 'the host remembers the conversation');
+  assert.equal(host.current, 'a', 'and the thread stays open through all of it');
+});
+
+test('commands, a held thought, a new thread and a thread by name', async () => {
+  const decide = (said) => {
+    if (/um$/.test(said)) return { do: 'wait' };
+    if (/^open the grant/.test(said)) return { do: 'open', thread: 1 };
+    if (/^ask Claude/.test(said)) return { do: 'new', text: 'Find out when the board meets' };
+    if (/close this/.test(said)) return { do: 'command', name: 'done' };
+    return { do: 'reply' };
+  };
+  const { app, said, seen, host, hungUp } = hostWith(decide);
+  await host.start();
+
+  await host.heard('I think we should um');
+  assert.equal(said.length, 1, 'a broken-off thought is held, silently');
+  assert.ok(seen.some((m) => m.type === 'heard' && m.kind === 'wait'));
+  await host.heard('wait until Friday');
+  assert.match(app.log.at(-1)[2], /\n\nI think we should um wait until Friday$/, 'and sent whole with what follows');
+
+  await host.heard('repeat');
   assert.match(said.at(-1), /^Grant deadline\. Digest of b\.$/);
-  await call.heard('skip');
-  assert.deepEqual(app.log.at(-1), ['later', 'b']);
-  assert.match(said.at(-1), /That is everything for now/, 'a thread set aside does not come round again in the same call');
-
-  app.threads.find((t) => t.id === 'a').state = 'ready';
-  call.threadReady(app.threads[0]);
-  await call.queue;
-  assert.match(said.at(-1), /^Claude has finished one\. Mail to the office\./);
-  await call.heard('done');
-  assert.deepEqual(app.log.at(-1), ['done', 'a']);
-
-  await call.heard('new thread');
-  await call.heard('Find out when the board meets and send it');
-  assert.equal(app.log.at(-1)[0], 'create');
+  await host.heard('ask Claude to find out when the board meets');
   assert.match(app.log.at(-1)[1], /^Find out when the board meets\n\n\[Dictated/);
-  await call.heard('goodbye');
-  assert.equal(hungUp, true);
+  assert.equal(said.at(-1), 'Started a thread: A new one.');
+  assert.equal(host.current, 'b', 'starting a thread does not leave the open one');
+  await host.heard('skip');
+  assert.deepEqual(app.log.at(-1), ['later', 'b']);
+  assert.match(said.at(-1), /That is everything for now/, 'a thread set aside does not come round again');
+  await host.heard('open the grant one');
+  assert.match(said.at(-1), /^Grant deadline\. Digest of b\.$/);
+  await host.heard('close this one');
+  assert.deepEqual(app.log.at(-1), ['done', 'b']);
+
+  // Nothing open: a finished thread is announced while he is talking, read out when he is not.
+  app.threads.find((t) => t.id === 'a').state = 'ready';
+  host.threadReady(app.threads[0]);
+  await host.queue;
+  assert.equal(said.at(-1), 'Claude has finished "Mail to the office". Say next to hear it.');
+  await host.heard('next');
+  assert.match(said.at(-1), /^Mail to the office\. Digest of a\.$/);
+  await host.key('4');
+  host.lastHeardAt = 0;
+  app.threads.find((t) => t.id === 'b').state = 'ready';
+  host.threadReady(app.threads[1]);
+  await host.queue;
+  assert.match(said.at(-1), /^Claude has finished one\. Grant deadline\./);
+
+  await host.heard('new thread');
+  await host.heard('Draft the agenda for Monday');
+  assert.match(app.log.at(-1)[1], /^Draft the agenda for Monday\n\n\[Dictated/, 'after "new thread" the next thing said starts it, without a model');
+  await host.heard('goodbye');
+  assert.equal(hungUp(), true);
+});
+
+test('when the model fails nothing is lost, and German is spoken to in German', async () => {
+  const { app, said, host } = hostWith(() => 'no json here');
+  await host.start();
+  await host.heard('Tell them Thursday works');
+  assert.match(said.at(-1), /could not work out where that goes/);
+  assert.equal(app.log.length, 0);
+  await host.heard('send');
+  assert.match(app.log.at(-1)[2], /\n\nTell them Thursday works$/, '"send" gives it to the open thread as it is');
+
+  const german = hostWith(() => ({ do: 'reply' }));
+  german.host.setLanguage('de-DE');
+  await german.host.start();
+  assert.match(german.said.at(-1), /^2 Threads warten\. /);
+  await german.host.heard('Mach es kürzer', [], { typed: true });
+  assert.equal(german.app.log.at(-1)[2], 'Mach es kürzer', 'typed text carries no dictation note');
+  assert.match(german.said.at(-1), /^Gesendet\. /);
 });
 
 // ---------- against the running app ----------
@@ -175,18 +287,27 @@ test('a whole call against the app', async () => {
   const hello = await spoken(/Nothing is waiting/, 'greeting');
   assert.equal(hello.last, true, 'every spoken message is closed, or Twilio swallows its end');
 
-  say('Where does the plan stand');
-  say('send');
-  await spoken(/^Started\./, 'new thread started');
-  const finished = await spoken(/^Claude has finished one\. Where does the plan stand\./, 'the call announces the finished thread');
-  assert.ok(finished.token.length > 60, 'with a digest of the reply');
+  say('Ask Claude to work out where the plan stands');
+  await spoken(/^Started a thread: /, 'new thread started');
+  const state = await until(async () => {
+    const st = await (await fetch(`${base}/api/state`)).json();
+    return st.threads.some((t) => t.state === 'ready' && /^Ask Claude to work out/.test(t.title)) ? st : null;
+  }, 'the thread is ready');
+  say('next');
+  const read = await spoken(/^Ask Claude to work out where the plan stands\. /, 'the finished thread is read out');
+  assert.ok(read.token.length > 60, 'with a digest of the reply');
 
-  say('Work out the second option, and send it.');
+  say('Work out the second option for the case TW meeting');
   await spoken(/^Sent\./, 'reply sent');
-  const state = await (await fetch(`${base}/api/state`)).json();
-  const thread = state.threads.find((t) => t.title === 'Where does the plan stand');
+  const thread = state.threads.find((t) => /^Ask Claude to work out/.test(t.title));
   const messages = (await (await fetch(`${base}/api/threads/${thread.id}`)).json()).messages;
-  assert.match(messages.filter((m) => m.role === 'user').at(-1).text, /^\[Dictated on a phone call.*\n\nWork out the second option$/s);
+  assert.match(messages.filter((m) => m.role === 'user').at(-1).text, /^\[Dictated by voice.*\n\nWork out the second option for the KStW meeting$/s);
+
+  say('what is waiting?');
+  await spoken(/^Stand-in answer\./, 'the host answers itself');
+  say('look up how tall the Cologne cathedral is');
+  await spoken(/^One moment\.$/, 'the host says it is thinking');
+  await spoken(/^Stand-in careful answer to: look up how tall/, 'the stronger model answers');
 
   ws.send(JSON.stringify({ type: 'dtmf', digit: '9' }));
   await spoken(/^Goodbye/, 'goodbye');

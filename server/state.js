@@ -60,8 +60,9 @@ export function setState(patch) {
 //   scratchpad   yours alone. Claude never reads it, in any run.
 //   notes        notes for Claude. The next brain update files them and empties the pad.
 //   profile      what the queue has learned about your choices. You can correct it.
+//   words        names and words you use, so the voice host can repair what the phone mishears.
 
-const PADS = { scratchpad: 'scratchpad.md', notes: 'notes-for-claude.md', profile: path.join('queue', 'profile.md') };
+const PADS = { scratchpad: 'scratchpad.md', notes: 'notes-for-claude.md', profile: path.join('queue', 'profile.md'), words: 'voice-words.md' };
 
 export function padFile(name) {
   return PADS[name] ? path.join(DATA_DIR, PADS[name]) : null;

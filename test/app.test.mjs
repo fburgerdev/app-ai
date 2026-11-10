@@ -254,20 +254,48 @@ test('the queue records choices and rewrites its profile from them', async () =>
   assert.match(profile, /Stand-in profile/);
 });
 
-test('walk mode: the page\'s connection runs the same conversation as a call', async () => {
+test('walk mode: the host on the page, with a screen to tell and a connection that may drop', async () => {
   const refused = new WebSocket(`ws://localhost:${port}/walk/ws`, { headers: { Origin: 'https://evil.example' } });
   await new Promise((resolve) => refused.on('error', resolve));
-  const ws = new WebSocket(`ws://localhost:${port}/walk/ws`, { headers: { Origin: base } });
-  const heard = [];
-  ws.on('message', (raw) => heard.push(JSON.parse(raw.toString())));
-  await new Promise((resolve) => ws.on('open', resolve));
-  ws.send(JSON.stringify({ type: 'setup', from: 'walk mode' }));
-  const first = await until(async () => heard.find((m) => m.type === 'text'), 'first thing read out');
+
+  const connect = async (setup) => {
+    const ws = new WebSocket(`ws://localhost:${port}/walk/ws`, { headers: { Origin: base } });
+    const heard = [];
+    ws.on('message', (raw) => heard.push(JSON.parse(raw.toString())));
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'setup', from: 'walk mode', lang: 'en-US', ...setup }));
+    return { ws, heard };
+  };
+  const one = await connect({});
+  const first = await until(async () => one.heard.find((m) => m.type === 'text'), 'first thing read out');
   assert.match(first.token, /waiting/);
+  assert.equal(first.seq, 1);
   assert.doesNotMatch(first.token, /Connect with an example person/, 'cards are left to the screen');
-  ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'goodbye', last: true }));
-  await until(async () => heard.find((m) => m.type === 'end'), 'call ended');
-  ws.close();
+  const status = await until(async () => one.heard.findLast((m) => m.type === 'status' && m.thread), 'the screen knows which thread is open');
+  assert.ok(status.waiting >= 1);
+
+  one.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'my mood is short things on the walk', alternatives: ['my mood is short thinks'], lang: 'en-US', last: true }));
+  await until(async () => one.heard.find((m) => m.type === 'text' && /Mood line set/.test(m.token)), 'mood confirmed');
+  assert.equal((await call('GET', '/api/state')).data.settings.mood, 'short things on the walk');
+  one.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'note for Claude the walk test note', typed: true, last: true }));
+  await until(async () => one.heard.find((m) => m.type === 'text' && /Noted/.test(m.token)), 'note confirmed');
+  assert.match((await call('GET', '/api/pads/notes')).data.text, /- the walk test note/);
+
+  // The connection drops; the host answers into the gap; the page comes back and hears it.
+  const seen = one.heard.findLast((m) => m.type === 'text').seq;
+  one.ws.close();
+  await sleep(100);
+  const two = await connect({ resume: true, seen: seen - 1 });
+  const again = await until(async () => two.heard.find((m) => m.type === 'text'), 'what was missed is said again');
+  assert.equal(again.seq, seen);
+  assert.match(again.token, /Noted/);
+  assert.ok(!two.heard.some((m) => m.type === 'text' && /waiting\./.test(m.token)), 'no second greeting');
+
+  two.ws.send(JSON.stringify({ type: 'prompt', voicePrompt: 'goodbye', last: true }));
+  await until(async () => two.heard.find((m) => m.type === 'end'), 'conversation ended');
+  two.ws.close();
+  const words = await call('PUT', '/api/pads/words', { text: 'KStW\nLutz' });
+  assert.equal(words.status, 200);
 });
 
 test('the app\'s state is pushed to its own repo, without secrets', async () => {

@@ -8,6 +8,9 @@
 // thread became ready, and your reply starts Claude's work in the background while the
 // call goes on to the next thread.
 //
+// Walk mode (the app's own page on the phone) uses the same conversation without Twilio.
+// Who you talk to in both is the host, in host.js.
+//
 // Nothing here is reachable unless voice is switched on in config.json. Then two checks
 // guard it: the request that starts a call must carry Twilio's signature and come from
 // one of your numbers, and the audio connection must present the one-time token that
@@ -19,235 +22,88 @@ import { log } from './config.js';
 import * as store from './store.js';
 import * as runner from './runner.js';
 import { queueOrder, recordDecision } from './queue.js';
+import { runAgent } from './agent.js';
+import { DATA_DIR } from './config.js';
+import { getState, setState, readPad, writePad } from './state.js';
+import { projectTree } from './projects.js';
+import { messageText, readPrompt, voiceActivity } from './util.js';
+import { HostSession, interpret } from './host.js';
 
-const DICTATED = '[Dictated on a phone call; may contain transcription errors.]';
+export { HostSession, interpret };
+export const CallSession = HostSession;
 
-const COMMANDS = [
-  ['send', /^(send|send it|send that|send this|senden|abschicken|schick es ab|schicken)$/],
-  ['repeat', /^(repeat|repeat that|again|say that again|say again|nochmal|noch mal|wiederholen|wiederhole)$/],
-  ['later', /^(later|skip|skip it|skip this|next|next one|next thread|später|weiter|überspringen)$/],
-  ['done', /^(done|mark (it |that |this )?(as )?done|close it|close this|finished|erledigt|fertig)$/],
-  ['cancel', /^(cancel|scratch that|start over|delete that|abbrechen|verwerfen|lösch das)$/],
-  ['new', /^((start |create |open |make )?(a )?new (thread|chat|conversation)|neuer (thread|chat)|neuen (thread|chat)( starten| anfangen)?)$/],
-  ['bye', /^(goodbye|good bye|bye|bye bye|hang up|that's all|thats all|end call|stop|tschüss|tschüs|auf wiedersehen|ende)$/],
-  ['help', /^(help|what can i say|hilfe)$/],
-];
-// Said around a command without changing it: "okay new thread please".
-const FILLER = /^(?:(?:ok|okay|okey|please|bitte|hey|claude|um|uh|ähm|äh|so|also|and|und|now|jetzt)\s+)+|(?:\s+(?:please|bitte|now|jetzt|then|dann))+$/g;
-// Spoken forms of each command, to catch near misses ("new threat", "nu thread", "sent it").
-const SPOKEN = {
-  send: ['send', 'send it', 'senden'],
-  repeat: ['repeat', 'repeat that', 'say that again', 'wiederholen', 'nochmal'],
-  later: ['later', 'skip it', 'next one', 'später', 'weiter'],
-  done: ['done', 'mark as done', 'erledigt'],
-  cancel: ['cancel', 'scratch that', 'abbrechen', 'verwerfen'],
-  new: ['new thread', 'start a new thread', 'neuer thread', 'new chat'],
-  bye: ['goodbye', 'hang up', 'tschüss'],
-  help: ['help', 'hilfe'],
-};
+let config = null;
 
-function normalize(text) {
-  return String(text || '').toLowerCase().replace(/[.,!?¿¡"“”„]/g, '').replace(/\s+/g, ' ').trim();
+// ---------- the app, as the host sees it ----------
+
+function plainSpeech(text) {
+  return String(text)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (m, x, y) => y || x)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[#*_`>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function distance(a, b) {
-  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= a.length; i++) {
-    let prev = row[0];
-    row[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const keep = row[j];
-      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-      prev = keep;
-    }
-  }
-  return row[b.length];
+// Names the phone is likely to mishear: the projects, and the words Florian listed.
+function words() {
+  let names = [];
+  try {
+    names = projectTree().groups.flatMap((g) => [g.name, ...g.projects.map((p) => p.name)]).filter((n) => n && n !== 'No area');
+  } catch { /* the vault is not there yet */ }
+  const own = (readPad('words') || '').split(/[\n,]+/).map((w) => w.trim()).filter(Boolean);
+  return [...new Set([...own, ...names])].join(', ');
 }
 
-// The command a short utterance is, exactly or nearly; null if none.
-function commandOf(norm) {
-  const bare = norm.replace(FILLER, '').trim();
-  for (const candidate of [norm, bare]) {
-    for (const [command, pattern] of COMMANDS) if (pattern.test(candidate)) return command;
-  }
-  // Near misses only for short utterances, so ordinary dictation is never taken for a command.
-  if (!bare || bare.split(' ').length > 5) return null;
-  let best = null;
-  for (const [command, forms] of Object.entries(SPOKEN)) {
-    for (const form of forms) {
-      if (form.length < 5 && bare.length < 5) continue; // "done" vs "dan": too short to guess
-      const similarity = 1 - distance(bare, form) / Math.max(bare.length, form.length);
-      if (similarity >= 0.7 && (!best || similarity > best.similarity)) best = { command, similarity };
-    }
-  }
-  return best?.command || null;
+async function model({ system, prompt, model: name, mode = 'plain' }) {
+  const result = await runAgent({ prompt, cwd: DATA_DIR, systemAppend: system, model: name, mode, fake: config.fake });
+  if (result.error) throw new Error(result.error);
+  return (result.finalText || result.text || '').trim();
 }
-
-const KEYS = { 1: 'send', 2: 'repeat', 3: 'later', 4: 'done', 5: 'new', 0: 'cancel', 9: 'bye' };
-const HELP = 'Speak your reply, then say send, or press 1. Say repeat, or press 2, to hear it again. Later, or 3, puts the thread at the back. Done, or 4, closes it. New thread, or 5, starts one. Cancel, or 0, drops what you said. Goodbye, or 9, ends the call.';
-
-// What was said, as a command or as dictation. "…and send it" at the end of a sentence
-// counts as dictation followed by send.
-export function interpret(utterance, alternatives = []) {
-  const text = String(utterance || '').trim();
-  const norm = normalize(text);
-  if (!norm) return { command: null, text: '' };
-  // The phone's best guess first, then its other guesses: a command heard in any of them counts.
-  for (const guess of [norm, ...alternatives.map(normalize).filter(Boolean)]) {
-    const command = commandOf(guess);
-    if (command) return { command, text: '' };
-  }
-  const tail = /^(.*?)[\s,.]+(?:and\s+)?(?:then\s+)?(?:send|senden|abschicken)(?: it| that)?[.!]?$/i.exec(text);
-  const said = tail ? tail[1].replace(/[\s,]+$/, '') : '';
-  if (said.split(/\s+/).length >= 3) return { command: 'send', text: said };
-  return { command: null, text };
-}
-
-// One call. `say` speaks, `hangUp` ends the call; `app` is what the session may do.
-export class CallSession {
-  constructor({ say, hangUp, app }) {
-    this.say = say;
-    this.hangUp = hangUp;
-    this.app = app;
-    this.current = null; // thread being discussed
-    this.buffer = []; // what has been dictated and not sent
-    this.composing = false; // dictating a new thread
-    this.setAside = new Set(); // threads put off during this call
-    this.idle = false; // nothing left to present
-    this.ended = false;
-    this.queue = Promise.resolve(); // one thing at a time
-  }
-
-  run(fn) {
-    this.queue = this.queue.then(fn).catch((err) => {
-      log(`voice: ${err.stack || err.message}`);
-      this.say('Something went wrong on my side. Try that again.');
-    });
-    return this.queue;
-  }
-
-  next() {
-    return this.app.inbox().find((t) => !this.setAside.has(t.id)) || null;
-  }
-
-  start() {
-    return this.run(async () => {
-      const n = this.app.inbox().length;
-      const busy = this.app.workingCount();
-      if (n) await this.present(`${n === 1 ? 'One thread is' : `${n} threads are`} waiting. `);
-      else {
-        this.idle = true;
-        this.say(`Nothing is waiting.${busy ? ` Claude is working on ${busy === 1 ? 'one thread' : `${busy} threads`}; I will tell you when one is ready.` : ''} Say new thread to start one.`);
-      }
-    });
-  }
-
-  async present(lead = '') {
-    const thread = this.next();
-    this.buffer = [];
-    this.composing = false;
-    if (!thread) {
-      this.current = null;
-      this.idle = true;
-      const busy = this.app.workingCount();
-      this.say(`${lead}That is everything for now.${busy ? ' I will tell you when Claude finishes another one.' : ''} Say new thread, or goodbye.`);
-      return;
-    }
-    this.current = thread.id;
-    this.idle = false;
-    const digest = await this.app.digest(thread.id);
-    if (this.ended) return;
-    this.say(`${lead}${thread.title}. ${digest}`);
-  }
-
-  // A thread became ready while the call had nothing to present.
-  threadReady(thread) {
-    if (!this.idle || this.ended || this.composing || this.buffer.length) return;
-    this.run(() => this.present('Claude has finished one. '));
-  }
-
-  heard(utterance, alternatives = []) {
-    return this.run(() => this.handle(interpret(utterance, alternatives)));
-  }
-
-  key(digit) {
-    const command = KEYS[digit];
-    if (command) return this.run(() => this.handle({ command, text: '' }));
-    return Promise.resolve();
-  }
-
-  async handle({ command, text }) {
-    if (this.ended) return;
-    if (text) {
-      if (!this.current && !this.composing) {
-        // Speaking with nothing open starts a new thread.
-        this.composing = true;
-        this.idle = false;
-      }
-      this.buffer.push(text);
-    }
-    if (!command) return;
-
-    if (command === 'help') { this.say(HELP); return; }
-    if (command === 'bye') {
-      this.ended = true;
-      this.say(this.buffer.length ? 'Goodbye. What you had not sent is dropped.' : 'Goodbye.');
-      this.hangUp();
-      return;
-    }
-    if (command === 'cancel') {
-      this.buffer = [];
-      if (this.composing) { this.composing = false; await this.present('Dropped. '); } else this.say('Dropped. Go ahead.');
-      return;
-    }
-    if (command === 'new') {
-      if (this.buffer.length) { this.say('You have something unsent. Say send, or cancel.'); return; }
-      this.composing = true;
-      this.idle = false;
-      this.current = null;
-      this.say('New thread. What should Claude work on?');
-      return;
-    }
-    if (command === 'send') {
-      const message = this.buffer.join(' ').trim();
-      if (!message) { this.say('There is nothing to send yet. Speak your reply first.'); return; }
-      if (this.composing) this.app.create(`${message}\n\n${DICTATED}`);
-      else this.app.reply(this.current, `${DICTATED}\n\n${message}`);
-      await this.present(this.composing ? 'Started. ' : 'Sent. ');
-      return;
-    }
-    if (!this.current) { this.say('No thread is open. Say new thread, or goodbye.'); return; }
-    if (this.buffer.length) { this.say('You have something unsent. Say send, or cancel.'); return; }
-    if (command === 'repeat') {
-      const thread = this.app.thread(this.current);
-      this.say(`${thread.title}. ${await this.app.digest(this.current)}`);
-    } else if (command === 'later') {
-      this.setAside.add(this.current);
-      this.app.later(this.current);
-      await this.present('Later. ');
-    } else if (command === 'done') {
-      this.app.done(this.current);
-      await this.present('Closed. ');
-    }
-  }
-}
-
-// ---------- the app, as a call sees it ----------
 
 // A call or a walk goes through the conversations in the queue's order. Cards are left
 // to the screen: they are for reading and editing, not for listening.
 const app = {
   inbox: () => queueOrder().map((id) => store.getThread(id)).filter((t) => t && t.kind !== 'card'),
   workingCount: () => store.listThreads().filter((t) => t.state === 'working').length,
+  workingTitles: () => store.listThreads().filter((t) => t.state === 'working').map((t) => t.title),
   thread: (id) => store.getThread(id),
-  digest: (id) => runner.spokenDigest(id),
+  digest: (id, lang) => runner.spokenDigest(id, lang),
+  cachedDigest: (id, lang) => { const t = store.getThread(id); return t?.spoken && t.spoken.at === t.messageCount && (t.spoken.lang || 'en') === lang ? t.spoken.text : ''; },
+  full: (id) => {
+    const last = store.readMessages(id).filter((m) => m.role === 'assistant').at(-1);
+    return last ? plainSpeech(messageText(last)).slice(0, 6000) : '';
+  },
+  lastUser: (id) => store.readMessages(id).filter((m) => m.role === 'user' && !m.auto).at(-1)?.text || '',
   reply: (id, text) => { recordDecision('replied', store.getThread(id), { by: 'voice' }); runner.sendMessage(id, text); },
   create: (text) => {
     const thread = store.createThread({ title: runner.titleFrom(text) });
     runner.sendMessage(thread.id, text);
+    return thread.title;
   },
   later: (id) => { recordDecision('requeued', store.getThread(id), { by: 'voice' }); store.updateThread(id, { requeuedAt: Date.now() }); },
   done: (id) => { recordDecision('done', store.getThread(id), { by: 'voice' }); store.updateThread(id, { state: 'done', doneAt: Date.now(), error: '' }); },
+  mood: () => getState().mood || '',
+  setMood: (text) => setState({ mood: String(text) }),
+  addNote: (text) => {
+    const before = (readPad('notes') || '').replace(/\s+$/, '');
+    writePad('notes', `${before ? `${before}\n` : ''}- ${String(text).trim()}\n`);
+  },
+  words,
+  // The quick model that decides where speech goes.
+  ask: ({ system, prompt }) => model({ system, prompt, model: config.voice.hostModel }),
+  // The stronger one for questions the host hands on. It may search the web; if that
+  // way of running is unavailable, it answers from what it knows.
+  think: async (prompt, lang) => {
+    const system = readPrompt('host-think.md');
+    try {
+      return plainSpeech(await model({ system, prompt, model: config.voice.thinkModel, mode: 'lookup' }));
+    } catch (err) {
+      log(`host: lookup failed (${err.message}); answering without the web`);
+      try { return plainSpeech(await model({ system, prompt, model: config.voice.thinkModel })); } catch { return ''; }
+    }
+  },
 };
 
 // ---------- Twilio ----------
@@ -317,7 +173,15 @@ function redeem(token) {
 // walk mode opens from the phone's browser. Both speak the same few messages; they
 // differ in who is let in. A call must present Twilio's one-time token. Walk mode must
 // come from one of the app's own pages, under an address the app answers to.
-export function attachVoice(server, config, allowedHosts) {
+//
+// A walk loses its connection now and then (a tunnel, a dead spot). Its conversation is
+// kept for a while, so the page can pick it up where it was, and anything said to it in
+// the meantime is delivered then.
+const WALK_KEEP_MS = 30 * 60_000;
+let walk = null; // { session, outbox: [{seq, token}], seq, send, lostAt }
+
+export function attachVoice(server, cfg, allowedHosts) {
+  config = cfg;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const pathname = (req.url || '').split('?')[0];
@@ -334,12 +198,49 @@ export function attachVoice(server, config, allowedHosts) {
     socket.destroy();
   });
 
+  // A thread that becomes ready is told to whoever is talking to the host.
+  const sessions = new Set();
+  store.events.on('thread', (thread) => { if (thread.state === 'ready') for (const s of sessions) s.threadReady(thread); });
+
   wss.on('connection', (ws, trusted) => {
     let session = null;
     const send = (message) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message)); };
     // A connection that does not identify itself at once is not Twilio.
     const deadline = setTimeout(() => { if (!session) ws.close(1008, 'no setup'); }, 5000);
-    const onReady = (thread) => { if (thread.state === 'ready') session?.threadReady(thread); };
+
+    const startWalk = (msg) => {
+      const lang = String(msg.lang || 'en-US');
+      voiceActivity.at = Date.now();
+      voiceActivity.lang = lang.toLowerCase().startsWith('de') ? 'de' : 'en';
+      const kept = walk && !walk.session.ended && (!walk.lostAt || Date.now() - walk.lostAt < WALK_KEEP_MS);
+      if (msg.resume && kept) {
+        // The page is back: same conversation, and whatever it has not heard yet.
+        walk.send = send;
+        walk.lostAt = 0;
+        walk.session.setLanguage(lang);
+        for (const item of walk.outbox) if (item.seq > (Number(msg.seen) || 0)) send({ type: 'text', token: item.token, last: true, seq: item.seq });
+        walk.session.status();
+        return walk.session;
+      }
+      if (walk) { walk.session.ended = true; sessions.delete(walk.session); }
+      const mine = { session: null, outbox: [], seq: 0, send, lostAt: 0 };
+      mine.session = new HostSession({
+        say: (text) => {
+          mine.seq += 1;
+          mine.outbox.push({ seq: mine.seq, token: text });
+          if (mine.outbox.length > 30) mine.outbox.shift();
+          mine.send({ type: 'text', token: text, last: true, seq: mine.seq });
+        },
+        hangUp: () => setTimeout(() => mine.send({ type: 'end' }), 400),
+        notify: (message) => mine.send(message),
+        app,
+        lang,
+      });
+      walk = mine;
+      sessions.add(mine.session);
+      mine.session.start();
+      return mine.session;
+    };
 
     ws.on('message', (raw) => {
       let msg;
@@ -347,24 +248,37 @@ export function attachVoice(server, config, allowedHosts) {
       if (!session) {
         if (msg.type !== 'setup' || !(trusted || redeem(msg.customParameters?.token))) { ws.close(1008, 'not allowed'); return; }
         clearTimeout(deadline);
-        log(trusted ? 'voice: walk mode connected' : `voice: call from ${msg.from} connected`);
-        session = new CallSession({
+        log(trusted ? `voice: walk mode ${msg.resume ? 'reconnected' : 'connected'}` : `voice: call from ${msg.from} connected`);
+        if (trusted) { session = startWalk(msg); return; }
+        session = new HostSession({
           say: (text) => send({ type: 'text', token: text, last: true }),
           hangUp: () => setTimeout(() => send({ type: 'end' }), 2500),
           app,
+          lang: config.voice.language,
         });
-        store.events.on('thread', onReady);
+        sessions.add(session);
         session.start();
         return;
       }
-      if (msg.type === 'prompt' && msg.last !== false) session.heard(msg.voicePrompt, trusted && Array.isArray(msg.alternatives) ? msg.alternatives.slice(0, 5).map(String) : []);
-      else if (msg.type === 'dtmf') session.key(String(msg.digit));
+      if (trusted) voiceActivity.at = Date.now();
+      if (msg.type === 'prompt' && msg.last !== false) {
+        if (trusted && msg.lang) session.setLanguage(msg.lang);
+        session.heard(msg.voicePrompt, trusted && Array.isArray(msg.alternatives) ? msg.alternatives.slice(0, 5).map(String) : [], { typed: trusted && msg.typed === true });
+      } else if (msg.type === 'dtmf') session.key(String(msg.digit));
       else if (msg.type === 'error') log(`voice: Twilio reported: ${msg.description}`);
     });
     ws.on('close', () => {
       clearTimeout(deadline);
-      store.events.off('thread', onReady);
-      if (session) { session.ended = true; log('voice: call ended'); }
+      if (!session) return;
+      if (trusted) {
+        // Kept for a reconnect; speech meant for the page waits in the outbox.
+        if (walk?.session === session && walk.send === send) { walk.send = () => {}; walk.lostAt = Date.now(); }
+        log('voice: walk mode disconnected');
+      } else {
+        session.ended = true;
+        sessions.delete(session);
+        log('voice: call ended');
+      }
     });
   });
   return wss;
