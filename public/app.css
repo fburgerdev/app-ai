@@ -1256,3 +1256,17 @@ a.chip:hover { border-color: var(--muted); }
 .sleep-fields { display: flex; align-items: center; gap: 8px; color: var(--muted); margin-bottom: 18px; }
 .sleep-time { background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; color: var(--text); font: inherit; color-scheme: dark; }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+
+/* ---------- which computer: the laptop or the Pi ---------- */
+.link-btn { gap: 8px; }
+.link-btn.is-switching { opacity: 0.6; }
+.link-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.link-dot.is-remote { background: var(--done); }
+.link-dot.is-local { background: var(--you); }
+.link-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; width: 290px; }
+.link-opt { align-items: flex-start; text-align: left; white-space: normal; }
+.link-opt > span:first-child { min-width: 0; flex: 1; }
+.link-opt-head { display: block; color: var(--text); font-size: 13.5px; }
+.link-opt-sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.link-status { margin: 6px 10px 6px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.45; }
+.link-opt:disabled { opacity: 0.45; cursor: default; }

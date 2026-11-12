@@ -149,7 +149,11 @@ export async function openFor(threadId, full) {
     if (await dirty(dir)) await commitLeftovers(dir, `Work in progress, saved when another thread took the repo`);
     let branch = thread.repo && key(thread.repo) === key(full) && thread.repoBranch ? thread.repoBranch : '';
     const exists = branch && (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false));
-    if (!exists) {
+    // The thread's branch may have been made on the other computer and pushed from there.
+    const pushed = branch && !exists && (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).then(() => true, () => false));
+    if (pushed) {
+      await git(dir, ['checkout', '--quiet', '-B', branch, `origin/${branch}`]);
+    } else if (!exists) {
       branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
       const remote = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]).then(() => `origin/${base}`, () => 'HEAD');
       await git(dir, ['checkout', '--quiet', '-B', branch, remote]);

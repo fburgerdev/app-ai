@@ -66,6 +66,38 @@ export function loadThreads() {
   log(`loaded ${threads.size} threads`);
 }
 
+// After the data folder took in what the other computer saved: threads are read from
+// disk again. A thread Claude is working on right here keeps what is in memory.
+export function reloadThreads() {
+  const seen = new Set();
+  if (fs.existsSync(THREADS_DIR)) {
+    for (const id of fs.readdirSync(THREADS_DIR)) {
+      const meta = readJson(metaFile(id), null);
+      if (!meta || meta.id !== id) continue;
+      seen.add(id);
+      if (threads.get(id)?.state === 'working') continue;
+      if (meta.state === 'working') {
+        meta.state = 'ready';
+        meta.queuedAt = Date.now();
+        meta.error = 'Claude was working on this on the other computer when this one took over. Send a message to pick it up again.';
+        meta.activity = '';
+        meta.pending = [];
+        writeJson(metaFile(id), meta);
+      }
+      threads.set(id, meta);
+      // A conversation continued on both computers has more lines than either counted.
+      const count = readMessages(id).length;
+      if (count > (meta.messageCount || 0)) {
+        meta.messageCount = count;
+        meta.lastUserAt = count; // so the next brain update looks at it again
+        writeJson(metaFile(id), meta);
+      }
+    }
+  }
+  for (const [id, t] of threads) if (!seen.has(id) && t.state !== 'working') threads.delete(id);
+  log(`reloaded ${threads.size} threads`);
+}
+
 export function listThreads() {
   return [...threads.values()];
 }

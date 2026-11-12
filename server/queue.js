@@ -48,6 +48,13 @@ export function initQueue(cfg) {
   store.events.on('thread-deleted', ({ id }) => { if (pins.delete(id)) savePins(); schedule(); });
 }
 
+// The data folder changed on disk (the other computer's state came in).
+export function reloadQueue() {
+  try { pins = new Map(Object.entries(JSON.parse(fs.readFileSync(PINS, 'utf8')))); } catch { pins = new Map(); }
+  lastKey = '';
+  schedule();
+}
+
 const waiting = () => store.listThreads().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt);
 
 const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;

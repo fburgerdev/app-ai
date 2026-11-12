@@ -62,7 +62,15 @@ const DEFAULTS = {
   // repo every few minutes. Empty: the state stays on this computer only.
   dataRepo: 'https://github.com/fburgerdev/app-ai-data.git',
   dataBranch: 'main',
-  dataSyncMinutes: 5,
+  dataSyncMinutes: 2,
+
+  // On the laptop: the address of the same app on the Raspberry Pi, for example
+  // "https://pi.tail1234.ts.net". The laptop does the work; the app then has a switch
+  // to hand everything over to the Pi and take it back. Empty on the Pi. See docs/laptop.md.
+  remote: '',
+  remoteName: 'Pi',
+  localName: 'Laptop',
+  remoteCheckSeconds: 15,
 
   // Git repos threads work in: cloned on demand into the data folder (repos/), from here.
   reposDir: '',
@@ -154,6 +162,7 @@ export function loadConfig() {
   if (process.env.APP_AI_BRAIN_REPO) config.brainRepo = process.env.APP_AI_BRAIN_REPO;
   if (process.env.APP_AI_DATA_REPO !== undefined) config.dataRepo = process.env.APP_AI_DATA_REPO;
   if (process.env.APP_AI_REPO_BASE) config.repoBase = process.env.APP_AI_REPO_BASE;
+  config.remote = String(config.remote || '').trim().replace(/\/+$/, '');
   if (!config.brainDir) config.brainDir = path.join(DATA_DIR, 'brain');
   config.brainDir = path.resolve(config.brainDir);
   config.fake = process.env.APP_AI_FAKE === '1';

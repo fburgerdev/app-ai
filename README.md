@@ -201,6 +201,16 @@ Good to know:
 
 A real phone number does the same through Twilio, for a per-minute price: [docs/calling.md](docs/calling.md).
 
+## The laptop and the Pi
+
+The laptop does the work and is where the app is installed from (`http://localhost:4317`), so
+it opens whether or not the Pi is on. With the Pi's address as `remote` in the laptop's
+`config.json`, the top bar gets a switch: **Pi** hands every thread over (for when the laptop
+sleeps), **Laptop** takes them back, which also happens by itself when the laptop wakes or the
+Pi stops answering. In between, both sides sync through the data repo every two minutes, so
+the phone on the Pi is never far behind. Setup and what happens in the odd cases:
+[docs/laptop.md](docs/laptop.md).
+
 ## On the phone
 
 The whole app works in the phone's browser under the same address as Talk. One column: the top bar, the thread, the reply box at the bottom. The inbox and the folders are behind the inbox button. On a card, swipe right to accept and left to decline, or use the buttons; the text is edited in place. "Add to Home screen" in the browser's menu makes it open like an app.
@@ -227,7 +237,7 @@ App data is in its own folder, outside the vault:
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-That folder is a git repository. Every five minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, the mood line, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
+That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, the mood line, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
 
 Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, logs.
 

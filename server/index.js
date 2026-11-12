@@ -19,8 +19,9 @@ import * as checkins from './checkins.js';
 import * as repos from './repos.js';
 import * as speech from './speech.js';
 import * as datasync from './datasync.js';
+import * as link from './link.js';
 import { parseMail } from './mail.js';
-import { getState, setState, readPad, writePad, MODELS, EFFORTS } from './state.js';
+import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS } from './state.js';
 import { dateTimeDMY } from './util.js';
 import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
@@ -41,6 +42,8 @@ cards.initCards(config);
 await datasync.initDataSync(config);
 // Threads are loaded after the data repo had its chance to restore them.
 store.loadThreads();
+// When the other computer's state comes in later, everything kept in memory is read again.
+datasync.onReload(() => { store.reloadThreads(); reloadState(); queue.reloadQueue(); });
 
 const app = express();
 app.disable('x-powered-by');
@@ -74,6 +77,24 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   next();
 });
+// ---------- the laptop and the Pi ----------
+// On the laptop, while the Pi is reachable, the page's requests are passed on to it.
+// These few are always this computer's own.
+const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running;
+await link.initLink(config, { busy: () => Boolean(isBusy()) });
+app.get('/api/link', (req, res) => res.json(link.status()));
+app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
+// The other computer hands over: take in what it saved, or save what is here.
+app.post('/api/sync/pull', async (req, res) => {
+  try { res.json({ ok: true, changed: await datasync.pullNow() }); } catch (err) { res.status(502).json({ error: err.message }); }
+});
+app.post('/api/sync/push', async (req, res) => {
+  const out = await datasync.saveNow('handover');
+  if (out.error) return res.status(502).json({ error: out.error });
+  res.json({ ok: true });
+});
+app.use('/api', (req, res, next) => (link.isRemote() ? link.passOn(req, res) : next()));
+
 // Uploads carry a whole file and get a larger limit; everything else stays small.
 const smallJson = express.json({ limit: '5mb' });
 const BIG = new Set(['/api/uploads', '/api/speech/hear']);
@@ -120,7 +141,6 @@ const version = (() => {
     return { commit: '', date: '', subject: '' };
   }
 })();
-const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running;
 app.get('/api/health', (req, res) => res.json({ ok: true, busy: Boolean(isBusy()), version: version.commit }));
 
 app.get('/api/state', (req, res) => {
@@ -233,6 +253,10 @@ app.get('/api/events', (req, res) => {
     connections: send('connections'),
   };
   for (const [name, fn] of Object.entries(handlers)) store.events.on(name, fn);
+  // The page moved to the other computer, or the data was read again from disk: end
+  // this stream, so the page connects again and reads the whole state.
+  handlers['link-switched'] = () => res.end();
+  handlers.reloaded = () => res.end();
   const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
   req.on('close', () => {
     clearInterval(beat);

@@ -39,6 +39,9 @@ function load() {
   return state;
 }
 
+// The file changed on disk (the other computer's state came in).
+export function reloadState() { state = null; }
+
 export function getState() {
   return { ...load() };
 }

@@ -1742,10 +1742,72 @@ document.addEventListener('visibilitychange', () => {
   checkSleep();
 });
 
+// ---------- which computer: the laptop or the Pi ----------
+//
+// On the laptop the page always comes from the laptop, and the laptop does the work.
+// This button hands everything over to the Pi (before the laptop sleeps, say) and takes
+// it back; while handed over, the laptop's app passes everything on to the Pi.
+
+let linkState = null;
+
+function renderLink() {
+  const box = document.getElementById('link');
+  const l = linkState;
+  if (!l?.enabled) { box.hidden = true; return; }
+  box.hidden = false;
+  if (box.classList.contains('is-open')) return; // not while the menu is open
+  const onPi = l.active === 'remote';
+  const name = onPi ? l.remoteName : l.localName;
+  const waiting = !onPi && l.choice === 'remote';
+  const title = l.switching ? 'Handing over…' : l.note || (onPi ? `Handed over: the ${l.remoteName} does the work.` : `The ${l.localName} does the work.`);
+  const button = h('button', { class: `top-btn link-btn${l.switching || waiting ? ' is-switching' : ''}`, type: 'button', title, 'aria-haspopup': 'menu' },
+    h('span', { class: `link-dot ${onPi ? 'is-remote' : 'is-local'}`, 'aria-hidden': 'true' }), h('span', { class: 'top-label' }, waiting ? `${name} → ${l.remoteName}…` : name));
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (box.classList.contains('is-open')) { closePickers(); return; }
+    closePickers();
+    box.classList.add('is-open');
+    const pick = async (choice) => {
+      closePickers();
+      if (choice === l.choice) return;
+      linkState = { ...l, switching: true };
+      renderLink();
+      try {
+        const before = l.active;
+        linkState = await api('POST', '/api/link', { choice });
+        if (linkState.active !== before) toast(linkState.active === 'remote' ? `Handed over. The ${l.remoteName} has everything; the ${l.localName} can sleep.` : `Back on the ${l.localName}.`);
+        else if (linkState.note) toast(linkState.note);
+      } catch (err) { toast(err.message); }
+      renderLink();
+    };
+    const option = (choice, head, sub, off) => h('button', { class: `pick-opt link-opt${l.choice === choice ? ' is-on' : ''}`, type: 'button', role: 'menuitemradio', 'aria-checked': String(l.choice === choice), disabled: Boolean(off), onclick: () => pick(choice) },
+      h('span', {}, h('span', { class: 'link-opt-head' }, head), h('span', { class: 'link-opt-sub' }, sub)));
+    box.append(h('div', { class: 'pick-menu link-menu', role: 'menu' },
+      option('local', l.localName, onPi ? 'Take everything back and work here.' : 'Does the work. The faster side.'),
+      option('remote', l.remoteName, l.online ? `Hand everything over, for when the ${l.localName} sleeps. It all comes back when the ${l.localName} wakes.` : 'Not reachable right now.', !l.online),
+      h('p', { class: 'link-status' }, l.note || `Both sides save to GitHub every few minutes, so the phone on the ${l.remoteName} is never far behind.`)));
+  });
+  box.replaceChildren(button);
+  // Talking goes to wherever the threads are.
+  document.getElementById('talk-link').href = onPi ? `${l.remote}/walk` : '/walk';
+}
+
+async function checkLink() {
+  try {
+    const next = await (await fetch('/api/link')).json();
+    const moved = linkState && linkState.active !== next.active;
+    linkState = next;
+    renderLink();
+    if (moved) toast(`Now on the ${next.active === 'remote' ? next.remoteName : next.localName}.`);
+  } catch { /* the app is not running; the page says so itself */ }
+}
+checkLink();
+setInterval(checkLink, 8000);
+
 // ---------- pickers: model and effort ----------
 
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } };
+const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } if (linkState) renderLink(); };
 
 function picker(host, { options, value, onPick }) {
   const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
@@ -2071,7 +2133,7 @@ function connect() {
   // The page listens first and reads the state second, so nothing that happens in
   // between is missed. After a lost connection it reads the state again.
   let started = false;
-  source.onerror = () => { els.app.classList.add('is-offline'); };
+  source.onerror = () => { els.app.classList.add('is-offline'); checkLink(); };
   source.onopen = async () => {
     els.app.classList.remove('is-offline');
     try {
@@ -2090,7 +2152,13 @@ function connect() {
       if (new URLSearchParams(location.search).has('google')) { history.replaceState(null, '', '/'); openSettings('connections'); }
     } else if (S.current && S.threads.has(S.current)) {
       openThread(S.current, { keepPanel: true, byQueue: true });
+    } else if (S.current) {
+      // The side changed and this thread is not there (yet).
+      const first = inbox()[0];
+      if (first) openThread(first.id, { byQueue: true });
+      else openNew();
     }
+    if (started) loadProjects();
   };
 }
 
