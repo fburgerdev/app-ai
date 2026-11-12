@@ -4,6 +4,7 @@
 // keeps no list of its own, so a project exists here exactly when it exists in the vault.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as brain from './brain.js';
 import * as store from './store.js';
@@ -86,7 +87,66 @@ export function projectTree() {
     }
     if (g.isArea) g.touched = Math.max(g.touched, ...g.projects.map((p) => p.touched));
   }
-  return { groups };
+  return { groups, people: peopleList(), someday: somedayList() };
+}
+
+// ---------- people and Someday, shown like projects ----------
+//
+// So that they come back to Florian the way projects do: who has something open, when
+// he last dealt with them; and each Someday item with how long it has sat there.
+
+const PEOPLE_DIR = 'Brain/People';
+const SOMEDAY = 'Brain/Someday.md';
+const NOT_PEOPLE = new Set(['People Index', 'PBU Community Members']);
+const ddmmyyyy = (s) => { const m = /(\d{2})-(\d{2})-(\d{4})/.exec(s || ''); return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12).getTime() : 0; };
+
+let peopleCache = { head: null, list: [] };
+export function peopleList() {
+  const head = brain.brainStatus().head;
+  if (peopleCache.head === head && head) return peopleCache.list;
+  const dir = path.join(brain.brainDir() || '', PEOPLE_DIR);
+  const list = [];
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.md')); } catch { /* no people yet */ }
+  for (const file of names) {
+    const name = file.slice(0, -3);
+    if (NOT_PEOPLE.has(name)) continue;
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, file), 'utf8'); } catch { continue; }
+    const contacted = /^Last contacted:\s*(.*)$/im.exec(text)?.[1] || '';
+    const threads = (/^Open threads:\s*(.*)$/im.exec(text)?.[1] || '').trim();
+    const nothing = !threads || /^(none|nothing)\b/i.test(threads);
+    const role = (/^role:\s*(.*)$/im.exec(text)?.[1] || '').replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1').trim();
+    list.push({ name, about: threads ? `Open: ${threads.replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1')}` : role, open: !nothing, contacted: ddmmyyyy(contacted) });
+  }
+  peopleCache = { head, list };
+  return list;
+}
+
+let somedayCache = { head: null, list: [] };
+export function somedayList() {
+  const head = brain.brainStatus().head;
+  if (somedayCache.head === head && head) return somedayCache.list;
+  const file = brain.readVaultFile(SOMEDAY);
+  if (!file) return [];
+  const lines = fs.readFileSync(file.full, 'utf8').split(/\r?\n/);
+  // When each line last changed, from git.
+  const times = [];
+  try {
+    const out = execFileSync('git', ['blame', '--line-porcelain', '--', SOMEDAY], { cwd: brain.brainDir(), encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    for (const line of out.split('\n')) if (line.startsWith('author-time ')) times.push(Number(line.slice(12)) * 1000);
+  } catch { /* no history */ }
+  const list = [];
+  let parked = false;
+  lines.forEach((line, i) => {
+    if (/^##\s/.test(line)) parked = /parked/i.test(line);
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (!item) return;
+    const text = item[1].replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1').replace(/\*\*/g, '').trim();
+    list.push({ text, short: text.split(/(?<=[.!?])\s/)[0].slice(0, 140), parked, touched: times[i] || 0 });
+  });
+  somedayCache = { head, list };
+  return list;
 }
 
 // The files a thread on this project starts with: the project's own note and, for a
@@ -118,7 +178,10 @@ export function repoOf(name) {
   } catch { return ''; }
 }
 
+// A project or area from the index; also a person, or Someday, which threads can be on too.
 export function isKnownProject(name) {
+  if (!name) return false;
+  if (name === 'Someday' || peopleList().some((p) => p.name === name)) return true;
   const file = brain.readVaultFile(INDEX);
   if (!file) return false;
   return parseIndex(fs.readFileSync(file.full, 'utf8')).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));

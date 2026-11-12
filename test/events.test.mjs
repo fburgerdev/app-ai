@@ -30,11 +30,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 git(dir, 'init', '--bare', '-b', 'main', vault);
 const seed = path.join(dir, 'seed');
 git(dir, 'clone', vault, seed);
-for (const d of ['Brain/Projects', 'Brain/Areas', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
+for (const d of ['Brain/Projects', 'Brain/Areas', 'Brain/People', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
 fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Areas', 'Campaign.md'), '# Campaign\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Mensa Tracker.md'), '# Mensa Tracker\n\nStatus: active\nrepo: `fburgerdev/website-stuwerke`\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Anna Karle (PUYK).md'), 'Last contacted: by 18-10-2026 (message)\n\nrole: runs [[PUYK]]\n\nOpen threads: turn her offer into something concrete.\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Kirk Junker (Prorektor).md'), 'Last contacted: 01-07-2026\n\nOpen threads: none; he no longer holds the office\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'People Index.md'), '# People Index\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Someday.md'), '# Someday\n\nIntro.\n\n- Try to get the Kitas in Köln to go plant-based. Noted after the meeting.\n- Look into investing.\n\n## Parked 21-09-2026\n\n- Reschedule the outreach stall.\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Campaign]]\n\n- [[Mensa Tracker]] — the website\n');
 git(seed, 'checkout', '-B', 'main'); git(seed, 'add', '-A'); git(seed, 'commit', '-m', 'seed'); git(seed, 'push', 'origin', 'main');
 fs.mkdirSync(data, { recursive: true });
@@ -58,6 +62,21 @@ const ready = (id) => until(async () => { const t = await thread(id); return t.t
 
 test('the app is up', async () => {
   await until(async () => (await state()).brain.brain.ready, 'brain cloned', 40000);
+});
+
+test('people and Someday come with the outline', async () => {
+  const tree = (await call('GET', '/api/projects')).data;
+  assert.deepEqual(tree.people.map((p) => [p.name, p.open]).sort(), [['Anna Karle (PUYK)', true], ['Kirk Junker (Prorektor)', false]]);
+  const anna = tree.people.find((p) => p.open);
+  assert.equal(new Date(anna.contacted).getMonth(), 9);
+  assert.match(anna.about, /^Open: turn her offer/);
+  assert.deepEqual(tree.someday.map((x) => [x.short, x.parked]), [['Try to get the Kitas in Köln to go plant-based.', false], ['Look into investing.', false], ['Reschedule the outreach stall.', true]]);
+  assert.ok(tree.someday[0].touched > 0, 'when the line last changed, from git');
+  // Threads can be on a person, or on Someday.
+  const t = (await call('POST', '/api/threads', { text: 'Draft a note to Anna', project: 'Anna Karle (PUYK)' })).data.thread;
+  assert.equal(t.project, 'Anna Karle (PUYK)');
+  const sd = (await call('POST', '/api/threads', { text: 'From Someday: investing', project: 'Someday' })).data.thread;
+  assert.equal(sd.project, 'Someday');
 });
 
 test('a thread finds its project by itself, after its first answer, and takes the project\'s repo', async () => {

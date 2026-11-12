@@ -220,7 +220,7 @@ function pathOf(project) {
 
 // ---------- the outline: every project and area, most recently dealt with first ----------
 //
-// It shows projects, not threads. A dot marks a project that has open threads; paused
+// It shows projects, not threads (and below them people and Someday items). A dot marks a project that has open threads; paused
 // projects and areas without a project are grey and at the bottom. Click one to see its
 // threads and what can be done there. Drop a thread on one to file it.
 
@@ -287,7 +287,44 @@ function treeNodes() {
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Areas'),
       bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
     h('div', { class: 'out-list' }, ...areas.filter((a) => !a.empty).sort(byRecent).map((a) => row(a, false)), ...areas.filter((a) => a.empty).sort(byRecent).map((a) => row(a, true))),
+    ...peopleNodes(t.people || [], row, dealt, byRecent),
+    ...somedayNodes(t.someday || []),
   ].filter(Boolean);
+}
+
+// People, like projects: who has something open, most recently dealt with first; those
+// with nothing open grey at the bottom, to be acted on or let go. Click reads the note,
+// + starts a thread about the person.
+function peopleNodes(people, row, dealt, byRecent) {
+  if (!people.length) return [];
+  const list = people.map((p) => ({ name: p.name.replace(/\s*\(([^)]*)\)$/, ''), project: p.name, about: `${p.name}\n${p.about || ''}`, touched: dealt(p.name, p.contacted), openThreads: p.open }));
+  return [
+    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'People')),
+    h('div', { class: 'out-list' },
+      ...list.filter((p) => p.openThreads).sort(byRecent).map((p) => row({ ...p, open: threadsIn(p.project).filter((x) => x.state !== 'done').length }, false)),
+      ...list.filter((p) => !p.openThreads).sort(byRecent).map((p) => row({ ...p, open: threadsIn(p.project).filter((x) => x.state !== 'done').length }, true))),
+  ];
+}
+
+// Someday, item by item, newest first; the parked old actions grey at the bottom. + starts
+// a thread on the item: do it now, keep it, or fold it.
+function somedayNodes(items) {
+  if (!items.length) return [];
+  const item = (x) => h('div', { class: `out${x.parked ? ' is-grey' : ''}` },
+    h('button', { class: 'out-row', type: 'button', title: `${x.text}\n${x.parked ? 'Parked 21-09-2026: an old action, never confirmed.\n' : ''}Click to read Someday`, onclick: () => openPanel({ kind: 'note', link: 'Someday' }) },
+      h('span', { class: 'out-name' }, x.short),
+      x.touched ? h('span', { class: 'out-when' }, ago(x.touched).replace(' ago', '')) : null),
+    h('button', { class: 'out-plus', type: 'button', title: 'New thread on this: do it now, keep it, or fold it', 'aria-label': 'New thread on this Someday item', onclick: () => {
+      openNew('Someday');
+      els.input.value = `From Someday: "${x.text}"\n\n`;
+      els.input.dispatchEvent(new Event('input'));
+      els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+    } }, '+'));
+  const byNew = (a, b) => b.touched - a.touched;
+  return [
+    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Someday')),
+    h('div', { class: 'out-list' }, ...items.filter((x) => !x.parked).sort(byNew).map(item), ...items.filter((x) => x.parked).sort(byNew).map(item)),
+  ];
 }
 
 function renderTree(force = false) {
