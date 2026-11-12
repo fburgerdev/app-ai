@@ -16,7 +16,7 @@ import { logRead, logToolRead } from './reads.js';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState } from './state.js';
-import { projectContext, repoOf } from './projects.js';
+import { projectContext, repoOf, projectChoices } from './projects.js';
 import * as repos from './repos.js';
 
 let config;
@@ -64,6 +64,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     // Mid-turn: the thread closes when that turn ends; this message starts no turn of its own.
     if (thread.state === 'working') store.updateThread(threadId, { unsent, doneAfter: true });
     else store.updateThread(threadId, { unsent, doneAfter: false, state: 'done', doneAt: Date.now(), activity: '', requeuedAt: 0 });
+    guessProject(threadId).catch(() => {});
     return message;
   }
   // A plain message after "send and done" means he wants to see the answer after all.
@@ -340,6 +341,7 @@ async function runTurn(threadId, prompt) {
         error: result.error || '',
         gist: lastText.replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(-220),
       });
+      if (!result.error && !result.aborted) guessProject(threadId).catch(() => {});
       if (close) return;
       const walking = Date.now() - voiceActivity.at < 2 * 60 * 60_000;
       if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
@@ -409,4 +411,62 @@ export function spokenDigest(threadId, lang = 'en') {
   })().finally(() => digesting.delete(key));
   digesting.set(key, job);
   return job;
+}
+
+// ---------- which project a thread is about ----------
+//
+// A thread without a project gets one by itself after its first answer: a small model
+// reads the start of the conversation and the Projects Index and names the project or
+// area it is about, or none. Once per thread; what Florian sets himself always stands.
+
+const guessing = new Set();
+const NO_GUESS = new Set(['card', 'brain-update']);
+
+export async function guessProject(threadId) {
+  const thread = store.getThread(threadId);
+  if (!thread || thread.project || thread.projectGuessed || NO_GUESS.has(thread.kind) || guessing.has(threadId)) return '';
+  const choices = projectChoices();
+  if (!choices.length) return '';
+  const messages = store.readMessages(threadId);
+  const said = messages.slice(0, 4).map((m) => `${m.role === 'user' ? (m.auto ? 'The app' : 'Florian') : 'Claude'}: ${messageText(m).slice(0, 1500)}`).join('\n\n');
+  if (!said.trim()) return '';
+  guessing.add(threadId);
+  try {
+    let answer = '';
+    if (config.fake) {
+      // The stand-in: a project whose name the conversation mentions.
+      const text = `${thread.title}\n${said}`.toLowerCase();
+      answer = choices.map((c) => c.name).sort((a, b) => b.length - a.length).find((n) => text.includes(n.toLowerCase())) || 'none';
+    } else {
+      const result = await runAgent({
+        prompt: `Projects and areas:\n${choices.map((c) => `- ${c.line}`).join('\n')}\n\nThe thread "${thread.title}":\n\n${said}\n\nWhich one project or area from the list is this thread about? Answer with its name exactly as listed, or with "none" if it is about none of them or about several equally. Nothing else.`,
+        cwd: DATA_DIR,
+        systemAppend: 'You sort threads of a personal work app into the projects and areas of the user\'s notes. Answer with one name from the list, or "none".',
+        model: config.queue?.pickModel || 'haiku',
+        mode: 'plain',
+        fake: false,
+      });
+      answer = String(result.finalText || result.text || '').trim().replace(/^["'`*]+|["'`*.]+$/g, '');
+    }
+    const match = choices.find((c) => c.name.toLowerCase() === answer.toLowerCase());
+    const fresh = store.getThread(threadId);
+    if (!fresh || fresh.project) return '';
+    const patch = { projectGuessed: true };
+    if (match) {
+      patch.project = match.name;
+      if (!fresh.repo) { const repo = repoOf(match.name); if (repo) patch.repo = repo; }
+      log(`thread "${fresh.title}" is about ${match.name}`);
+    }
+    store.updateThread(threadId, patch);
+    return match?.name || '';
+  } finally {
+    guessing.delete(threadId);
+  }
+}
+
+// The threads that were there before this: one at a time, in the background.
+export async function backfillProjects() {
+  const todo = store.listThreads().filter((t) => !t.project && !t.projectGuessed && !NO_GUESS.has(t.kind) && !t.archived && (t.messageCount || 0) >= 2);
+  for (const t of todo) await guessProject(t.id).catch(() => {});
+  return todo.length;
 }

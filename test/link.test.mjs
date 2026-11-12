@@ -82,8 +82,12 @@ test('the laptop does the work; the Pi hears about what it saves', async () => {
 test('handing over: everything moves to the Pi and the page is passed on', async () => {
   await call(lap, 'POST', `/api/threads/${first.id}/messages`, { text: 'Last thing before the laptop sleeps' });
   await answered(lap, first.id, 2);
-  const l = (await call(lap, 'POST', '/api/link', { choice: 'remote' })).data;
-  assert.equal(l.active, 'remote', l.note);
+  await call(lap, 'POST', '/api/link', { choice: 'remote' });
+  const l = await linkIs('remote');
+  assert.equal(l.step, '');
+  assert.ok(l.handedOverAt > 0);
+  const st = (await call(lap, 'GET', '/api/status')).data;
+  assert.equal(st.safe, true, 'safe to suspend once handed over');
   assert.equal((await thread(pi, first.id)).messages.length, 4, 'the Pi has the whole conversation');
   await call(lap, 'POST', `/api/threads/${first.id}/messages`, { text: 'Now through the Pi' });
   await answered(pi, first.id, 3);
@@ -104,7 +108,9 @@ test('the Pi goes off while it has everything: the laptop takes over with what t
   assert.equal((await thread(lap, first.id)).messages.length, 6, 'came over through the data repo');
   second = (await call(lap, 'POST', '/api/threads', { text: 'Started on the laptop alone' })).data.thread;
   await answered(lap, second.id, 1);
-  assert.equal((await call(lap, 'POST', '/api/link', { choice: 'remote' })).data.active, 'local', 'no handing over to a Pi that is off');
+  await call(lap, 'POST', '/api/link', { choice: 'remote' });
+  await sleep(1500);
+  assert.equal((await call(lap, 'GET', '/api/link')).data.active, 'local', 'no handing over to a Pi that is off');
 });
 
 test('the Pi comes back: the laptop stays, work on both sides merges, taking back works', async () => {
@@ -121,8 +127,8 @@ test('the Pi comes back: the laptop stays, work on both sides merges, taking bac
   await call(lap, 'POST', `/api/threads/${first.id}/messages`, { text: 'Said on the laptop' });
   await answered(lap, first.id, 4);
 
-  const over = (await call(lap, 'POST', '/api/link', { choice: 'remote' })).data;
-  assert.equal(over.active, 'remote', over.note);
+  await call(lap, 'POST', '/api/link', { choice: 'remote' });
+  await linkIs('remote');
   const all = await threads(pi);
   assert.ok(all.some((t) => t.id === piOnly.id) && all.some((t) => t.id === second.id), 'threads of both sides are there');
   const merged = await thread(pi, first.id);
@@ -133,8 +139,29 @@ test('the Pi comes back: the laptop stays, work on both sides merges, taking bac
 
   await call(lap, 'POST', `/api/threads/${piOnly.id}/messages`, { text: 'More, on the Pi' });
   await answered(pi, piOnly.id, 2);
-  const back = (await call(lap, 'POST', '/api/link', { choice: 'local' })).data;
-  assert.equal(back.active, 'local');
+  await call(lap, 'POST', '/api/link', { choice: 'local' });
+  await linkIs('local');
   assert.equal((await thread(lap, piOnly.id)).messages.length, 4, 'the Pi saved before the laptop took everything back');
   assert.equal((await thread(lap, first.id)).messages.length, 10);
+});
+
+test('the background work runs on one side only; the status says when the laptop can sleep', async () => {
+  // Doing the work, the laptop holds the lease: the Pi makes no cards of its own.
+  await until(async () => (await call(pi, 'GET', '/api/status')).data && true, 'pi status');
+  await call(lap, 'POST', '/api/link', { choice: 'local' });
+  await linkIs('local');
+  await sleep(1500);
+  const st = await until(async () => { const x = (await call(lap, 'GET', '/api/status')).data; return x.busy.threads.length === 0 && x.saved.files === 0 && x.saved.ahead === 0 ? x : null; }, 'all saved', 20000).catch(async () => (await call(lap, 'GET', '/api/status')).data);
+  assert.equal(st.show, true);
+  assert.equal(st.link.active, 'local');
+  await call(lap, 'POST', '/api/status/save', {});
+  const after = (await call(lap, 'GET', '/api/status')).data;
+  assert.equal(after.saved.files, 0);
+  assert.equal(after.saved.ahead, 0);
+  assert.equal(after.safe, true);
+  // A turn running: not safe.
+  const t = (await call(lap, 'POST', '/api/threads', { text: 'Something slow SLOW-TEST' })).data.thread;
+  const during = await until(async () => { const x = (await call(lap, 'GET', '/api/status')).data; return x.busy.threads.length ? x : null; }, 'busy seen', 5000);
+  assert.equal(during.safe, false);
+  assert.equal(during.busy.threads[0].id, t.id);
 });

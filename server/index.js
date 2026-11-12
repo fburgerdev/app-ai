@@ -20,6 +20,7 @@ import * as repos from './repos.js';
 import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
+import * as events from './events.js';
 import { startSelfUpdate, updateStatus } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS } from './state.js';
@@ -89,6 +90,36 @@ app.post('/api/link', express.json(), async (req, res) => res.json(await link.ch
 app.post('/api/sync/pull', async (req, res) => {
   try { res.json({ ok: true, changed: await datasync.pullNow() }); } catch (err) { res.status(502).json({ error: err.message }); }
 });
+// The laptop says every few seconds that it is doing the work, so the Pi leaves the
+// background work (cards, events) to it; ?release=1 when it hands over.
+app.post('/api/sync/lease', (req, res) => {
+  link.takeLease(req.query.release !== '1');
+  res.json({ ok: true });
+});
+// The status line on the laptop: which side does the work, what is still running or
+// not saved, and whether the laptop can sleep.
+let lastStatusSave = 0;
+const laptopHere = Boolean(config.remote) || ['win32', 'darwin'].includes(process.platform) || process.env.APP_AI_STATUS_BAR === '1';
+app.get('/api/status', async (req, res) => {
+  const l = link.status();
+  const threads = store.listThreads().filter((t) => t.state === 'working').map((t) => ({ id: t.id, title: t.title }));
+  const extracting = extraction.extractionStatus().running;
+  const carding = cards.cardsStatus().running;
+  const [saved, unpushed] = await Promise.all([datasync.unsaved(), repos.unpushed().catch(() => [])]);
+  const busy = threads.length > 0 || extracting || carding;
+  const savedAll = !saved.enabled || (saved.files === 0 && saved.ahead === 0);
+  // Changes waiting for the next timed save: saved now, so "saving" means saving.
+  if (!savedAll && !saved.error && Date.now() - lastStatusSave > 15_000) { lastStatusSave = Date.now(); datasync.saveNow('state').catch(() => {}); }
+  res.json({
+    show: laptopHere,
+    link: l,
+    busy: { threads, extracting, cards: carding },
+    saved,
+    unpushed,
+    safe: l.active === 'remote' ? !l.switching : !busy && savedAll && !l.switching,
+  });
+});
+app.post('/api/status/save', async (req, res) => res.json(await datasync.saveNow('state')));
 app.post('/api/sync/push', async (req, res) => {
   const out = await datasync.saveNow('handover');
   if (out.error) return res.status(502).json({ error: out.error });
@@ -419,7 +450,7 @@ app.post('/api/threads/:id/project', (req, res) => {
   if (project && !projects.isKnownProject(project)) return res.status(400).json({ error: 'That project is not in the vault\'s Projects Index.' });
   // Filed under a project with a repo, a thread without one takes the project's.
   const repo = !thread.repo ? repos.repoName(projects.repoOf(project)) : null;
-  res.json({ thread: store.updateThread(thread.id, { project, ...(repo ? { repo, repoSet: true } : {}) }) });
+  res.json({ thread: store.updateThread(thread.id, { project, projectGuessed: true, ...(repo ? { repo, repoSet: true } : {}) }) });
 });
 
 app.post('/api/threads/:id/title', (req, res) => {
@@ -674,6 +705,10 @@ const server = app.listen(config.port, '127.0.0.1', () => {
 attachVoice(server, config, allowedHosts);
 datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
+cards.setMayRun(link.mayRunBackground);
+events.initEvents({ mayRunHere: link.mayRunBackground });
+// Threads from before projects were found by themselves get one now, in the background.
+setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillProjects().catch(() => {}); }, 20_000).unref?.();
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {

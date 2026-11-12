@@ -25,19 +25,28 @@ back.
    Claude Code signed in, like the Pi), Google (Settings → Connections, once per computer),
    and the keys in `config.json` (Groq and the like).
 
-## The switch
+## The status line
 
-The button in the top bar says which side does the work.
+Under the top bar, on the laptop, one line says where things stand:
 
-- **Laptop** (the normal state). Everything runs here.
-- **Pi**: hand everything over. The laptop saves its threads to GitHub, the Pi takes them in,
-  and from then on the laptop's window only passes everything on to the Pi. When the toast
-  says "Handed over", the laptop can sleep. If Claude is still working on something here, the
-  handover waits for that to finish; keep the laptop awake until then.
-- **Taking back** happens by itself when the laptop wakes up or starts, by your click on
-  "Laptop", and when the Pi stops answering. The Pi saves first if it can.
+- **Which side does the work**: Laptop or Pi.
+- **Whether the laptop can sleep.** "Everything is saved. Safe to suspend the Laptop." when
+  nothing is running and everything is on GitHub. While Claude is working, a brain update or
+  a card run is going, or changes are not on GitHub yet, it says so: keep the laptop awake.
+- **Whether the Pi could take over**: "Pi is ready", "Pi: waits for one thing" (hover to see
+  what), or "Pi is off". Repo work that is only on the laptop (branches not pushed) is named
+  too; it does not travel, so push it first in the thread's repo panel.
 
-The option for the Pi is greyed out while the Pi is not reachable.
+**Hand over to the Pi** starts the takeover. If Claude is still working here, the line says
+it hands over as soon as that is finished (Cancel stops it). Then the laptop saves to GitHub,
+the Pi takes everything in, and the line turns green: "Handed over … Safe to suspend the
+Laptop." From then on the laptop's window only passes everything on to the Pi.
+
+**Take back to the Laptop** brings everything back; it also happens by itself when the laptop
+wakes up or starts, and when the Pi stops answering. The Pi saves first if it can.
+
+Background work (new cards, opening events, sorting threads into projects) runs on one side
+only: on the laptop while it does the work, on the Pi while the laptop is handed over or off.
 
 ## How the threads stay together
 

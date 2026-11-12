@@ -265,13 +265,21 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   assert.equal(work.messages[0].auto, true, 'the brief is the app\'s message, not something Florian said');
   assert.match(work.messages[0].text, /^Florian accepted this proposal of yours, after editing it\. Do the work:\n\n\*\*Work out a timeline.*Keep it to one page\.$/s);
 
-  // Something in the calendar for tomorrow: no card to decide, a thread that prepares him.
-  const prep = (await state()).threads.find((t) => t.kind === 'prep');
-  assert.equal(prep.title, 'Prepare: example fair tomorrow');
-  assert.equal(prep.project, 'Campaign');
-  const prepared = await ready(prep.id);
-  assert.match(prepared.messages[0].text, /^The app looked at Florian's calendar/);
-  assert.equal(prepared.thread.lastUserAt, 0);
+  // Something in the calendar: no card to decide and nothing in the inbox, but a thread
+  // in Events that waits, unseen, until it is time to prepare.
+  const events = (await state()).threads.filter((t) => t.kind === 'event');
+  assert.equal(events.length, 2);
+  const fair = events.find((t) => t.title === 'Example fair');
+  assert.equal(fair.project, 'Campaign');
+  assert.equal(fair.event.important, true);
+  assert.equal(fair.event.where, 'Messe Köln');
+  assert.equal(fair.event.showAt, fair.event.start - 24 * 3600_000, 'important: a day before');
+  assert.ok(fair.hidden && !fair.event.started, 'not open yet');
+  assert.equal(fair.messageCount, 0);
+  const small = events.find((t) => t.title === 'Call with the example office');
+  assert.equal(small.event.important, false);
+  assert.ok(small.event.showAt > fair.event.showAt, 'smaller: on the day');
+  assert.ok(!(await state()).queue.order.some((id) => events.some((e) => e.id === id)), 'never in the inbox');
 
   const log = fs.readFileSync(path.join(data, 'cards', 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.type !== 'prep' && l.type !== 'proposal');
   assert.equal(log.length, 2);
@@ -284,7 +292,7 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   const threadsBefore = (await state()).threads.length;
   await call('POST', '/api/cards/make', {});
   await until(async () => ((await state()).cards.running ? null : true), 'second run done');
-  assert.equal((await state()).threads.filter((t) => t.kind === 'prep').length, 1);
+  assert.equal((await state()).threads.filter((t) => t.kind === 'event').length, 2);
   assert.ok((await state()).threads.length >= threadsBefore);
 });
 

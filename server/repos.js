@@ -398,3 +398,17 @@ function fakeGithub(method, url, body) {
   }
   throw new Error(`fake GitHub: ${method} ${url} is not played`);
 }
+
+// Threads whose branch has commits that are not on GitHub: work that stays on this computer.
+export async function unpushed() {
+  const out = [];
+  for (const t of store.listThreads()) {
+    if (!t.repo || !t.repoBranch || t.archived) continue;
+    const dir = dirOf(t.repo);
+    if (!fs.existsSync(path.join(dir, '.git'))) continue;
+    const onGithub = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${t.repoBranch}`]).then(() => true, () => false);
+    const ahead = Number((await git(dir, ['rev-list', '--count', onGithub ? `origin/${t.repoBranch}..${t.repoBranch}` : `origin/${t.repoMain || 'main'}..${t.repoBranch}`]).catch(() => '0')).trim());
+    if (ahead > 0) out.push({ id: t.id, title: t.title, repo: t.repo, commits: ahead });
+  }
+  return out;
+}

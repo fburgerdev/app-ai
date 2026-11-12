@@ -184,3 +184,14 @@ export function saveNow(reason = 'state') {
     return dataSyncStatus();
   });
 }
+
+// What is here but not on GitHub yet: changed files, and commits not pushed.
+export async function unsaved() {
+  if (!status.enabled) return { enabled: false, files: 0, ahead: 0 };
+  const files = (await git(DATA_DIR, ['status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean).length;
+  const branch = config.dataBranch;
+  const ahead = (await gitOk(DATA_DIR, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]))
+    ? Number((await git(DATA_DIR, ['rev-list', '--count', `origin/${branch}..HEAD`]).catch(() => '0')).trim())
+    : (await hasCommits()) ? 1 : 0;
+  return { enabled: true, files, ahead, lastPush: status.lastPush, error: status.error };
+}

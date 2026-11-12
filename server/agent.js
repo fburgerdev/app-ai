@@ -466,11 +466,20 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       text: '**Work out a timeline for the motion, counted back from the session date.**\n\n- You get: a one-page plan and the first two mails as drafts\n- From: the project note and Waiting For',
     }));
     if (/The calendar is connected/.test(userPrompt)) {
+      // EVENT-SOON in the prompt (tests): the fair starts in two hours instead of tomorrow.
+      const soon = /EVENT-SOON/.test(userPrompt);
+      const at = new Date(Date.now() + (soon ? 2 : 26) * 3600_000);
       fs.writeFileSync(path.join(artifactsDir, 'four.json'), JSON.stringify({
-        type: 'prep', channel: 'thread', key: 'prep:2026-11-11:example-fair',
-        title: 'Prepare: example fair tomorrow', why: 'In the calendar for tomorrow, 10:00, and nothing in the Brain prepares it.',
-        project: someArea,
-        text: 'Tomorrow at 10:00 the calendar has "Example fair". Brief Florian on what he wants out of it, from the project notes, then start a preparation session with him.',
+        type: 'prep', channel: 'thread', key: `prep:${at.toISOString().slice(0, 10)}:example-fair`,
+        title: 'Example fair', why: 'In the calendar, and nothing in the Brain prepares it.',
+        project: someArea, important: true, start: at.toISOString(), end: new Date(at.getTime() + 3 * 3600_000).toISOString(), where: 'Messe Köln',
+        text: 'The calendar has "Example fair". Brief Florian on what he wants out of it, from the project notes, then start a preparation session with him.',
+      }));
+      fs.writeFileSync(path.join(artifactsDir, 'five.json'), JSON.stringify({
+        type: 'prep', channel: 'thread', key: `prep:${at.toISOString().slice(0, 10)}:example-call`,
+        title: 'Call with the example office', why: 'A call about one of his projects.',
+        project: '', important: false, start: at.toISOString(), end: new Date(at.getTime() + 1800_000).toISOString(),
+        text: 'A short call. Brief Florian in a few lines.',
       }));
     }
     return { sessionId, text: 'Made the cards.', finalText: 'Made the cards.', error: '', aborted: false };
@@ -483,6 +492,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   let text = '';
   // "…spin off a new task about X": the stand-in does it, as the real Claude would with its tool.
   const newest = userPrompt.split('The new message:').pop();
+  if (/SLOW-TEST/.test(newest)) await new Promise((res) => setTimeout(res, 2500));
   // "REPO-TEST" or "REPO-TEST=name": open the repo and change a file in it, as the real Claude would.
   const repoAsk = repoTools && /REPO-TEST(?:=([\w./-]+))?/.exec(newest);
   if (repoAsk) {

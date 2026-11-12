@@ -120,14 +120,15 @@ const typing = () => {
 
 // ---------- which thread comes next ----------
 
-const all = () => [...S.threads.values()];
+// Event threads waiting to open are not shown anywhere but in Events' "Coming".
+const all = () => [...S.threads.values()].filter((t) => !t.hidden);
 // What is waiting, in the queue's order; anything the queue has not placed yet follows, oldest first.
 function inbox() {
-  const ready = all().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt);
+  const ready = all().filter((t) => t.state === 'ready' && t.kind !== 'event').sort((a, b) => a.queuedAt - b.queuedAt);
   const pos = new Map(S.queue.order.map((id, i) => [id, i]));
   return ready.sort((a, b) => (pos.get(a.id) ?? 1e6) - (pos.get(b.id) ?? 1e6));
 }
-const working = () => all().filter((t) => t.state === 'working').sort((a, b) => a.updatedAt - b.updatedAt);
+const working = () => all().filter((t) => t.state === 'working' && t.kind !== 'event').sort((a, b) => a.updatedAt - b.updatedAt);
 // Done lists only what is not in the brain yet: a brain update archives the rest.
 const done = () => all().filter((t) => t.state === 'done' && t.kind !== 'card' && !t.archived).sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
 const nextReady = (exceptId) => inbox().find((t) => t.id !== exceptId) || null;
@@ -139,7 +140,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
+const KIND = { event: 'Event', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 function kindLabel(t) {
   if (t.kind === 'card') return { chase: 'Chase', proposal: 'Proposal' }[t.card?.type] || 'Opportunity';
   return KIND[t.kind] || '';
@@ -822,6 +823,9 @@ function renderHead() {
   } else if (t.state === 'working') {
     status = h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, 'Stop'));
+  } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
+    status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
+    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Close this event: prepared and debriefed', onclick: markDone }, 'Done ', kbd('Alt X')));
   } else if (t.state === 'ready') {
     status = h('span', { class: 'status status-ready' }, 'Waiting for you');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
@@ -857,7 +861,8 @@ function renderComposer() {
     els.input.placeholder = 'Add to this thread. Claude gets it when this turn ends.';
     verb = 'Add';
   } else {
-    els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.' : 'Reply.';
+    els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
+      : t.kind === 'event' && t.event && Date.now() > t.event.end ? 'How did it go?' : 'Reply.';
   }
   els.send.textContent = verb;
   els.sendDone.textContent = `${verb} and done`;
@@ -1167,6 +1172,8 @@ async function send(done = false) {
     S.drafts.delete(from || 'new');
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
+    // An event's thread is a session: it stays open while Claude answers.
+    if (!done && from && S.threads.get(from)?.kind === 'event') { renderEvents(); return; }
     advance(from);
   } catch (err) {
     toast(err.message);
@@ -1742,72 +1749,159 @@ document.addEventListener('visibilitychange', () => {
   checkSleep();
 });
 
-// ---------- which computer: the laptop or the Pi ----------
+// ---------- the status line: which computer, and whether the laptop can sleep ----------
 //
-// On the laptop the page always comes from the laptop, and the laptop does the work.
-// This button hands everything over to the Pi (before the laptop sleeps, say) and takes
-// it back; while handed over, the laptop's app passes everything on to the Pi.
+// On the laptop the page always comes from the laptop, and the laptop does the work. The
+// status line under the top bar says what is still running or not saved yet, when it is
+// safe to suspend the laptop, and offers to hand everything over to the Pi (and back).
 
-let linkState = null;
+let statusNow = null;
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const quoted = (list, n = 2) => list.slice(0, n).map((t) => `“${clip(t.title, 30)}”`).join(', ') + (list.length > n ? ` and ${list.length - n} more` : '');
 
-function renderLink() {
-  const box = document.getElementById('link');
-  const l = linkState;
-  if (!l?.enabled) { box.hidden = true; return; }
-  box.hidden = false;
-  if (box.classList.contains('is-open')) return; // not while the menu is open
-  const onPi = l.active === 'remote';
-  const name = onPi ? l.remoteName : l.localName;
-  const waiting = !onPi && l.choice === 'remote';
-  const title = l.switching ? 'Handing over…' : l.note || (onPi ? `Handed over: the ${l.remoteName} does the work.` : `The ${l.localName} does the work.`);
-  const button = h('button', { class: `top-btn link-btn${l.switching || waiting ? ' is-switching' : ''}`, type: 'button', title, 'aria-haspopup': 'menu' },
-    h('span', { class: `link-dot ${onPi ? 'is-remote' : 'is-local'}`, 'aria-hidden': 'true' }), h('span', { class: 'top-label' }, waiting ? `${name} → ${l.remoteName}…` : name));
+function renderStatus() {
+  const bar = document.getElementById('statusbar');
+  const st = statusNow;
+  if (!st?.show) { bar.hidden = true; document.getElementById('talk-link').href = '/walk'; return; }
+  bar.hidden = false;
+  const l = st.link;
+  const pi = l.remoteName || 'Pi';
+  const lap = l.localName || 'Laptop';
+  const onPi = l.enabled && l.active === 'remote';
+  // What still keeps the laptop from sleeping, or from handing over.
+  const running = [];
+  if (st.busy.threads.length) running.push(`Claude is working on ${quoted(st.busy.threads)}`);
+  if (st.busy.extracting) running.push('the brain update is running');
+  if (st.busy.cards) running.push('the app is looking for new cards');
+  const unsaved = st.saved.enabled && (st.saved.files || st.saved.ahead);
+  let tone = 'ok';
+  let text;
+  const buttons = [];
+  const act = (label, choice, opts = {}) => h('button', { class: `btn ${opts.quiet ? 'btn-quiet' : ''} status-btn`, type: 'button', disabled: Boolean(opts.off), title: opts.title || '', onclick: async () => {
+    try { statusNow = { ...st, link: await api('POST', '/api/link', { choice }) }; renderStatus(); setTimeout(checkStatus, 400); } catch (err) { toast(err.message); }
+  } }, label);
+
+  if (l.enabled && l.step && l.choice === 'remote' && !onPi) {
+    tone = 'busy';
+    const finished = [
+      ...(st.busy.threads.length ? [`Claude has finished ${quoted(st.busy.threads)}`] : []),
+      ...(st.busy.extracting ? ['the brain update is through'] : []),
+      ...(st.busy.cards ? ['the card run is through'] : []),
+    ];
+    text = l.step === 'Waiting for Claude to finish here'
+      ? `Handing over to the ${pi} as soon as ${finished.join(' and ') || 'Claude has finished here'}. Keep the ${lap} awake until then.`
+      : `Handing over to the ${pi}: ${l.step.toLowerCase()}… Keep the ${lap} awake.`;
+    buttons.push(act('Cancel', 'local', { quiet: true }));
+  } else if (l.enabled && l.step && onPi) {
+    tone = 'busy';
+    text = `Taking everything back from the ${pi}: ${l.step.toLowerCase()}…`;
+  } else if (onPi) {
+    tone = 'ok';
+    text = `Handed over: the ${pi} has everything and does the work. Safe to suspend the ${lap}; it takes everything back when it wakes.`;
+    buttons.push(act(`Take back to the ${lap}`, 'local', { quiet: true }));
+  } else {
+    if (running.length) { tone = 'busy'; text = `${running.join(', ').replace(/^./, (c) => c.toUpperCase())}. Keep the ${lap} awake.`; }
+    else if (unsaved) { tone = 'busy'; text = st.saved.error ? `Not saved to GitHub: ${st.saved.error}` : 'Saving the latest changes to GitHub…'; }
+    else { tone = 'ok'; text = `Everything is saved. Safe to suspend the ${lap}.`; }
+    if (l.note) text = `${text} ${l.note}`;
+    if (l.enabled) {
+      const missing = [...running, ...(unsaved ? [plural(st.saved.files + st.saved.ahead, 'change', 'changes') + ' not on GitHub yet'] : [])];
+      const title = !l.online ? `The ${pi} is not reachable.`
+        : missing.length ? `Still to transfer: ${missing.join('; ')}. The handover waits for that.` : `Ready: everything is saved, the ${pi} can take over now.`;
+      buttons.push(h('span', { class: `status-ready ${l.online ? (missing.length ? 'is-wait' : 'is-go') : 'is-off'}`, title },
+        !l.online ? `${pi} is off` : missing.length ? `${pi}: waits for ${missing.length === 1 ? 'one thing' : `${missing.length} things`}` : `${pi} is ready`));
+      buttons.push(act(`Hand over to the ${pi}`, 'remote', { off: !l.online, title: l.online ? `The ${lap} saves everything to GitHub, the ${pi} takes it in, and the ${pi} does the work until the ${lap} takes it back. The line here says when it is safe to suspend.` : `The ${pi} is not reachable.` }));
+    }
+  }
+  const warn = st.unpushed.length
+    ? h('span', { class: 'status-warn', title: `${st.unpushed.map((u) => `“${u.title}”: ${plural(u.commits, 'commit', 'commits')} in ${u.repo}`).join('\n')}\n\nThis repo work is only on the ${lap}. Push it in the thread's repo panel to have it on the ${pi}.` },
+      `${plural(st.unpushed.length, 'repo branch', 'repo branches')} only on the ${lap}`)
+    : null;
+  bar.className = `statusbar is-${tone}`;
+  bar.replaceChildren(...[
+    h('span', { class: 'status-side' }, h('span', { class: `status-dot ${onPi ? 'is-remote' : 'is-local'}`, 'aria-hidden': 'true' }), onPi ? pi : lap),
+    h('span', { class: 'status-text', role: 'status' }, text),
+    warn,
+    h('span', { class: 'status-actions' }, buttons),
+  ].filter(Boolean));
+  // Talking goes to wherever the threads are.
+  document.getElementById('talk-link').href = onPi ? `${l.remote}/walk` : '/walk';
+}
+
+async function checkStatus() {
+  try {
+    const next = await (await fetch('/api/status')).json();
+    const moved = statusNow?.link && statusNow.link.active !== next.link.active;
+    statusNow = next;
+    renderStatus();
+    if (moved) toast(next.link.active === 'remote' ? `Handed over to the ${next.link.remoteName}. Safe to suspend.` : `Back on the ${next.link.localName}.`);
+  } catch { /* the app is not running; the page says so itself */ }
+}
+checkStatus();
+setInterval(() => { if (!document.hidden) checkStatus(); }, 4000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStatus(); });
+
+// ---------- events: what is coming up in the calendar ----------
+//
+// Not in the inbox. Each entry worth preparing has a thread of its own that opens a day
+// before (important) or on the morning of the day, and stays until it is marked done:
+// for preparing before and debriefing after.
+
+const eventThreads = () => [...S.threads.values()].filter((t) => t.kind === 'event' && t.event);
+const openEvents = () => eventThreads().filter((t) => !t.hidden && t.state !== 'done').sort((a, b) => a.event.start - b.event.start);
+const comingEvents = () => eventThreads().filter((t) => t.hidden && t.event.showAt > Date.now()).sort((a, b) => a.event.start - b.event.start);
+
+function eventWhen(e) {
+  const d = new Date(e.start);
+  const day = new Date(d); day.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((day - today) / 86400_000);
+  const dayName = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  return `${dayName} ${clock(e.start)}`;
+}
+function eventPhase(e) {
+  const now = Date.now();
+  if (now < e.start) return 'Prepare';
+  if (now < e.end) return 'Now';
+  return 'Debrief';
+}
+
+function renderEvents() {
+  const box = document.getElementById('events');
+  if (box.classList.contains('is-open')) return;
+  const open = openEvents();
+  const waiting = open.filter((t) => t.state === 'ready').length;
+  const next = open[0];
+  const button = h('button', { class: `top-btn events-btn${open.length ? '' : ' is-empty'}`, type: 'button', 'aria-haspopup': 'menu', title: open.length ? 'Events: preparing before, debriefing after' : 'Events: nothing coming up' },
+    svg('<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>'),
+    h('span', { class: 'top-label' }, next ? clip(next.title, 22) : 'Events'),
+    next ? h('span', { class: 'events-when' }, eventPhase(next.event) === 'Debrief' ? 'debrief' : eventWhen(next.event).replace(/^Today /, '')) : null,
+    waiting ? h('span', { class: 'top-count' }, String(waiting)) : null);
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     if (box.classList.contains('is-open')) { closePickers(); return; }
     closePickers();
     box.classList.add('is-open');
-    const pick = async (choice) => {
-      closePickers();
-      if (choice === l.choice) return;
-      linkState = { ...l, switching: true };
-      renderLink();
-      try {
-        const before = l.active;
-        linkState = await api('POST', '/api/link', { choice });
-        if (linkState.active !== before) toast(linkState.active === 'remote' ? `Handed over. The ${l.remoteName} has everything; the ${l.localName} can sleep.` : `Back on the ${l.localName}.`);
-        else if (linkState.note) toast(linkState.note);
-      } catch (err) { toast(err.message); }
-      renderLink();
-    };
-    const option = (choice, head, sub, off) => h('button', { class: `pick-opt link-opt${l.choice === choice ? ' is-on' : ''}`, type: 'button', role: 'menuitemradio', 'aria-checked': String(l.choice === choice), disabled: Boolean(off), onclick: () => pick(choice) },
-      h('span', {}, h('span', { class: 'link-opt-head' }, head), h('span', { class: 'link-opt-sub' }, sub)));
-    box.append(h('div', { class: 'pick-menu link-menu', role: 'menu' },
-      option('local', l.localName, onPi ? 'Take everything back and work here.' : 'Does the work. The faster side.'),
-      option('remote', l.remoteName, l.online ? `Hand everything over, for when the ${l.localName} sleeps. It all comes back when the ${l.localName} wakes.` : 'Not reachable right now.', !l.online),
-      h('p', { class: 'link-status' }, l.note || `Both sides save to GitHub every few minutes, so the phone on the ${l.remoteName} is never far behind.`)));
+    const item = (t, coming) => h('button', { class: `pick-opt event-opt${t.id === S.current ? ' is-on' : ''}${coming ? ' is-coming' : ''}`, type: 'button', disabled: coming, onclick: () => { closePickers(); openThread(t.id); } },
+      h('span', { class: 'event-main' },
+        h('span', { class: 'event-title' }, t.title),
+        h('span', { class: 'event-sub' }, coming ? `${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${t.event.important ? '' : ' · small'}`)),
+      coming ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event)));
+    const open = openEvents();
+    const coming = comingEvents();
+    box.append(h('div', { class: 'pick-menu events-menu', role: 'menu' },
+      open.length ? open.map((t) => item(t, false)) : h('p', { class: 'link-status' }, 'Nothing to prepare or debrief right now.'),
+      coming.length ? [h('p', { class: 'events-head' }, 'Coming'), ...coming.map((t) => item(t, true))] : null,
+      h('p', { class: 'link-status' }, 'From your calendar. Important entries open a day before, smaller ones on the day. Each stays until you mark it done.')));
   });
   box.replaceChildren(button);
-  // Talking goes to wherever the threads are.
-  document.getElementById('talk-link').href = onPi ? `${l.remote}/walk` : '/walk';
 }
-
-async function checkLink() {
-  try {
-    const next = await (await fetch('/api/link')).json();
-    const moved = linkState && linkState.active !== next.active;
-    linkState = next;
-    renderLink();
-    if (moved) toast(`Now on the ${next.active === 'remote' ? next.remoteName : next.localName}.`);
-  } catch { /* the app is not running; the page says so itself */ }
-}
-checkLink();
-setInterval(checkLink, 8000);
+setInterval(() => { if (!document.hidden) renderEvents(); }, 60_000);
 
 // ---------- pickers: model and effort ----------
 
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } if (linkState) renderLink(); };
+const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } renderEvents(); };
 
 function picker(host, { options, value, onPick }) {
   const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
@@ -2042,6 +2136,7 @@ els.messages.addEventListener('touchcancel', () => endSwipe(true));
 // ---------- events from the server ----------
 
 function onThread(t) {
+  if (t.kind === 'event') queueMicrotask(renderEvents);
   const before = S.threads.get(t.id);
   S.threads.set(t.id, t);
   renderRail();
@@ -2133,7 +2228,7 @@ function connect() {
   // The page listens first and reads the state second, so nothing that happens in
   // between is missed. After a lost connection it reads the state again.
   let started = false;
-  source.onerror = () => { els.app.classList.add('is-offline'); checkLink(); };
+  source.onerror = () => { els.app.classList.add('is-offline'); checkStatus(); };
   source.onopen = async () => {
     els.app.classList.remove('is-offline');
     const before = S.connections?.app?.commit;
@@ -2178,6 +2273,7 @@ async function load() {
   S.brain = state.brain;
   renderSettings();
   renderRail();
+  renderEvents();
   renderTree();
   renderBrain();
 }

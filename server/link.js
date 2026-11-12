@@ -31,15 +31,26 @@ let online = false;
 let misses = 0;
 let switching = false;
 let note = '';
+let step = ''; // what the handover is doing right now, in a few words
+let handedOverAt = 0;
 let checkedAt = 0;
+let leaseAt = 0; // on the Pi: when the laptop last said it is doing the work
+const LEASE_MS = 3 * 60_000;
 const streams = new Set(); // passed-on requests still open (the live updates)
 
 export const enabled = () => Boolean(config?.remote);
 export const isRemote = () => active === 'remote';
 
+// Background work (cards, events, sorting threads) runs on one computer only: on the
+// laptop while it does the work; on the Pi while the laptop has not said for a few
+// minutes that it does.
+export const mayRunBackground = () => (enabled() ? !isRemote() : Date.now() - leaseAt > LEASE_MS);
+export const leaseHeld = () => !enabled() && Date.now() - leaseAt <= LEASE_MS;
+export function takeLease(on) { leaseAt = on ? Date.now() : 0; }
+
 export function status() {
   return {
-    enabled: enabled(), choice, active, online, switching, note, checkedAt,
+    enabled: enabled(), choice, active, online, switching, note, step, handedOverAt, checkedAt,
     remote: config.remote, remoteName: config.remoteName, localName: config.localName,
   };
 }
@@ -77,16 +88,27 @@ function cutOver(to) {
 
 async function toRemote() {
   // The laptop's threads go to GitHub and the Pi takes them in, before anything moves.
+  step = 'Saving to GitHub';
   const saved = await datasync.saveNow('handover');
   if (saved.enabled && saved.error) throw new Error(`could not save to GitHub first (${saved.error})`);
+  step = `${config.remoteName} takes everything in`;
   await remoteCall('POST', '/api/sync/pull', { timeout: 120_000 });
+  // The Pi does the background work from now on.
+  await remoteCall('POST', '/api/sync/lease?release=1', { timeout: 10_000 }).catch(() => {});
+  step = '';
+  handedOverAt = Date.now();
   cutOver('remote');
 }
 
 async function toLocal() {
+  step = `${config.remoteName} saves to GitHub`;
   if (online) await remoteCall('POST', '/api/sync/push', { timeout: 120_000 }).catch((err) => log(`link: ${config.remoteName} could not save first: ${err.message}`));
+  step = 'Taking everything in';
   await datasync.pullNow().catch((err) => log(`link: working from what is on this computer (${err.message})`));
+  step = '';
+  handedOverAt = 0;
   cutOver('local');
+  if (online) remoteCall('POST', '/api/sync/lease', { timeout: 10_000 }).catch(() => {});
 }
 
 // Decides where the page should be, and moves it there.
@@ -100,12 +122,13 @@ async function settle() {
     if (active === 'local') return;
   }
   const want = choice === 'remote' ? 'remote' : 'local';
-  if (want === active) { if (/^Handing over/.test(note)) setNote(''); return; }
-  if (want === 'remote' && isBusy()) { setNote(`Handing over to ${config.remoteName} as soon as Claude has finished here. Keep the ${config.localName} awake until then.`); return; }
+  if (want === active) { step = ''; return; }
+  if (want === 'remote' && isBusy()) { step = 'Waiting for Claude to finish here'; setNote(''); return; }
   switching = true;
   try {
     if (want === 'remote') { await toRemote(); setNote(''); } else await toLocal();
   } catch (err) {
+    step = '';
     setNote(`Staying on ${active === 'remote' ? config.remoteName : config.localName}: ${err.message}`);
     if (want === 'remote') choice = 'local';
   } finally {
@@ -125,13 +148,19 @@ async function tick() {
     await ping();
     if (slept && choice === 'remote') { choice = 'local'; log('link: awake again; taking the threads back'); }
     await settle();
+    // Doing the work here: the Pi leaves the background work to the laptop.
+    if (online && active === 'local') remoteCall('POST', '/api/sync/lease', { timeout: 10_000 }).catch(() => {});
   } finally { ticking = false; lastTick = Date.now(); }
 }
 
+// Returns at once; the status says how the change goes.
 export function choose(next) {
   choice = next === 'remote' ? 'remote' : 'local';
   note = '';
-  return tick().then(status);
+  if ((choice === 'remote') !== (active === 'remote')) step = choice === 'remote' ? 'Starting the handover' : 'Taking everything back';
+  else step = '';
+  tick();
+  return Promise.resolve(status());
 }
 
 export async function initLink(cfg, { busy }) {
@@ -149,6 +178,8 @@ export async function initLink(cfg, { busy }) {
   datasync.onPushed(() => { if (online && active === 'local') remoteCall('POST', '/api/sync/pull', { timeout: 120_000 }).catch(() => {}); });
   const timer = setInterval(tick, Math.max(1, Number(config.remoteCheckSeconds) || 15) * 1000);
   timer.unref?.();
+  // A handover waiting for Claude goes ahead as soon as Claude has finished.
+  setInterval(() => { if (choice === 'remote' && active === 'local' && !switching) settle(); }, 2000).unref?.();
 }
 
 // Passes a request of the page on to the Pi, body and answer streamed as they are.

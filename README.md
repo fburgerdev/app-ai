@@ -204,12 +204,30 @@ A real phone number does the same through Twilio, for a per-minute price: [docs/
 ## The laptop and the Pi
 
 The laptop does the work and is where the app is installed from (`http://localhost:4317`), so
-it opens whether or not the Pi is on. With the Pi's address as `remote` in the laptop's
-`config.json`, the top bar gets a switch: **Pi** hands every thread over (for when the laptop
-sleeps), **Laptop** takes them back, which also happens by itself when the laptop wakes or the
-Pi stops answering. In between, both sides sync through the data repo every two minutes, so
-the phone on the Pi is never far behind. Setup and what happens in the odd cases:
-[docs/laptop.md](docs/laptop.md).
+it opens whether or not the Pi is on. A status line under the top bar says which side does the
+work and when it is safe to suspend the laptop (nothing running, everything on GitHub). With
+the Pi's address as `remote` in the laptop's `config.json`, it also says whether the Pi could
+take over, and has **Hand over to the Pi** (for when the laptop sleeps; it waits for Claude to
+finish and then says when it is safe to suspend) and **Take back**, which also happens by
+itself when the laptop wakes. In between, both sides sync through the data repo every two
+minutes. Setup and the odd cases: [docs/laptop.md](docs/laptop.md).
+
+## Events
+
+What is coming up in your calendar is not in the inbox. Each entry worth preparing gets a
+thread of its own under **Events** in the top bar: important ones (a fair, a talk, a first
+meeting) open a day before, smaller ones on the morning of the day, each with a briefing and
+the first question of a preparation session. The thread stays until you mark it done, so after
+the entry it is the place to debrief ("How did it go?"); the brain update files what came out
+of it. Sending in an event thread keeps you there instead of moving on to the next thread.
+Events only come while the calendar is connected (Settings → Connections → Google).
+
+## Threads find their project
+
+A thread you start without a project gets one by itself after its first answer: a small
+model reads the start of the conversation against the Projects Index and files it under the
+project or area it is about (or none). The outline then counts it like any other. What you
+set yourself always stands.
 
 ## On the phone
 

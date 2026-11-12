@@ -55,7 +55,7 @@ export function reloadQueue() {
   schedule();
 }
 
-const waiting = () => store.listThreads().filter((t) => t.state === 'ready').sort((a, b) => a.queuedAt - b.queuedAt);
+const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && t.kind !== 'event').sort((a, b) => a.queuedAt - b.queuedAt);
 
 const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
 

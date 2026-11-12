@@ -1258,15 +1258,47 @@ a.chip:hover { border-color: var(--muted); }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
 
 /* ---------- which computer: the laptop or the Pi ---------- */
-.link-btn { gap: 8px; }
-.link-btn.is-switching { opacity: 0.6; }
-.link-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.link-dot.is-remote { background: var(--done); }
-.link-dot.is-local { background: var(--you); }
-.link-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; width: 290px; }
-.link-opt { align-items: flex-start; text-align: left; white-space: normal; }
-.link-opt > span:first-child { min-width: 0; flex: 1; }
-.link-opt-head { display: block; color: var(--text); font-size: 13.5px; }
-.link-opt-sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .link-status { margin: 6px 10px 6px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.45; }
-.link-opt:disabled { opacity: 0.45; cursor: default; }
+
+/* ---------- the status line under the top bar ---------- */
+.statusbar {
+  display: flex; align-items: center; gap: 14px;
+  min-height: 34px; padding: 4px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px; color: var(--muted);
+  background: rgba(255, 255, 255, 0.015);
+}
+.statusbar[hidden] { display: none; }
+.statusbar.is-ok { background: rgba(120, 220, 160, 0.05); }
+.statusbar.is-busy { background: rgba(240, 180, 90, 0.06); }
+.status-side { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-weight: 600; flex: none; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.is-local { background: var(--you); }
+.status-dot.is-remote { background: var(--done); }
+.statusbar.is-busy .status-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusbar.is-ok .status-text { color: var(--done); }
+.status-warn { flex: none; color: var(--work); cursor: help; border-bottom: 1px dotted currentColor; }
+.status-actions { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+.status-ready { cursor: help; }
+.status-ready.is-go { color: var(--done); }
+.status-ready.is-wait { color: var(--work); }
+.status-ready.is-off { color: var(--faint); }
+.status-btn { height: 26px; padding: 0 11px; font-size: 12.5px; }
+@media (max-width: 760px) { .status-ready, .status-warn { display: none; } .status-text { white-space: normal; } }
+
+/* ---------- events ---------- */
+.events-btn.is-empty { opacity: 0.6; }
+.events-when { color: var(--faint); font-size: 12px; }
+.events-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; width: 330px; max-height: 70vh; overflow: auto; }
+.event-opt { align-items: center; text-align: left; white-space: normal; }
+.event-opt::after { display: none; }
+.event-opt.is-coming { opacity: 0.5; cursor: default; }
+.event-main { flex: 1; min-width: 0; }
+.event-title { display: block; color: var(--text); font-size: 13.5px; }
+.event-sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.event-phase { flex: none; font-size: 11.5px; padding: 2px 7px; border-radius: 99px; background: var(--panel); color: var(--muted); }
+.event-phase.is-now { color: var(--you); }
+.event-phase.is-debrief { color: var(--done); }
+.events-head { margin: 8px 10px 2px; font-size: 11.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }

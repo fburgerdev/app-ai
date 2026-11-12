@@ -123,3 +123,16 @@ export function isKnownProject(name) {
   if (!file) return false;
   return parseIndex(fs.readFileSync(file.full, 'utf8')).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));
 }
+
+// Every project and area by name, with what the index says about it, for telling which
+// one a thread is about.
+export function projectChoices() {
+  const file = brain.readVaultFile(INDEX);
+  if (!file) return [];
+  const out = [];
+  for (const g of parseIndex(fs.readFileSync(file.full, 'utf8'))) {
+    if (g.isArea) out.push({ name: g.name, line: `${g.name} (area)` });
+    for (const p of g.projects) out.push({ name: p.name, line: `${p.name}${p.about ? `: ${p.about}` : ''}${g.isArea ? ` (in ${g.name})` : ''}` });
+  }
+  return out;
+}
