@@ -222,15 +222,6 @@ the entry it is the place to debrief ("How did it go?"); the brain update files 
 of it. Sending in an event thread keeps you there instead of moving on to the next thread.
 Events only come while the calendar is connected (Settings → Connections → Google).
 
-## People and Someday in the outline
-
-Below projects and areas, the outline lists **People** (everyone in `Brain/People/` with
-something open, most recently dealt with first; those with nothing open grey at the bottom)
-and **Someday** (each item, newest first; the parked old actions grey at the bottom). As with
-projects: click to read the note, **+** to start a thread, about the person, or on the item
-(do it now, keep it, or fold it). Seeing them is the point: each either gets acted on or
-folded, so the lists stay worth looking at.
-
 ## Threads find their project
 
 A thread you start without a project gets one by itself after its first answer: a small
