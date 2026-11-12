@@ -20,6 +20,7 @@ import * as repos from './repos.js';
 import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
+import { startSelfUpdate, updateStatus } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS } from './state.js';
 import { dateTimeDMY } from './util.js';
@@ -127,7 +128,7 @@ function connections(req) {
     voice: voiceStatus(config),
     remote: { local: isLocal(req), allowedHosts: config.allowedHosts || [] },
     data: datasync.dataSyncStatus(),
-    app: version,
+    app: { ...version, update: updateStatus() },
   };
 }
 
@@ -672,6 +673,7 @@ const server = app.listen(config.port, '127.0.0.1', () => {
 
 attachVoice(server, config, allowedHosts);
 datasync.startDataSync();
+startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {

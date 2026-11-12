@@ -8,8 +8,11 @@ back.
 ## Setting it up on the laptop
 
 1. **Start the app with Windows.** Double-click `deploy\windows\install-autostart.cmd` once.
-   From then on the app starts by itself, without a window, when you log in (it also takes the
-   newest version from GitHub each time). To undo: Win+R, `shell:startup`, delete
+   From then on the app starts by itself, without a window, when you log in. It keeps itself
+   up to date: every ten minutes it looks for a newer version on GitHub, takes it as soon as
+   Claude is not working on anything, and restarts; the open window reloads by itself. If a
+   new version does not start, it goes back to the one before. Settings → Connections shows
+   the version that runs. What happens at start is in `%LOCALAPPDATA%\app-ai\startup.txt`. To undo: Win+R, `shell:startup`, delete
    "Brain app.vbs".
 2. **Install the app from the laptop, not from the Pi.** Open `http://localhost:4317` in
    Chrome or Edge and install it from there (the install icon in the address bar). Remove the

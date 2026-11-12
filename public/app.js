@@ -1611,7 +1611,7 @@ async function fillConnections(body, token) {
 
   if (c.app?.commit) {
     body.append(block('App version', { text: c.app.commit },
-      note(`${c.app.subject}${c.app.date ? ` (${stamp(Date.parse(c.app.date))})` : ''}.`)));
+      note(`${c.app.subject}${c.app.date ? ` (${stamp(Date.parse(c.app.date))})` : ''}.${c.app.update?.enabled ? ` Updates itself from GitHub${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`)));
   }
 
   const v = c.voice;
@@ -2136,9 +2136,12 @@ function connect() {
   source.onerror = () => { els.app.classList.add('is-offline'); checkLink(); };
   source.onopen = async () => {
     els.app.classList.remove('is-offline');
+    const before = S.connections?.app?.commit;
     try {
       await load();
     } catch { return; }
+    // The app updated itself and restarted: take the new version of the page too.
+    if (before && S.connections?.app?.commit && S.connections.app.commit !== before) { location.reload(); return; }
     if (!started) {
       started = true;
       if (S.config.fake) document.body.classList.add('is-fake');

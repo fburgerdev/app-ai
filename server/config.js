@@ -78,6 +78,11 @@ const DEFAULTS = {
   // GitHub's API, for renaming and creating repos. Empty token: the one git uses on this machine.
   github: { owner: 'fburgerdev', token: '' },
 
+  // Taking the newest version from GitHub while the app runs, restarting when Claude is
+  // not working. On by itself on Windows; the Pi has deploy/update.sh instead.
+  selfUpdate: null,
+  selfUpdateMinutes: 10,
+
   // Recording what gets read from the vault (reads.jsonl). Off for now.
   readLog: false,
 
