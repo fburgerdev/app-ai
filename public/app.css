@@ -24,6 +24,14 @@
   --link: #8cc4ff;
   --bad: #ff8f8f;
 
+  /* What a thread is, in the inbox and wherever its state is shown (Florian, 13-11-2026). */
+  --s-ready: #8fd0a8;   /* waiting for you */
+  --s-working: #f5b75c; /* Claude is working */
+  --s-done: #7aa8ff;    /* done */
+  --s-event: #c3a6ff;   /* an event from the calendar */
+  --s-sleep: #6b7192;   /* a next action, asleep */
+  --soft-quote: #b9a7e0; /* purple, quiet enough to read next to text */
+
   --serif: 'Literata Variable', 'Literata', Georgia, serif;
   --sans: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
@@ -117,8 +125,8 @@ kbd {
   font: 650 12px/1.3 var(--sans); font-variant-numeric: tabular-nums; text-align: center;
 }
 .top-count:empty { display: none; }
-.top-count.has-ready { background: var(--you); color: var(--you-ink); }
-.top-count.is-working { box-shadow: 0 0 0 2px var(--rail), 0 0 0 3.5px var(--work); }
+.top-count.has-ready { background: var(--s-ready); color: #10281a; }
+.top-count.is-working { box-shadow: 0 0 0 2px var(--rail), 0 0 0 3.5px var(--s-working); }
 .top-space { flex: 1; }
 .mood {
   flex: 1 1 12rem;
@@ -293,9 +301,12 @@ body.is-dragging .group-drop { display: block; }
 .item:hover { background: var(--panel); }
 .item.is-current { background: var(--raised); }
 .item-mark { width: 3px; border-radius: 2px; flex: none; background: var(--line); }
-.item-ready .item-mark { background: var(--you); }
-.item-working .item-mark { background: var(--work); }
-.item-done .item-mark { background: var(--done); opacity: 0.6; }
+.item-ready .item-mark { background: var(--s-ready); }
+.item-working .item-mark { background: var(--s-working); }
+.item-done .item-mark { background: var(--s-done); opacity: 0.6; }
+.event-item .item-mark { background: var(--s-event); }
+.event-item .item-mark, .sleep-item .item-mark { align-self: stretch; }
+.sleep-item .item-mark { background: var(--s-sleep); }
 .item.has-error .item-mark { background: var(--bad); }
 .item-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
@@ -359,9 +370,9 @@ body.is-dragging .group-drop { display: block; }
 }
 input.thread-title:hover { background: var(--panel); }
 .status { display: inline-flex; align-items: center; font-size: 13px; white-space: nowrap; }
-.status-ready { color: var(--you); }
-.status-working { color: var(--work); }
-.status-done { color: var(--done); }
+.status-ready { color: var(--s-ready); }
+.status-working { color: var(--s-working); }
+.status-done { color: var(--s-done); }
 .head-actions { display: flex; gap: 2px; margin-left: auto; }
 
 .scroller { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: auto; }
@@ -596,9 +607,9 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 
 .md ul, .md ol { margin: 0 0 0.85em; padding-left: 1.5em; }
 .md li { margin: 0.22em 0; }
-.md li::marker { color: var(--you); font-family: var(--sans); font-weight: 600; }
+.md li::marker { color: var(--soft-quote); font-family: var(--sans); font-weight: 600; }
 .md li.task { list-style: none; margin-left: -1.3em; }
-.md li.task input { accent-color: var(--done); margin-right: 0.5em; transform: translateY(1px); }
+.md li.task input { accent-color: var(--soft-quote); margin-right: 0.5em; transform: translateY(1px); }
 .md li > p { margin-bottom: 0.4em; }
 
 .md blockquote {
@@ -1300,8 +1311,9 @@ a.chip:hover { border-color: var(--muted); }
 .event-title { display: block; color: var(--text); font-size: 13.5px; }
 .event-sub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .event-phase { flex: none; font-size: 11.5px; padding: 2px 7px; border-radius: 99px; background: var(--panel); color: var(--muted); }
-.event-phase.is-now { color: var(--you); }
-.event-phase.is-debrief { color: var(--done); }
+.event-phase { color: var(--s-event); }
+.event-phase.is-now { color: var(--s-working); }
+.event-phase.is-debrief { color: var(--s-done); }
 .events-head { margin: 8px 10px 2px; font-size: 11.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ---------- the outline's two slides ---------- */
@@ -1317,9 +1329,9 @@ a.chip:hover { border-color: var(--muted); }
 .rail .tree { overflow: visible; padding: 4px 8px 24px; }
 
 /* ---------- next actions, asleep ---------- */
-.sleep-item { opacity: 0.62; align-items: flex-start; }
+.sleep-item { opacity: 0.62; align-items: flex-start; gap: 10px; }
 .sleep-item:hover, .sleep-item.is-current { opacity: 1; }
-.sleep-z { flex: none; width: 14px; color: var(--faint); font: italic 600 12px/1.5 var(--sans); text-align: center; }
+.sleep-z { flex: none; width: 12px; margin-left: -2px; color: var(--faint); font: italic 600 12px/1.5 var(--sans); text-align: center; }
 .sleep-main { min-width: 0; flex: 1; }
 .sleep-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--text); font-size: 13.5px; }
 .sleep-sub { display: block; color: var(--faint); font-size: 12px; margin-top: 1px; }
@@ -1358,7 +1370,8 @@ a.chip:hover { border-color: var(--muted); }
 .board { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 
 /* ---------- events in the inbox drawer ---------- */
-.event-item { align-items: center; }
+.event-item { align-items: center; gap: 10px; }
+.event-item.is-coming .item-mark { background: var(--line); }
 .event-item.is-coming { opacity: 0.5; cursor: default; }
 .sleep-item.is-armed { opacity: 1; background: var(--raised); }
 .sleep-item.is-armed .sleep-sub { color: var(--you); }

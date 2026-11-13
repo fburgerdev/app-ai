@@ -226,12 +226,12 @@ function sleepingSection() {
       } catch (err) { toast(err.message); button.disabled = false; }
     };
     return [section('Next actions', asleep.length + deferred.length, [
-      ...asleep.map((a) => h('button', { class: `item sleep-item${armedWake === a.text ? ' is-armed' : ''}`, type: 'button', title: `${a.show}\n\nAsleep in Next Actions.md. Waking it makes it a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
-        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, armedWake === a.text ? '→' : 'z'),
+      ...asleep.map((a) => h('button', { class: `item sleep-item${armedWake === a.text ? ' is-armed' : ''}`, type: 'button', dataset: { id: `na-${a.text.slice(0, 40)}` }, title: `${a.show}\n\nAsleep in Next Actions.md. Waking it makes it a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
+        h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, armedWake === a.text ? '→' : 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show),
           h('span', { class: 'sleep-sub' }, armedWake === a.text ? 'Click again to start it' : (a.project || 'no project'))))),
-      ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
-        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
+      ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: { id: d.id }, title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
+        h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
     ])];
   }
@@ -244,10 +244,11 @@ function eventsSection() {
   const coming = comingEvents();
   if (!open.length && !coming.length) return [];
   const item = (t, soon) => h('button', {
-    class: `item event-item${soon ? ' is-coming' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', disabled: soon,
+    class: `item event-item${soon ? ' is-coming' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', disabled: soon, dataset: { id: t.id },
     title: soon ? `${t.title}\n${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
     onclick: () => openThread(t.id),
   },
+  h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
   h('span', { class: 'sleep-main' },
     h('span', { class: 'sleep-text' }, t.title),
     h('span', { class: 'sleep-sub' }, `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ' · not open yet' : ''}`)),

@@ -262,6 +262,12 @@ A line in `Brain/Next Actions.md` and a thread in the inbox are two states of th
 - **Done** is the same button as "Send and done": with an empty box it closes the thread
   (also Alt+X), with text it keeps the message and closes without an answer.
 
+## What the colours mean
+
+In the inbox a thread carries a bar in its own colour: **green** waiting for you, **yellow**
+Claude is working, **blue** done, **purple** an event from the calendar, **grey** a next action
+asleep. The same colours carry the thread's state wherever it is shown.
+
 ## The status line: four stages
 
 The dot on the left says where the computer stands. **Locked** means the app starts nothing by
