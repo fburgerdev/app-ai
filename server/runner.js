@@ -59,14 +59,15 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   if (files.length) stored.files = files;
   if (doneAfter && !auto) stored.unanswered = true;
   const message = store.appendMessage(threadId, stored);
-  if (tier && TIER_NAMES.includes(tier)) store.updateThread(threadId, { nextTier: tier }, { quiet: true });
+  // Only for a message Claude answers: one that just closes the thread starts no turn.
+  if (tier && TIER_NAMES.includes(tier) && !doneAfter) store.updateThread(threadId, { nextTier: tier }, { quiet: true });
   const prompt = promptFor(threadId, text, files);
   if (doneAfter && !auto) {
     const unsent = [...(thread.unsent || []), prompt];
     // Mid-turn: the thread closes when that turn ends; this message starts no turn of its own.
     if (thread.state === 'working') store.updateThread(threadId, { unsent, doneAfter: true });
     else store.updateThread(threadId, { unsent, doneAfter: false, state: 'done', doneAt: Date.now(), activity: '', requeuedAt: 0 });
-    guessProject(threadId).catch(() => {});
+    sign(threadId, { again: true }).catch(() => {});
     return message;
   }
   // A plain message after "send and done" means he wants to see the answer after all.
@@ -348,7 +349,8 @@ async function runTurn(threadId, prompt) {
         error: result.error || '',
         gist: lastText.replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(-220),
       });
-      if (!result.error && !result.aborted) guessProject(threadId).catch(() => {});
+      // Named and sorted after the first answer, and once more when it closes.
+      if (!result.error && !result.aborted) sign(threadId, { again: close }).catch(() => {});
       if (close) return;
       const walking = Date.now() - voiceActivity.at < 2 * 60 * 60_000;
       if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
@@ -420,69 +422,132 @@ export function spokenDigest(threadId, lang = 'en') {
   return job;
 }
 
-// ---------- which project a thread is about ----------
+// ---------- a thread's signature: its name, its project, its type ----------
 //
-// A thread without a project gets one by itself after its first answer: a small model
-// reads the start of the conversation and the Projects Index and names the project or
-// area it is about, or none. Once per thread; what Florian sets himself always stands.
+// After its first answer, and once more when Florian closes or defers it, a small model
+// reads the conversation and says what the thread is about: a name by its topic, the
+// project or area it belongs to, and what kind of work it is. What Florian set himself
+// always stands: a name he typed, a project he filed it under.
+//
+//   titleAuto    the name is still the app's (the first line, or one it gave)
+//   projectSet   he chose the project himself
+//   projectAuto  the app chose the project, so it may choose again
+//   type         thinking | mail | build | document | question (threads he started)
+//   signedAt     how many messages the thread had when it was last signed
 
-const guessing = new Set();
+export const THREAD_TYPES = ['thinking', 'mail', 'build', 'document', 'question'];
+const signing = new Set();
 const NO_GUESS = new Set(['card', 'brain-update']);
 
-export async function guessProject(threadId) {
+const speaker = (m) => (m.role === 'user' ? (m.auto ? 'The app' : 'Florian') : 'Claude');
+const firstOwnLine = (messages) => messages.find((m) => m.role === 'user' && !m.auto);
+
+// Whether the app may rename it. Threads from before `titleAuto` existed count as the
+// app's when the name is still the first line of his first message.
+function mayRename(thread, messages) {
+  if (thread.kind !== 'chat') return false;
+  if (typeof thread.titleAuto === 'boolean') return thread.titleAuto;
+  const first = firstOwnLine(messages);
+  return Boolean(first) && thread.title === titleFrom(messageText(first) || 'Attached files');
+}
+
+// Whether the app may choose the project: never over his own choice. A thread from
+// before `projectSet` existed keeps a project it has, unless he started it himself, in
+// which case the model is told what it is filed under and to change it only if wrong.
+function mayFile(thread) {
+  if (NO_GUESS.has(thread.kind) || thread.projectSet) return false;
+  return !thread.project || thread.projectAuto === true || (thread.projectAuto === undefined && thread.kind === 'chat');
+}
+
+export async function sign(threadId, { again = false } = {}) {
   const thread = store.getThread(threadId);
-  if (!thread || thread.project || thread.projectGuessed || NO_GUESS.has(thread.kind) || guessing.has(threadId)) return '';
-  const choices = projectChoices();
-  if (!choices.length) return '';
+  if (!thread || NO_GUESS.has(thread.kind) || signing.has(threadId)) return null;
+  const count = thread.messageCount || 0;
+  if (thread.signedAt && (!again || thread.signedAt >= count)) return null;
   const messages = store.readMessages(threadId);
-  const said = messages.slice(0, 4).map((m) => `${m.role === 'user' ? (m.auto ? 'The app' : 'Florian') : 'Claude'}: ${messageText(m).slice(0, 1500)}`).join('\n\n');
-  if (!said.trim()) return '';
-  guessing.add(threadId);
+  const picked = messages.length > 7 ? [...messages.slice(0, 2), ...messages.slice(-5)] : messages;
+  const said = picked.map((m) => `${speaker(m)}: ${messageText(m).slice(0, 1200)}`).join('\n\n');
+  if (!said.trim()) return null;
+  const rename = mayRename(thread, messages);
+  const file = mayFile(thread);
+  const typed = thread.kind === 'chat';
+  const choices = file ? projectChoices() : [];
+  if (!rename && !typed && !choices.length) {
+    // Nothing to ask. If only the vault's list was missing, it is tried again later.
+    if (!file) store.updateThread(threadId, { signedAt: count, projectGuessed: true });
+    return null;
+  }
+  // The stored thread is one object that changes in place: what it says now is kept, to
+  // see afterwards whether he renamed or filed it while the model was reading.
+  const before = { title: thread.title, project: thread.project || '' };
+  signing.add(threadId);
   try {
-    let answer = '';
+    let answer = {};
     if (config.fake) {
-      // The stand-in: a project whose name the conversation mentions.
-      const text = `${thread.title}\n${said}`.toLowerCase();
-      answer = choices.map((c) => c.name).sort((a, b) => b.length - a.length).find((n) => text.includes(n.toLowerCase())) || 'none';
+      // The stand-in: a project whose name Florian's side mentions; the name stays.
+      const text = `${thread.title}\n${messages.filter((m) => m.role === 'user').map((m) => messageText(m)).join('\n')}`.toLowerCase();
+      answer = {
+        project: choices.map((c) => c.name).sort((a, b) => b.length - a.length).find((n) => text.includes(n.toLowerCase())) || 'none',
+        type: /\bmail\b|draft a note/.test(text) ? 'mail' : /strategy|think|decide/.test(text) ? 'thinking' : /\bcode\b|repo|build|tracker/.test(text) ? 'build' : 'question',
+      };
     } else {
       const result = await runAgent({
-        prompt: `Projects and areas:\n${choices.map((c) => `- ${c.line}`).join('\n')}\n\nThe thread "${thread.title}":\n\n${said}\n\nWhich one project or area from the list is this thread about? Answer with its name exactly as listed, or with "none" if it is about none of them or about several equally. Nothing else.`,
+        prompt: readPrompt('sign.md', {
+          title: thread.title,
+          project: thread.project || 'none',
+          projects: choices.length ? choices.map((c) => `- ${c.line}`).join('\n') : '(not asked: answer "keep")',
+          conversation: said,
+        }),
         cwd: DATA_DIR,
-        systemAppend: 'You sort threads of a personal work app into the projects and areas of the user\'s notes. Answer with one name from the list, or "none".',
+        systemAppend: 'You label threads of a personal work app. Answer with one JSON object and nothing else.',
         model: config.queue?.pickModel || 'haiku',
         mode: 'plain',
+        usageKind: 'plain',
         fake: false,
       });
-      answer = String(result.finalText || result.text || '').trim().replace(/^["'`*]+|["'`*.]+$/g, '');
+      const json = /\{[\s\S]*\}/.exec(result.finalText || result.text || '');
+      try { answer = json ? JSON.parse(json[0]) : {}; } catch { answer = {}; }
     }
-    const match = choices.find((c) => c.name.toLowerCase() === answer.toLowerCase());
     const fresh = store.getThread(threadId);
-    if (!fresh || fresh.project) return '';
-    const patch = { projectGuessed: true };
-    if (match) {
-      patch.project = match.name;
-      if (!fresh.repo) { const repo = repoOf(match.name); if (repo) patch.repo = repo; }
-      log(`thread "${fresh.title}" is about ${match.name}`);
+    if (!fresh) return null;
+    const patch = { signedAt: count, projectGuessed: true };
+    const title = String(answer.title || '').replace(/[#*_`\[\]"\n]/g, '').trim().slice(0, 80);
+    if (rename && title && fresh.titleAuto !== false && fresh.title === before.title) { patch.title = title; patch.titleAuto = true; }
+    if (typed && THREAD_TYPES.includes(String(answer.type || '').toLowerCase())) patch.type = String(answer.type).toLowerCase();
+    const named = String(answer.project || '').trim().replace(/^["'`*]+|["'`*.]+$/g, '');
+    const match = choices.find((c) => c.name.toLowerCase() === named.toLowerCase());
+    if (file && !fresh.projectSet && (fresh.project || '') === before.project) {
+      if (match && match.name !== fresh.project) {
+        patch.project = match.name;
+        patch.projectAuto = true;
+        if (!fresh.repo) { const repo = repoOf(match.name); if (repo) patch.repo = repo; }
+        log(`thread "${patch.title || fresh.title}" is about ${match.name}`);
+      } else if (/^none$/i.test(named) && fresh.project && fresh.projectAuto) {
+        patch.project = '';
+      }
     }
-    store.updateThread(threadId, patch);
-    return match?.name || '';
+    return store.updateThread(threadId, patch);
   } finally {
-    guessing.delete(threadId);
+    signing.delete(threadId);
   }
 }
 
-// The threads that were there before this: one at a time, in the background.
-export async function backfillProjects() {
-  const todo = store.listThreads().filter((t) => !t.project && !t.projectGuessed && !NO_GUESS.has(t.kind) && !t.archived && (t.messageCount || 0) >= 2);
-  for (const t of todo) await guessProject(t.id).catch(() => {});
+// The threads that were there before this, and any that missed it: one at a time, in
+// the background. Archived threads are left as they are.
+export async function backfillSignatures() {
+  const todo = store.listThreads().filter((t) => !t.signedAt && !t.hidden && !NO_GUESS.has(t.kind) && !t.archived && (t.messageCount || 0) >= 2 && t.state !== 'working');
+  for (const t of todo) await sign(t.id).catch(() => {});
   return todo.length;
 }
 
 // ---------- how much a message is worth ----------
 //
-// Florian's five tiers, from cheap to extra. A thread can have one pinned; otherwise a
-// cheap model reads the message and picks, so he never has to choose. What it picked is
-// shown under Claude's answer, and "Again, higher" runs the same message one tier up.
+// Florian's five tiers, from cheap to extra. He either picks one when sending (quick
+// select) or a cheap model reads the message and picks, so he never has to choose. What
+// was used is shown in the thread's header, and "Again, higher" runs the same message
+// one tier up and keeps that tier for the thread (`keepTier`). Until 13-11-2026 a tier
+// could also be fixed per thread (`tier`) or for everything; neither is read any more,
+// so threads from then behave like all others.
 
 function tierOf(name) { return { name, ...TIERS[name] }; }
 
@@ -495,10 +560,7 @@ export async function tierFor(threadId, prompt) {
     store.updateThread(threadId, { nextTier: '' }, { quiet: true });
     return tierOf(once);
   }
-  const pinned = thread?.tier && TIER_NAMES.includes(thread.tier) ? thread.tier : '';
-  if (pinned) return tierOf(pinned);
-  const chosen = getState().tier;
-  if (chosen !== 'auto' && chosen !== 'ask') return tierOf(TIER_NAMES.includes(chosen) ? chosen : 'default');
+  if (TIER_NAMES.includes(thread?.keepTier)) return tierOf(thread.keepTier);
   const messages = store.readMessages(threadId);
   const earlier = messages.slice(-5, -1).map((m) => `${m.role === 'user' ? 'Florian' : 'Claude'}: ${messageText(m).slice(0, 400)}`).join('\n');
   let answer = '';
@@ -536,9 +598,9 @@ export function againHigher(threadId) {
   const messages = store.readMessages(threadId);
   const last = [...messages].reverse().find((m) => m.role === 'user');
   if (!last) throw new Error('There is nothing to run again here.');
-  const at = TIER_NAMES.indexOf(thread.lastTier || getState().tier);
+  const at = TIER_NAMES.indexOf(thread.lastTier);
   const next = TIER_NAMES[Math.min(TIER_NAMES.length - 1, (at < 0 ? 2 : at) + 1)];
-  store.updateThread(threadId, { tier: next });
+  store.updateThread(threadId, { keepTier: next, nextTier: '' });
   startTurn(threadId, promptFor(threadId, messageText(last), last.files || []));
   return { thread: store.getThread(threadId), tier: next };
 }

@@ -70,7 +70,7 @@ function noteChanged(name) {
 export function projectTree() {
   const file = brain.readVaultFile(INDEX);
   if (!file) return { groups: [], missing: true };
-  const groups = parseIndex(fs.readFileSync(file.full, 'utf8'));
+  const groups = withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')));
   const threads = store.listThreads().filter((t) => t.project && t.kind !== 'card');
   const stats = (name) => {
     const mine = threads.filter((t) => t.project === name);
@@ -88,9 +88,28 @@ export function projectTree() {
     if (g.isArea) g.touched = Math.max(g.touched, ...g.projects.map((p) => p.touched));
   }
   // 30,000 ft: the order of the areas, and what each should have reached in a year or two.
+  // A name in the list that matches no area is passed over; the ranks of the others are
+  // counted without it, so the numbers shown have no gap.
   const ranks = areaRanks();
-  for (const g of groups) if (g.isArea) { const r = ranks.get(g.name); g.rank = r ? r.rank : 0; g.goal = r ? r.goal : ''; }
+  const byLower = new Map([...ranks].map(([name, r]) => [name.toLowerCase(), r]));
+  const ranked = groups.filter((g) => g.isArea && byLower.has(g.name.toLowerCase())).sort((a, b) => byLower.get(a.name.toLowerCase()).rank - byLower.get(b.name.toLowerCase()).rank);
+  for (const g of groups) if (g.isArea) { g.rank = 0; g.goal = ''; }
+  ranked.forEach((g, i) => { g.rank = i + 1; g.goal = byLower.get(g.name.toLowerCase()).goal; });
   return { groups, people: peopleList(), someday: somedayList() };
+}
+
+// Every note in Brain/Areas is an area, whether or not the Projects Index has a heading
+// for it: one that is missing there is added, without projects, so it is never hidden.
+const AREAS_DIR = 'Brain/Areas';
+function areaFiles() {
+  try {
+    return fs.readdirSync(path.join(brain.brainDir() || '', AREAS_DIR)).filter((n) => n.endsWith('.md')).map((n) => n.slice(0, -3));
+  } catch { return []; }
+}
+function withAreaFiles(groups) {
+  const have = new Set(groups.filter((g) => g.isArea).map((g) => g.name.toLowerCase()));
+  for (const name of areaFiles()) if (!have.has(name.toLowerCase())) groups.push({ name, isArea: true, projects: [] });
+  return groups;
 }
 
 // ---------- people and Someday, shown like projects ----------
@@ -195,7 +214,7 @@ export function isKnownProject(name) {
   if (name === 'Someday' || peopleList().some((p) => p.name === name)) return true;
   const file = brain.readVaultFile(INDEX);
   if (!file) return false;
-  return parseIndex(fs.readFileSync(file.full, 'utf8')).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));
+  return withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8'))).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));
 }
 
 // Every project and area by name, with what the index says about it, for telling which
@@ -204,22 +223,37 @@ export function projectChoices() {
   const file = brain.readVaultFile(INDEX);
   if (!file) return [];
   const out = [];
-  for (const g of parseIndex(fs.readFileSync(file.full, 'utf8'))) {
+  for (const g of withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')))) {
     if (g.isArea) out.push({ name: g.name, line: `${g.name} (area)` });
     for (const p of g.projects) out.push({ name: p.name, line: `${p.name}${p.about ? `: ${p.about}` : ''}${g.isArea ? ` (in ${g.name})` : ''}` });
   }
   return out;
 }
 
-// The numbered list in Brain/Horizons/30,000 ft Goals.md: `1. [[Area]] — goal`.
+// The ranking of the areas: the numbered list under `## Order` in
+// Brain/Horizons/30,000 ft Goals.md, one line each, `1. [[Area]] — where it should stand`.
+// Areas left out of it are unranked on purpose. Numbered lines under other headings are
+// not the ranking; a file without an `## Order` heading is read as one list. The rank is
+// the place in the list, so a line that cannot be read leaves no gap.
 const GOALS = 'Brain/Horizons/30,000 ft Goals.md';
-export function areaRanks() {
+export function parseRanks(text) {
   const out = new Map();
-  const file = brain.readVaultFile(GOALS);
-  if (!file) return out;
-  for (const line of fs.readFileSync(file.full, 'utf8').split(/\r?\n/)) {
-    const m = /^\s*(\d+)\.\s+\**\[\[([^\]|]+)(?:\|[^\]]+)?\]\]\**\s*(?:[—–:-]\s*)?(.*)$/.exec(line);
+  const lines = String(text).split(/\r?\n/);
+  const start = lines.findIndex((l) => /^##\s+Order\b/i.test(l));
+  let section = lines;
+  if (start >= 0) {
+    const rest = lines.slice(start + 1);
+    const end = rest.findIndex((l) => /^#{1,2}\s/.test(l));
+    section = end < 0 ? rest : rest.slice(0, end);
+  }
+  for (const line of section) {
+    const m = /^\s*(\d+)[.)]\s+\**\[\[([^\]|]+)(?:\|[^\]]+)?\]\]\**\s*(?:[—–:-]\s*)?(.*)$/.exec(line);
     if (m && !out.has(m[2].trim())) out.set(m[2].trim(), { rank: out.size + 1, goal: m[3].replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1').replace(/\*\*/g, '').trim() });
   }
   return out;
+}
+export function areaRanks() {
+  const file = brain.readVaultFile(GOALS);
+  if (!file) return new Map();
+  try { return parseRanks(fs.readFileSync(file.full, 'utf8')); } catch { return new Map(); }
 }

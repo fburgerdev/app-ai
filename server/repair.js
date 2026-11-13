@@ -51,7 +51,7 @@ export function report(source, message) {
     let tail = '';
     try { tail = fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-60).join('\n'); } catch { /* no log */ }
     const thread = store.createThread({ title: `Repair: ${source}`.slice(0, 100), kind: 'repair' });
-    store.updateThread(thread.id, { projectGuessed: true, repo: config.repair?.repo || 'fburgerdev/app-ai', repoSet: true, tier: 'high' });
+    store.updateThread(thread.id, { projectGuessed: true, repo: config.repair?.repo || 'fburgerdev/app-ai', repoSet: true, keepTier: 'high' });
     deps.send(thread.id, readPrompt('repair.md', { source, message: String(message).slice(0, 3000), log: tail, repo: config.repair?.repo || 'fburgerdev/app-ai' }), { auto: true });
     log(`repair: opened a thread for "${source}": ${String(message).slice(0, 160)}`);
     return thread.id;

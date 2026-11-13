@@ -243,11 +243,38 @@ Claude in a thread) and the outline follows.
 
 Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium), **Default**
 (Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer
-starts on **Auto**: before each turn a cheap model reads the message and picks a tier, so there
-is nothing to choose. **Quick select** instead asks on sending: five buttons over the box,
-1 to 5 or a click, Enter for the one you used last, Escape back to writing. The tier it used is shown in the thread header; clicking it runs the same
-message again one tier up and pins that tier on the thread. Picking a tier while a thread is
-open pins it there; picking one with no thread open sets what everything gets.
+is one switch, the same in every thread. **Auto**: before each turn a cheap model reads the
+message and picks a tier, so there is nothing to choose. **Quick select** instead asks on
+sending: five buttons over the box, 1 to 5 or a click, Enter for the one you used last, Escape
+back to writing. It asks wherever a message starts a turn (Send, Start, Add, a spin-off) and
+not for Done, which Claude does not answer. The tier a turn used is shown in the thread
+header; clicking it runs the same message again one tier up and keeps that tier for the
+thread, until you pick Auto or Quick select there again.
+
+## Pinned threads
+
+The top of the inbox is **Pinned**. Events from the calendar are there from the start; any
+other thread gets there with **Pin** in its header or by dragging it onto the section. Pinned
+threads are not part of the queue: the app never jumps to one by itself, and each shows
+"Claude…" or "yours". Drag inside the section to reorder; the order is kept with the thread,
+so every device shows the same. Unpin (the button, or drag it into Next up) puts a thread back
+among the others. Done or Defer takes the pin off.
+
+## A thread's name, project and type
+
+A new thread is named by the first line of what you wrote. After Claude's first answer, and
+once more when you press Done or Defer, a small model reads the conversation and gives it a
+name by its topic, the project or area it belongs to, and a type (Thinking, Mail, Build,
+Document, Question; threads the app started keep theirs, such as Event or Mail to answer).
+A name you typed and a project you chose are never changed. Threads from before this get
+theirs in the background after the app starts.
+
+## Cards, for looking at later
+
+Every card you decide on is one line in `cards/log.jsonl` in the data folder (and so in the
+data repo): what was proposed and why, to whom, on which channel, what you did with it and
+how, your reason, whether and how you edited it, the text as proposed and as accepted, the
+mood line, when it was made and how long it waited.
 
 ## Next actions, Done and Defer
 

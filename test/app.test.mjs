@@ -103,8 +103,10 @@ test('the app starts on Auto, with the five tiers', async () => {
   assert.deepEqual(s.settings.tierNames, ['cheap', 'low', 'default', 'high', 'extra']);
   assert.deepEqual(s.settings.tiers.cheap, { label: 'Cheap', model: 'opus', effort: 'low', about: s.settings.tiers.cheap.about });
   assert.deepEqual(s.settings.tiers.extra, { label: 'Extra', model: 'fable', effort: 'high', about: s.settings.tiers.extra.about });
-  assert.equal((await call('PUT', '/api/settings', { tier: 'high' })).data.tier, 'high');
-  assert.equal((await call('PUT', '/api/settings', { tier: 'enormous' })).data.tier, 'high', 'unknown values are ignored');
+  // One switch: Auto or quick select. A single tier is not a setting any more.
+  assert.equal((await call('PUT', '/api/settings', { tier: 'ask' })).data.tier, 'ask');
+  assert.equal((await call('PUT', '/api/settings', { tier: 'high' })).data.tier, 'ask', 'a tier is ignored');
+  assert.equal((await call('PUT', '/api/settings', { tier: 'enormous' })).data.tier, 'ask', 'unknown values are ignored');
   await call('PUT', '/api/settings', { tier: 'auto' });
 });
 

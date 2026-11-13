@@ -370,6 +370,8 @@ app.post('/api/threads', (req, res) => {
   const project = String(req.body.project || '');
   const known = projects.isKnownProject(project) ? project : '';
   const thread = store.createThread({ title: runner.titleFrom(text || 'Attached files'), project: known });
+  // The name is only the first line for now; a project he chose himself stands.
+  store.updateThread(thread.id, { titleAuto: true, ...(known ? { projectSet: true } : {}) });
   const pick = req.body.repo !== undefined ? repos.repoName(req.body.repo) : repos.repoName(projects.repoOf(known));
   if (pick || req.body.repo !== undefined) store.updateThread(thread.id, { repo: pick || '', repoSet: true });
   runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true, tier: String(req.body.tier || '') });
@@ -417,8 +419,9 @@ app.post('/api/threads/:id/spinoff', (req, res) => {
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card cannot be spun off.' });
   queue.recordDecision('spun off', thread);
   const copy = store.copyThread(thread.id, { title: runner.titleFrom(text || 'Attached files') });
+  store.updateThread(copy.id, { titleAuto: true });
   if (thread.state === 'ready') store.updateThread(thread.id, { requeuedAt: Date.now() });
-  runner.sendMessage(copy.id, text, { files: store.attachFiles(copy.id, waitingFiles) });
+  runner.sendMessage(copy.id, text, { files: store.attachFiles(copy.id, waitingFiles), tier: String(req.body.tier || '') });
   res.json({ thread: store.getThread(copy.id), from: store.getThread(thread.id) });
 });
 
@@ -430,6 +433,7 @@ app.post('/api/threads/:id/state', (req, res) => {
   if (state === 'done') {
     queue.recordDecision('done', thread);
     store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), error: '' });
+    runner.sign(thread.id, { again: true }).catch(() => {});
     cards.maybeMakeCards();
   }
   else if (state === 'ready') store.updateThread(thread.id, { state: 'ready', queuedAt: Date.now(), archived: false, deferred: false });
@@ -445,7 +449,34 @@ app.post('/api/threads/:id/defer', (req, res) => {
   try {
     queue.recordDecision('requeued', thread);
     res.json({ thread: nextActions.defer(thread.id, String(req.body?.text || '')) });
+    runner.sign(thread.id, { again: true }).catch(() => {});
   } catch (err) { res.status(409).json({ error: err.message }); }
+});
+
+// Pin a thread to the top of the inbox, or take it off. Pinned threads are not part of
+// the queue. Events are pinned from the start and can be unpinned like any other.
+app.post('/api/threads/:id/pin', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  if (thread.kind === 'card') return res.status(409).json({ error: 'A card cannot be pinned.' });
+  const pinned = req.body?.pinned !== false;
+  // A newly pinned thread goes below the ones already there.
+  const last = Math.max(0, ...store.listThreads().filter((t) => t.id !== thread.id && store.isPinned(t)).map(store.pinPlace));
+  res.json({ thread: store.updateThread(thread.id, pinned ? { pinned: true, pinAt: last + 1, ...(thread.state === 'done' ? { state: 'ready', queuedAt: Date.now(), archived: false, deferred: false } : {}) } : { pinned: false, queuedAt: Date.now() }) });
+});
+
+// The order he dragged the pinned threads into.
+app.post('/api/pins/order', (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+  const out = [];
+  ids.forEach((id, i) => {
+    const t = store.getThread(id);
+    if (t && store.isPinned(t)) out.push(store.updateThread(id, { pinAt: i }));
+  });
+  // Whatever was not in the list keeps its order, below the ones he placed.
+  const rest = store.listThreads().filter((t) => store.isPinned(t) && !ids.includes(t.id)).sort((a, b) => store.pinPlace(a) - store.pinPlace(b));
+  rest.forEach((t, i) => out.push(store.updateThread(t.id, { pinAt: ids.length + i })));
+  res.json({ threads: out });
 });
 // The same message again, one tier higher, pinned on the thread from now on.
 app.post('/api/threads/:id/again', (req, res) => {
@@ -488,13 +519,13 @@ app.post('/api/queue/opened', (req, res) => {
   res.json({ ok: true });
 });
 
-// A tier pinned on this thread, or '' to let the picker decide per message again.
+// The tier this thread keeps ("Again, higher" sets it), or '' to decide per message again.
 app.post('/api/threads/:id/tier', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   const tier = String(req.body?.tier || '');
   if (tier && !TIER_NAMES.includes(tier)) return res.status(400).json({ error: 'Unknown tier' });
-  res.json({ thread: store.updateThread(thread.id, { tier }) });
+  res.json({ thread: store.updateThread(thread.id, { keepTier: tier }) });
 });
 app.post('/api/threads/:id/project', (req, res) => {
   const thread = need(req, res);
@@ -503,7 +534,7 @@ app.post('/api/threads/:id/project', (req, res) => {
   if (project && !projects.isKnownProject(project)) return res.status(400).json({ error: 'That project is not in the vault\'s Projects Index.' });
   // Filed under a project with a repo, a thread without one takes the project's.
   const repo = !thread.repo ? repos.repoName(projects.repoOf(project)) : null;
-  res.json({ thread: store.updateThread(thread.id, { project, projectGuessed: true, ...(repo ? { repo, repoSet: true } : {}) }) });
+  res.json({ thread: store.updateThread(thread.id, { project, projectGuessed: true, projectSet: true, projectAuto: false, ...(repo ? { repo, repoSet: true } : {}) }) });
 });
 
 app.post('/api/threads/:id/title', (req, res) => {
@@ -511,7 +542,8 @@ app.post('/api/threads/:id/title', (req, res) => {
   if (!thread) return;
   const title = cleanText(req.body.title).slice(0, 120);
   if (!title) return res.status(400).json({ error: 'A thread needs a name.' });
-  res.json({ thread: store.updateThread(thread.id, { title }) });
+  // A name he gave stands: the app does not rename the thread again.
+  res.json({ thread: store.updateThread(thread.id, { title, titleAuto: false }) });
 });
 
 // ---------- code: the repo a thread works in ----------
@@ -763,8 +795,9 @@ brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatu
 process.on('unhandledRejection', (err) => { log(`unhandled: ${err?.stack || err}`); report('the app itself', String(err?.stack || err)); });
 cards.setMayRun(link.mayRunBackground);
 events.initEvents({ mayRunHere: link.mayRunBackground });
-// Threads from before projects were found by themselves get one now, in the background.
-setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillProjects().catch(() => {}); }, 20_000).unref?.();
+// Threads from before the app named and sorted them by itself get their name, project and
+// type now, in the background.
+setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillSignatures().catch(() => {}); }, 20_000).unref?.();
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {

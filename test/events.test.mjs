@@ -194,8 +194,8 @@ test('the tier is picked per message, can be pinned, and runs again one higher',
   const quick = (await call('POST', '/api/threads', { text: 'Quick: what is the date of the next meeting?' })).data.thread;
   await ready(quick.id);
   assert.equal((await thread(quick.id)).thread.lastTier, 'cheap');
-  // Pinned on the thread, the picker is not asked again.
-  assert.equal((await call('POST', `/api/threads/${quick.id}/tier`, { tier: 'extra' })).data.thread.tier, 'extra');
+  // Kept on the thread, the picker is not asked again.
+  assert.equal((await call('POST', `/api/threads/${quick.id}/tier`, { tier: 'extra' })).data.thread.keepTier, 'extra');
   await call('POST', `/api/threads/${quick.id}/messages`, { text: 'And the one after that?' });
   await until(async () => (await thread(quick.id)).messages.filter((m) => m.role === 'assistant').length >= 2, 'second answer');
   assert.equal((await thread(quick.id)).thread.lastTier, 'extra');
@@ -208,12 +208,44 @@ test('the tier is picked per message, can be pinned, and runs again one higher',
   assert.equal(after.thread.lastTier, 'extra');
   assert.equal(after.messages.filter((m) => m.role === 'user').length, 1, 'the message is not sent twice');
   assert.equal(after.messages.filter((m) => m.role === 'assistant').length, 2);
-  // A fixed tier for everything, set in the settings.
+  assert.equal(after.thread.keepTier, 'extra', 'and the thread keeps it');
+  // A single tier is no setting any more: the picker still decides.
   await call('PUT', '/api/settings', { tier: 'low' });
-  const plain = (await call('POST', '/api/threads', { text: 'Work out the negotiation strategy, again' })).data.thread;
+  const plain = (await call('POST', '/api/threads', { text: 'Quick: one more date, please' })).data.thread;
   await ready(plain.id);
-  assert.equal((await thread(plain.id)).thread.lastTier, 'low', 'no picking when a tier is set');
-  await call('PUT', '/api/settings', { tier: 'auto' });
+  assert.equal((await thread(plain.id)).thread.lastTier, 'cheap');
+});
+
+test('threads can be pinned, reordered and unpinned; events are pinned from the start', async () => {
+  const fair = (await state()).threads.find((t) => t.kind === 'event' && t.title === 'Example fair');
+  const a = (await call('POST', '/api/threads', { text: 'A long piece of work to keep on top' })).data.thread;
+  await ready(a.id);
+  assert.ok((await state()).queue.order.includes(a.id), 'in the queue before it is pinned');
+  const pinned = (await call('POST', `/api/threads/${a.id}/pin`, { pinned: true })).data.thread;
+  assert.equal(pinned.pinned, true);
+  assert.ok(!(await state()).queue.order.includes(a.id), 'a pinned thread is not in the queue');
+  // Reorder: his thread first, the event after it.
+  const out = (await call('POST', '/api/pins/order', { ids: [a.id, fair.id] })).data.threads;
+  assert.equal(out.find((t) => t.id === a.id).pinAt, 0);
+  assert.equal(out.find((t) => t.id === fair.id).pinAt, 1);
+  // An event can be unpinned like any other thread.
+  assert.equal((await call('POST', `/api/threads/${fair.id}/pin`, { pinned: false })).data.thread.pinned, false);
+  // Done takes the pin off.
+  const closed = (await call('POST', `/api/threads/${a.id}/state`, { state: 'done' })).data.thread;
+  assert.equal(closed.pinned, false);
+});
+
+test('a thread gets its type with its project, and a name he typed stands', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'Work out the strategy for the stall' })).data.thread;
+  assert.equal(t.titleAuto, true);
+  const signed = await until(async () => { const x = (await thread(t.id)).thread; return x.signedAt ? x : null; }, 'signed');
+  assert.equal(signed.type, 'thinking');
+  await call('POST', `/api/threads/${t.id}/title`, { title: 'Stall strategy' });
+  assert.equal((await thread(t.id)).thread.titleAuto, false);
+  await ready(t.id);
+  await call('POST', `/api/threads/${t.id}/state`, { state: 'done' });
+  await sleep(300);
+  assert.equal((await thread(t.id)).thread.title, 'Stall strategy');
 });
 
 test('getting ready to suspend holds back background work and says when it is safe', async () => {
