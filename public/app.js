@@ -396,10 +396,11 @@ function treeNodes() {
       bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
     h('button', { class: 'tree-sub', type: 'button', title: 'The order and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
       rankedAreas.length ? `Order from 30,000 ft · ${rankedAreas.length} of ${areas.length} ranked` : 'No order in 30,000 ft yet'),
-    h('div', { class: `out-list${rankedAreas.length ? ' has-ranks' : ''}` },
-      ...rankedAreas.map(areaRow),
-      rankedAreas.length && unrankedAreas.length ? h('div', { class: 'out-divide', role: 'separator', 'aria-label': 'Not ranked' }) : null,
-      ...unrankedAreas.map(areaRow)),
+    // Areas are a flat list, not a tree: no rail, the rank sits where the rail's tick
+    // would be, so every name lines up with the project names above.
+    rankedAreas.length ? h('div', { class: 'out-list is-flat' }, ...rankedAreas.map(areaRow)) : null,
+    rankedAreas.length && unrankedAreas.length ? h('div', { class: 'out-divide', role: 'separator', 'aria-label': 'Not ranked' }) : null,
+    unrankedAreas.length ? h('div', { class: 'out-list is-flat' }, ...unrankedAreas.map(areaRow)) : null,
     ...somedayNodes(t.someday || []),
   ].filter(Boolean);
   const second = peopleNodes(t.people || [], row, dealt);
