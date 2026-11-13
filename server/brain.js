@@ -259,6 +259,23 @@ export function readVaultFile(rel) {
 
 let noteIndex = { head: null, byName: new Map() };
 
+function indexNotes() {
+  const byName = new Map();
+  const visit = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '.git' || entry.name === '.obsidian') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else {
+        const key = entry.name.replace(/\.md$/i, '').toLowerCase();
+        if (!byName.has(key)) byName.set(key, full);
+      }
+    }
+  };
+  visit(config.brainDir);
+  noteIndex = { head: status.head, byName };
+}
+
 // Resolves an Obsidian link target ("Next Actions" or a path)
 // to a file in the vault, the way Obsidian does: by file name, wherever it sits.
 export function resolveWikilink(target) {
@@ -269,24 +286,15 @@ export function resolveWikilink(target) {
     const direct = readVaultFile(candidate);
     if (direct) return direct;
   }
-  if (noteIndex.head !== status.head) {
-    const byName = new Map();
-    const visit = (dir) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === '.git' || entry.name === '.obsidian') continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) visit(full);
-        else {
-          const key = entry.name.replace(/\.md$/i, '').toLowerCase();
-          if (!byName.has(key)) byName.set(key, full);
-        }
-      }
-    };
-    visit(config.brainDir);
-    noteIndex = { head: status.head, byName };
-  }
   const base = clean.split('/').pop().replace(/\.md$/i, '').toLowerCase();
-  const full = noteIndex.byName.get(base);
+  if (noteIndex.head !== status.head) indexNotes();
+  let full = noteIndex.byName.get(base);
+  // The index is kept per commit, but files also move without one (a brain update that
+  // is still writing renames a note): an entry whose file is gone means the index is old.
+  if (full && !fs.existsSync(full)) {
+    indexNotes();
+    full = noteIndex.byName.get(base);
+  }
   if (!full) return null;
   return { path: path.relative(config.brainDir, full).split(path.sep).join('/'), full };
 }

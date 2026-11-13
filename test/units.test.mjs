@@ -90,3 +90,26 @@ test('area ranks: without an "## Order" heading every numbered area line counts'
   ]);
   assert.equal(parseRanks('').size, 0);
 });
+
+test('a note renamed without a commit is found under its new name, and the old name reads as gone', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const { execFileSync } = await import('node:child_process');
+  const brain = await import('../server/brain.js');
+  const { projectContext } = await import('../server/projects.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-rename-'));
+  const run = (...args) => execFileSync('git', args, { cwd: dir, windowsHide: true });
+  fs.mkdirSync(path.join(dir, 'Brain', 'Projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Brain', 'Projects', 'Old Talk.md'), '# Old Talk\n');
+  run('init', '--quiet');
+  run('add', '-A');
+  run('-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '--quiet', '-m', 'seed');
+  brain.initBrain({ brainDir: dir, hiddenPaths: [] });
+  assert.equal((await brain.ensureClone()).ready, true);
+  assert.equal(projectContext('Old Talk')[0].path, 'Brain/Projects/Old Talk.md');
+  // A brain update that is still writing: the file moves, the commit has not happened.
+  fs.renameSync(path.join(dir, 'Brain', 'Projects', 'Old Talk.md'), path.join(dir, 'Brain', 'Projects', 'New.md'));
+  assert.deepEqual(projectContext('Old Talk'), []);
+  assert.equal(brain.resolveWikilink('New').path, 'Brain/Projects/New.md');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
