@@ -25,6 +25,7 @@
       <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
              placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
       <span class="top-space"></span>
+      <div id="usage" class="pick usage-pick"></div>
       <div id="events" class="pick events-pick"></div>
       <a id="talk-link" class="top-btn" href="/walk" title="Talk to the host">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
@@ -74,7 +75,8 @@
             <div id="effort" class="pick" data-label="Effort"></div>
             <span class="foot-space"></span>
             <button id="spin" class="btn btn-quiet btn-spin" type="button" title="Send this into a spin-off: a new thread that starts as a copy of this one. Nothing is sent here, and this thread goes to the back of the queue. (Alt Enter)">Send into spin-off</button>
-            <button id="send-done" class="btn btn-quiet" type="button" title="Send, and close the thread by itself once Claude has answered: it does not come back to the inbox. (Ctrl Enter)">Send and done</button>
+            <button id="defer" class="btn btn-quiet" type="button" title="Defer: not now, but it stays yours. The thread sleeps under Next actions; the next brain update writes it into Next Actions.md and deletes the thread. Text in the box is kept as where you left off.">Defer</button>
+            <button id="send-done" class="btn btn-quiet" type="button" title="With text: keep the message for the brain update and close the thread, with no answer from Claude. With an empty box: close the thread. (Ctrl Enter, or Alt X)">Done</button>
             <button id="send" class="btn btn-send" type="submit">Send</button>
           </div>
         </form>

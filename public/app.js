@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   app: $('app'), lists: $('rail-lists'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
-  send: $('send'), spin: $('spin'), sendDone: $('send-done'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
+  send: $('send'), spin: $('spin'), sendDone: $('send-done'), defer: $('defer'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   mood: $('mood'), model: $('model'), effort: $('effort'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
@@ -130,7 +130,7 @@ function inbox() {
 }
 const working = () => all().filter((t) => t.state === 'working' && t.kind !== 'event').sort((a, b) => a.updatedAt - b.updatedAt);
 // Done lists only what is not in the brain yet: a brain update archives the rest.
-const done = () => all().filter((t) => t.state === 'done' && t.kind !== 'card' && !t.archived).sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
+const done = () => all().filter((t) => t.state === 'done' && t.kind !== 'card' && !t.archived && !t.deferred).sort((a, b) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
 const nextReady = (exceptId) => inbox().find((t) => t.id !== exceptId) || null;
 const isUnfiled = (t) => t.kind !== 'card' && (t.lastUserAt || 0) > (t.extractedCount || 0);
 
@@ -140,7 +140,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { event: 'Event', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
+const KIND = { event: 'Event', 'next-action': 'Next action', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 function kindLabel(t) {
   if (t.kind === 'card') return { chase: 'Chase', proposal: 'Proposal' }[t.card?.type] || 'Opportunity';
   return KIND[t.kind] || '';
@@ -189,6 +189,30 @@ function queueLists() {
       : h('button', { class: 'link', type: 'button', onclick: () => api('POST', '/api/cards/make', {}).catch((e) => toast(e.message)) }, 'Look for opportunities')),
   ], null, 'queue'));
   if (busy.length) parts.push(section('Claude is working', busy.length, busy.map(railItem)));
+  // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
+  // brain update writes their line. Click one to wake it into the inbox.
+  const asleep = S.next?.actions || [];
+  const deferred = (S.next?.deferred || []).filter((d) => S.threads.get(d.id)?.deferred);
+  for (const t of all()) if (t.deferred && !t.archived && !deferred.some((d) => d.id === t.id)) deferred.push({ id: t.id, title: t.title, project: t.project || '' });
+  if (asleep.length || deferred.length) {
+    const wake = async (a, button) => {
+      button.disabled = true;
+      try {
+        const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
+        S.threads.set(out.thread.id, out.thread);
+        S.next = { ...S.next, actions: S.next.actions.filter((x) => x !== a) };
+        openThread(out.thread.id);
+      } catch (err) { toast(err.message); button.disabled = false; }
+    };
+    parts.push(section('Next actions', asleep.length + deferred.length, [
+      ...asleep.map((a) => h('button', { class: 'item sleep-item', type: 'button', title: `${a.show}\n\nAsleep in Next Actions.md. Click to wake it: it becomes a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
+        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
+        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show), a.project ? h('span', { class: 'sleep-sub' }, a.project) : null))),
+      ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
+        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
+        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
+    ]));
+  }
   const toggle = closed.length ? h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show') : null;
   parts.push(section('Done', closed.length, [
     h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
@@ -220,7 +244,7 @@ function pathOf(project) {
 
 // ---------- the outline: every project and area, most recently dealt with first ----------
 //
-// It shows projects, not threads. A dot marks a project that has open threads; paused
+// It shows projects, not threads (and below them people and Someday items). A dot marks a project that has open threads; paused
 // projects and areas without a project are grey and at the bottom. Click one to see its
 // threads and what can be done there. Drop a thread on one to file it.
 
@@ -278,22 +302,101 @@ function treeNodes() {
   }));
   const row = (x, grey) => outlineRow({ ...x, grey, hereName });
   const each = 'One thread each, for those without an open thread';
-  return [
+  // Areas in the order of 30,000 ft (Brain/Horizons): ranked ones first, the rest by recency.
+  const ranked = t.groups.filter((g) => g.isArea && g.rank);
+  const rankOf = new Map(ranked.map((g) => [g.name, g]));
+  const byRank = (a, b) => (rankOf.get(a.name)?.rank || 1e9) - (rankOf.get(b.name)?.rank || 1e9) || byRecent(a, b);
+  const areaRow = (a) => {
+    const r = rankOf.get(a.name);
+    return row({ ...a, about: `${r ? `${r.rank}. ${r.goal || 'no goal line yet'}\n` : 'Not ranked in 30,000 ft Goals.\n'}${a.about}` }, a.empty && !r);
+  };
+  const first = [
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Projects'),
       bulkButton('active', '+ active', active.length, `Start a check-in thread on every active project. ${each}.`),
       bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`)),
     h('div', { class: 'out-list' }, ...active.map((p) => row(p, false)), ...paused.map((p) => row(p, true))),
     !projects.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
+    ...somedayNodes(t.someday || []),
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Areas'),
       bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
-    h('div', { class: 'out-list' }, ...areas.filter((a) => !a.empty).sort(byRecent).map((a) => row(a, false)), ...areas.filter((a) => a.empty).sort(byRecent).map((a) => row(a, true))),
+    h('div', { class: 'out-list' }, ...areas.sort(byRank).map(areaRow)),
   ].filter(Boolean);
+  const second = peopleNodes(t.people || [], row, dealt);
+  return { first, second };
 }
+
+// People, on a slide of their own, in four groups. The group comes from the `Status:`
+// line in each person's file; the order inside a group from when he last dealt with them.
+function peopleNodes(people, row, dealt) {
+  if (!people.length) return [h('p', { class: 'tree-note' }, 'No people in the vault.')];
+  const list = people.map((p) => ({
+    name: p.name.replace(/\s*\(([^)]*)\)$/, ''), project: p.name, group: p.group,
+    about: `${p.name}${p.waitsFor ? `\nWaiting for: ${p.waitsFor}` : ''}\n${p.about || ''}`,
+    touched: dealt(p.name, p.contacted), open: threadsIn(p.name).filter((x) => x.state !== 'done').length,
+  }));
+  const oldest = (a, b) => (a.touched || 0) - (b.touched || 0) || a.name.localeCompare(b.name);
+  const group = (key, label, title, grey) => {
+    const rows = list.filter((p) => p.group === key).sort(oldest);
+    return rows.length ? [h('div', { class: 'tree-head', title }, h('span', { class: 'tree-label' }, label), h('span', { class: 'tree-n' }, String(rows.length))), h('div', { class: 'out-list' }, ...rows.map((p) => row(p, grey)))] : [];
+  };
+  return [
+    ...group('move', 'Your move', 'You owe them something. Longest owed first.', false),
+    ...group('warm', 'Keep warm', 'A reason to stay in touch, nothing owed. Longest silent first.', false),
+    ...group('waiting', 'Waiting', 'Nothing to do until what they wait for happens. Hover for what.', true),
+    ...group('none', 'Nothing open', 'Nothing open with them. Fold to dormant, or find the next step.', true),
+  ];
+}
+
+// Someday, item by item, newest first; the parked old actions grey at the bottom. + starts
+// a thread on the item: do it now, keep it, or fold it.
+function somedayNodes(items) {
+  if (!items.length) return [];
+  const item = (x) => h('div', { class: `out${x.parked ? ' is-grey' : ''}` },
+    h('button', { class: 'out-row', type: 'button', title: `${x.text}\n${x.parked ? 'Parked: an old action, never confirmed.\n' : ''}Click to read Someday`, onclick: () => openPanel({ kind: 'note', link: 'Someday' }) },
+      h('span', { class: 'out-name' }, x.short),
+      x.touched ? h('span', { class: 'out-when' }, ago(x.touched).replace(' ago', '')) : null),
+    h('button', { class: 'out-plus', type: 'button', title: 'New thread on this: do it now, keep it, or fold it', 'aria-label': 'New thread on this Someday item', onclick: () => {
+      openNew('Someday');
+      els.input.value = `From Someday: "${x.text}"\n\n`;
+      els.input.dispatchEvent(new Event('input'));
+      els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+    } }, '+'));
+  const byNew = (a, b) => b.touched - a.touched;
+  return [
+    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Someday')),
+    h('div', { class: 'out-list' }, ...items.filter((x) => !x.parked).sort(byNew).map(item), ...items.filter((x) => x.parked).sort(byNew).map(item)),
+  ];
+}
+
+// The outline is two slides side by side: projects, Someday and areas; and people. Swipe
+// or scroll sideways and it snaps; the two words on top jump.
+const SLIDES = ['Projects', 'People'];
+function slideNodes() {
+  const nodes = treeNodes();
+  if (Array.isArray(nodes)) return nodes;
+  const go = (i) => { tree.slide = i; const box = els.tree.querySelector('.slides'); box?.scrollTo({ left: i * box.clientWidth, behavior: reducedMotion.matches ? 'auto' : 'smooth' }); markSlide(); };
+  const nav = h('div', { class: 'slide-nav' }, ...SLIDES.map((label, i) => h('button', { class: `slide-tab${(tree.slide || 0) === i ? ' is-on' : ''}`, type: 'button', onclick: () => go(i) }, label)));
+  const box = h('div', { class: 'slides' }, h('div', { class: 'slide' }, ...nodes.first), h('div', { class: 'slide' }, ...nodes.second));
+  box.addEventListener('scroll', () => {
+    const i = Math.round(box.scrollLeft / Math.max(1, box.clientWidth));
+    if (i !== (tree.slide || 0)) { tree.slide = i; markSlide(); }
+  }, { passive: true });
+  return [nav, box];
+}
+function markSlide() { els.tree.querySelectorAll('.slide-tab').forEach((b, i) => b.classList.toggle('is-on', i === (tree.slide || 0))); }
 
 function renderTree(force = false) {
   if (drag?.active && !force) { drag.stale = true; return; }
-  if (wide.matches) els.tree.replaceChildren(...treeNodes());
-  else if (S.tab === 'projects') renderRail();
+  if (wide.matches) {
+    // Drawn afresh, but where he was (which slide, how far down) stays.
+    const tops = [...els.tree.querySelectorAll('.slide')].map((el) => el.scrollTop);
+    els.tree.replaceChildren(...slideNodes());
+    const box = els.tree.querySelector('.slides');
+    if (box) {
+      box.scrollLeft = (tree.slide || 0) * box.clientWidth;
+      box.querySelectorAll('.slide').forEach((el, i) => { el.scrollTop = tops[i] || 0; });
+    }
+  } else if (S.tab === 'projects') renderRail();
 }
 
 async function moveToProject(id, project) {
@@ -309,7 +412,7 @@ function renderRail() {
   if (drag?.active) { drag.stale = true; return; }
   const folders = S.tab === 'projects' && !wide.matches;
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...treeNodes())] : queueLists()));
+  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...(() => { const n = treeNodes(); return Array.isArray(n) ? n : [...n.first, ...n.second]; })())] : queueLists()));
   els.tabQueue.classList.toggle('is-on', !folders);
   els.tabProjects.classList.toggle('is-on', folders);
   if (!reducedMotion.matches && before.size) {
@@ -496,8 +599,9 @@ document.addEventListener('contextmenu', (e) => { if (drag) e.preventDefault(); 
 
 const loadProjects = debounce(async () => {
   try {
-    S.projects = await api('GET', '/api/projects');
+    [S.projects, S.next] = await Promise.all([api('GET', '/api/projects'), api('GET', '/api/next-actions').catch(() => null)]);
     renderTree();
+    renderRail();
     if (S.current && !S.pad) renderHead();
   } catch { /* the next change brings it */ }
 }, 400);
@@ -825,11 +929,9 @@ function renderHead() {
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Close this event: prepared and debriefed', onclick: markDone }, 'Done ', kbd('Alt X')));
   } else if (t.state === 'ready') {
     status = h('span', { class: 'status status-ready' }, 'Waiting for you');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: markDone }, 'Done ', kbd('Alt X')));
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
@@ -865,8 +967,33 @@ function renderComposer() {
       : t.kind === 'event' && t.event && Date.now() > t.event.end ? 'How did it go?' : 'Reply.';
   }
   els.send.textContent = verb;
-  els.sendDone.textContent = `${verb} and done`;
+  composerVerb = verb;
+  els.defer.hidden = !t || t.state === 'done';
+  renderDoneButton();
   renderAttached();
+}
+
+// One button for both: with text it sends and closes, with an empty box it just closes.
+let composerVerb = 'Send';
+function renderDoneButton() {
+  const t = S.current ? S.threads.get(S.current) : null;
+  const empty = !els.input.value.trim() && !attachedNow().length;
+  els.sendDone.textContent = empty ? 'Done' : `${composerVerb} and done`;
+  els.sendDone.disabled = empty && (!t || t.state !== 'ready');
+}
+
+async function deferThread() {
+  const t = S.current && S.threads.get(S.current);
+  if (!t || t.kind === 'card') return;
+  if (t.state === 'working') { toast('Claude is still working on this. Defer it when the turn has ended.'); return; }
+  try {
+    const out = await api('POST', `/api/threads/${t.id}/defer`, { text: els.input.value.trim() });
+    S.threads.set(t.id, out.thread);
+    els.input.value = '';
+    S.drafts.delete(t.id);
+    toast('Deferred. It sleeps under Next actions; the next brain update writes it into Next Actions.md.');
+    advance(t.id);
+  } catch (err) { toast(err.message); }
 }
 
 // ---------- files attached to the message being written ----------
@@ -1155,6 +1282,8 @@ async function send(done = false) {
   const text = els.input.value.trim();
   if (S.pad) return;
   const files = filesToSend();
+  // "Done" with an empty box closes the thread.
+  if (done && files && !text && !files.length) return markDone();
   if (!files || (!text && !files.length)) return;
   const from = S.current;
   els.send.disabled = true;
@@ -1179,7 +1308,7 @@ async function send(done = false) {
     toast(err.message);
   } finally {
     els.send.disabled = false;
-    els.sendDone.disabled = false;
+    renderDoneButton();
   }
 }
 
@@ -1841,6 +1970,45 @@ checkStatus();
 setInterval(() => { if (!document.hidden) checkStatus(); }, 4000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStatus(); });
 
+// ---------- usage: what Claude used through this app ----------
+//
+// From what the Agent SDK reports per run: tokens, and what the run would have cost on
+// the API. Not the plan's limit, which the SDK does not report.
+
+let usageNow = null;
+const money = (n) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
+const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+
+function renderUsage() {
+  const box = document.getElementById('usage');
+  if (!usageNow || box.classList.contains('is-open')) return;
+  const u = usageNow;
+  const button = h('button', { class: 'top-btn usage-btn', type: 'button', 'aria-haspopup': 'menu', title: 'What Claude used through this app today, at API prices. Click for more.' },
+    h('span', { class: 'top-label' }, money(u.today.cost)), h('span', { class: 'events-when' }, 'today'));
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (box.classList.contains('is-open')) { closePickers(); return; }
+    closePickers();
+    box.classList.add('is-open');
+    const line = (label, x) => h('div', { class: 'usage-line' }, h('span', {}, label), h('span', { class: 'usage-num' }, `${money(x.cost)} · ${tokens(x.out)} out · ${plural(x.runs, 'run', 'runs')}`));
+    const max = Math.max(0.01, ...u.days.map((d) => d.cost));
+    box.append(h('div', { class: 'pick-menu usage-menu', role: 'menu' },
+      line('Last 5 hours', u.fiveHours), line('Today', u.today), line('7 days', u.week),
+      u.byKind.length ? h('p', { class: 'events-head' }, 'Today, by kind') : null,
+      ...u.byKind.map((k) => line(k.kind, k)),
+      h('p', { class: 'events-head' }, 'Per day'),
+      h('div', { class: 'usage-bars' }, ...u.days.map((d) => h('div', { class: 'usage-bar', title: `${new Date(d.day).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${money(d.cost)}, ${plural(d.runs, 'run', 'runs')}` },
+        h('span', { style: `height:${Math.max(2, Math.round((d.cost / max) * 44))}px` }), h('small', {}, new Date(d.day).toLocaleDateString(undefined, { weekday: 'narrow' }))))),
+      h('p', { class: 'link-status' }, 'What this app used on both computers, counted at API prices. On your subscription nothing is charged; how much of the plan\'s limit is left is not something the app can read.')));
+  });
+  box.replaceChildren(button);
+}
+async function checkUsage() {
+  try { usageNow = await (await fetch('/api/usage')).json(); renderUsage(); } catch { /* next time */ }
+}
+checkUsage();
+setInterval(() => { if (!document.hidden) checkUsage(); }, 60_000);
+
 // ---------- events: what is coming up in the calendar ----------
 //
 // Not in the inbox. Each entry worth preparing has a thread of its own that opens a day
@@ -1901,7 +2069,7 @@ setInterval(() => { if (!document.hidden) renderEvents(); }, 60_000);
 // ---------- pickers: model and effort ----------
 
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } renderEvents(); };
+const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } renderEvents(); renderUsage(); };
 
 function picker(host, { options, value, onPick }) {
   const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
@@ -1975,6 +2143,8 @@ function autosize() {
 }
 
 els.input.addEventListener('input', autosize);
+els.input.addEventListener('input', renderDoneButton);
+els.defer.addEventListener('click', deferThread);
 els.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();

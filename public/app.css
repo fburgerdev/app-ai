@@ -1302,3 +1302,32 @@ a.chip:hover { border-color: var(--muted); }
 .event-phase.is-now { color: var(--you); }
 .event-phase.is-debrief { color: var(--done); }
 .events-head { margin: 8px 10px 2px; font-size: 11.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ---------- the outline's two slides ---------- */
+.tree { padding: 0; overflow: hidden; }
+.slide-nav { display: flex; gap: 2px; padding: 8px 10px 0; flex: none; }
+.slide-tab { border: 0; background: none; color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.slide-tab:hover { color: var(--text); }
+.slide-tab.is-on { color: var(--text); background: var(--panel); }
+.slides { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.slides::-webkit-scrollbar { display: none; }
+.slide { flex: 0 0 100%; min-width: 0; overflow-y: auto; scroll-snap-align: start; padding: 0 8px 24px; }
+.tree-n { color: var(--faint); font-size: 11.5px; margin-right: 6px; }
+.rail .tree { overflow: visible; padding: 4px 8px 24px; }
+
+/* ---------- next actions, asleep ---------- */
+.sleep-item { opacity: 0.62; align-items: flex-start; }
+.sleep-item:hover, .sleep-item.is-current { opacity: 1; }
+.sleep-z { flex: none; width: 14px; color: var(--faint); font: italic 600 12px/1.5 var(--sans); text-align: center; }
+.sleep-main { min-width: 0; flex: 1; }
+.sleep-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--text); font-size: 13.5px; }
+.sleep-sub { display: block; color: var(--faint); font-size: 12px; margin-top: 1px; }
+
+/* ---------- usage ---------- */
+.usage-menu { top: calc(100% + 6px); bottom: auto; left: auto; right: 0; width: 310px; padding-bottom: 4px; }
+.usage-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 10px; font-size: 13px; color: var(--text); }
+.usage-num { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-bars { display: flex; align-items: flex-end; gap: 8px; padding: 6px 12px 2px; height: 66px; }
+.usage-bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+.usage-bar span { width: 100%; border-radius: 3px 3px 0 0; background: var(--you); opacity: 0.8; }
+.usage-bar small { color: var(--faint); font-size: 10.5px; }

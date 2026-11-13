@@ -21,6 +21,8 @@ import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
 import * as events from './events.js';
+import * as nextActions from './nextactions.js';
+import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS } from './state.js';
@@ -414,10 +416,27 @@ app.post('/api/threads/:id/state', (req, res) => {
     store.updateThread(thread.id, { state: 'done', doneAt: Date.now(), error: '' });
     cards.maybeMakeCards();
   }
-  else if (state === 'ready') store.updateThread(thread.id, { state: 'ready', queuedAt: Date.now(), archived: false });
+  else if (state === 'ready') store.updateThread(thread.id, { state: 'ready', queuedAt: Date.now(), archived: false, deferred: false });
   else return res.status(400).json({ error: 'Unknown state' });
   res.json({ thread: store.getThread(thread.id) });
 });
+
+// Defer: not now, but it is his. The thread sleeps; the next brain update turns it into
+// a line in Next Actions.md and deletes it. Text sent along is kept as where he left off.
+app.post('/api/threads/:id/defer', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try {
+    queue.recordDecision('requeued', thread);
+    res.json({ thread: nextActions.defer(thread.id, String(req.body?.text || '')) });
+  } catch (err) { res.status(409).json({ error: err.message }); }
+});
+// Next Actions, as sleeping threads; waking one makes it a thread in the inbox.
+app.get('/api/next-actions', (req, res) => res.json(nextActions.list()));
+app.post('/api/next-actions/wake', (req, res) => {
+  try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
+});
+app.get('/api/usage', (req, res) => res.json(usageOverview()));
 
 // Requeue: not now. The thread stays waiting but goes to the back for a while, and the
 // queue learns from it.

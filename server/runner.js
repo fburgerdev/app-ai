@@ -68,7 +68,8 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     return message;
   }
   // A plain message after "send and done" means he wants to see the answer after all.
-  if (!auto) store.updateThread(threadId, { doneAfter: false });
+  // A message into a deferred thread wakes it again.
+  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false });
   // What he sent with "send and done" goes in first, so Claude has it too.
   const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });

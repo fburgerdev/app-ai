@@ -30,11 +30,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 git(dir, 'init', '--bare', '-b', 'main', vault);
 const seed = path.join(dir, 'seed');
 git(dir, 'clone', vault, seed);
-for (const d of ['Brain/Projects', 'Brain/Areas', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
+for (const d of ['Brain/Projects', 'Brain/Areas', 'Brain/People', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
 fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Areas', 'Campaign.md'), '# Campaign\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Mensa Tracker.md'), '# Mensa Tracker\n\nStatus: active\nrepo: `fburgerdev/website-stuwerke`\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Anna Karle (PUYK).md'), 'Last contacted: by 18-10-2026 (message)\n\nrole: runs [[PUYK]]\n\nOpen threads: turn her offer into something concrete.\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Kirk Junker (Prorektor).md'), 'Last contacted: 01-07-2026\n\nOpen threads: none; he no longer holds the office\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'People Index.md'), '# People Index\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Kristine (Veganuary).md'), 'Last contacted: 10-07-2026\nStatus: waiting: KStW news\n\nOpen threads: owes her an update once there is more to say\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'People', 'Jürgen (Kitchen).md'), 'Last contacted: 08-10-2026\nStatus: keep warm\n\nOpen threads: keep him warm\n');
+fs.mkdirSync(path.join(seed, 'Brain', 'Horizons'), { recursive: true });
+fs.writeFileSync(path.join(seed, 'Brain', 'Horizons', '30,000 ft Goals.md'), '# 30,000 ft\n\n1. [[Campaign]] — every Mensa plant-based\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Next Actions.md'), '# Next Actions\n\nRules.\n\n## [[Mensa Tracker]]\n\n- [ ] Call the [[Campaign]] office, 0221 1234\n\n## [[Campaign]]\n\n- [ ] Decide on the stall date\n');
+fs.writeFileSync(path.join(seed, 'Brain', 'Someday.md'), '# Someday\n\nIntro.\n\n- Try to get the Kitas in Köln to go plant-based. Noted after the meeting.\n- Look into investing.\n\n## Parked 21-09-2026\n\n- Reschedule the outreach stall.\n');
 fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Campaign]]\n\n- [[Mensa Tracker]] — the website\n');
 git(seed, 'checkout', '-B', 'main'); git(seed, 'add', '-A'); git(seed, 'commit', '-m', 'seed'); git(seed, 'push', 'origin', 'main');
 fs.mkdirSync(data, { recursive: true });
@@ -58,6 +67,25 @@ const ready = (id) => until(async () => { const t = await thread(id); return t.t
 
 test('the app is up', async () => {
   await until(async () => (await state()).brain.brain.ready, 'brain cloned', 40000);
+});
+
+test('people and Someday come with the outline', async () => {
+  const tree = (await call('GET', '/api/projects')).data;
+  assert.deepEqual(tree.people.map((p) => [p.name, p.group]).sort(), [['Anna Karle (PUYK)', 'move'], ['Jürgen (Kitchen)', 'warm'], ['Kirk Junker (Prorektor)', 'none'], ['Kristine (Veganuary)', 'waiting']]);
+  assert.equal(tree.people.find((p) => p.group === 'waiting').waitsFor, 'KStW news');
+  const area = tree.groups.find((g) => g.name === 'Campaign');
+  assert.equal(area.rank, 1);
+  assert.equal(area.goal, 'every Mensa plant-based');
+  const anna = tree.people.find((p) => p.name.startsWith('Anna'));
+  assert.equal(new Date(anna.contacted).getMonth(), 9);
+  assert.match(anna.about, /^Open: turn her offer/);
+  assert.deepEqual(tree.someday.map((x) => [x.short, x.parked]), [['Try to get the Kitas in Köln to go plant-based.', false], ['Look into investing.', false], ['Reschedule the outreach stall.', true]]);
+  assert.ok(tree.someday[0].touched > 0, 'when the line last changed, from git');
+  // Threads can be on a person, or on Someday.
+  const t = (await call('POST', '/api/threads', { text: 'Draft a note to Anna', project: 'Anna Karle (PUYK)' })).data.thread;
+  assert.equal(t.project, 'Anna Karle (PUYK)');
+  const sd = (await call('POST', '/api/threads', { text: 'From Someday: investing', project: 'Someday' })).data.thread;
+  assert.equal(sd.project, 'Someday');
 });
 
 test('a thread finds its project by itself, after its first answer, and takes the project\'s repo', async () => {
@@ -108,4 +136,52 @@ test('on the Pi, background work waits while the laptop holds the lease', async 
   assert.equal(link.leaseHeld(), true);
   link.takeLease(false);
   assert.equal(link.mayRunBackground(), true);
+});
+
+test('next actions sleep, wake into the inbox, and threads can be deferred back', async () => {
+  const sleeping = (await call('GET', '/api/next-actions')).data;
+  assert.deepEqual(sleeping.actions.map((a) => [a.project, a.show]), [['Mensa Tracker', 'Call the Campaign office, 0221 1234'], ['Campaign', 'Decide on the stall date']]);
+  // Wake one: a thread in the inbox, opening with a brief; the line leaves the list.
+  const woke = (await call('POST', '/api/next-actions/wake', { project: 'Mensa Tracker', text: sleeping.actions[0].text })).data.thread;
+  assert.equal(woke.kind, 'next-action');
+  assert.equal(woke.project, 'Mensa Tracker');
+  const t = await ready(woke.id);
+  assert.match(t.messages[0].text, /^Florian woke this line from his Next Actions, under Mensa Tracker/);
+  assert.ok((await state()).queue.order.includes(woke.id), 'in the inbox like any thread');
+  assert.deepEqual((await call('GET', '/api/next-actions')).data.actions.map((a) => a.show), ['Decide on the stall date']);
+  assert.equal((await call('POST', '/api/next-actions/wake', { project: 'Mensa Tracker', text: sleeping.actions[0].text })).status, 409, 'not twice');
+  // Defer it again, with a note on where he left off.
+  const d = (await call('POST', `/api/threads/${woke.id}/defer`, { text: 'They are only in on Tuesdays' })).data.thread;
+  assert.equal(d.state, 'done');
+  assert.equal(d.deferred, true);
+  assert.ok(!(await state()).queue.order.includes(woke.id));
+  assert.deepEqual((await call('GET', '/api/next-actions')).data.deferred.map((x) => x.id), [woke.id]);
+  const last = (await thread(woke.id)).messages.at(-1);
+  assert.equal(last.text, 'They are only in on Tuesdays');
+  assert.equal(last.unanswered, true);
+  // The brain update sees it (told to write the line), then the thread is gone.
+  assert.ok((await state()).brain.waiting >= 1);
+  await call('POST', '/api/brain/extract', {});
+  await until(async () => { const b = (await state()).brain; return !b.running && !(await state()).threads.some((x) => x.id === woke.id); }, 'deferred thread deleted after the update', 30000);
+  const run = fs.readdirSync(path.join(data, 'extractions')).sort().at(-1);
+  const files = fs.readdirSync(path.join(data, 'extractions', run, 'transcripts'));
+  const file = files.find((f) => f.includes('Call the Campaign office'));
+  const text = fs.readFileSync(path.join(data, 'extractions', run, 'transcripts', file), 'utf8');
+  assert.match(text, /Woken from Next Actions: Florian started this thread from the line "Call the \[\[Campaign\]\] office, 0221 1234" under "Mensa Tracker"/);
+  assert.match(text, /Deferred by Florian/);
+  // A reply into a deferred thread wakes it instead.
+  const other = (await call('POST', '/api/threads', { text: 'Something to park' })).data.thread;
+  await ready(other.id);
+  await call('POST', `/api/threads/${other.id}/defer`, {});
+  await call('POST', `/api/threads/${other.id}/messages`, { text: 'Actually, now' });
+  assert.equal((await thread(other.id)).thread.deferred, false);
+});
+
+test('usage is counted per run', async () => {
+  const u = (await call('GET', '/api/usage')).data;
+  assert.ok(u.today.runs >= 3);
+  assert.ok(u.today.cost > 0);
+  assert.equal(u.days.length, 7);
+  assert.ok(u.byKind.some((k) => k.kind === 'Threads'));
+  assert.ok(u.byKind.some((k) => k.kind === 'Brain update'));
 });

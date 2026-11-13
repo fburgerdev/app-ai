@@ -149,6 +149,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
       model: state.model,
       effort: state.effort,
       mode: 'thread',
+      usageKind: 'cards',
       artifactsDir: outDir,
       protectedPaths: config.protectedPaths,
       shell: false,

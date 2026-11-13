@@ -9,6 +9,7 @@
 //   plain    no tools at all (used to turn a reply into something to listen to)
 //   lookup   like plain, but it may search and read the web (the voice host's harder questions)
 
+import { record as recordUsage } from './usage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './config.js';
@@ -228,7 +229,11 @@ export async function runAgent(params) {
   const run = params.fake ? runFake : runReal;
   try {
     const out = await run(params);
-    return { ...out, durationMs: Date.now() - started };
+    const durationMs = Date.now() - started;
+    // The stand-in reports a made-up amount, so the usage view has something to show.
+    const usage = out.usage || (params.fake ? { input_tokens: 1200, output_tokens: Math.ceil((out.text || '').length / 4) } : null);
+    recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs });
+    return { ...out, durationMs };
   } catch (err) {
     if (params.signal?.aborted) {
       return { sessionId: params.resume || null, text: '', error: '', aborted: true, durationMs: Date.now() - started };
@@ -293,6 +298,8 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let lastText = '';
   let error = '';
   let sawDelta = false;
+  let usage = null;
+  let cost = 0;
 
   for await (const msg of query({ prompt: input(), options })) {
     if (msg.session_id && msg.session_id !== sessionId) {
@@ -338,9 +345,11 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
         error = '';
         if (!lastText && msg.result) lastText = msg.result;
       }
+      usage = msg.usage || null;
+      cost = msg.total_cost_usd || 0;
     }
   }
-  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted };
+  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost };
 }
 
 // ---------- a stand-in for Claude, for trying the app without an account ----------

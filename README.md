@@ -222,6 +222,41 @@ the entry it is the place to debrief ("How did it go?"); the brain update files 
 of it. Sending in an event thread keeps you there instead of moving on to the next thread.
 Events only come while the calendar is connected (Settings → Connections → Google).
 
+## The outline's slides
+
+The outline on the right has two slides; scroll sideways (it snaps) or click the words on top.
+
+- **Projects**: projects as before, then **Someday** (each item, newest first, the parked old
+  actions grey; **+** starts a thread on the item: do it now, keep it, or fold it), then the
+  **areas** in the order of `Brain/Horizons/30,000 ft Goals.md` (a numbered list,
+  `1. [[Area]] — where it should stand`; areas not in it follow by recency).
+- **People**: everyone in `Brain/People/`, in four groups from the `Status:` line in each
+  person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**.
+  Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
+
+The order is the Brain's, not the app's: change a `Status:` line or the 30,000 ft list (ask
+Claude in a thread) and the outline follows.
+
+## Next actions, Done and Defer
+
+A line in `Brain/Next Actions.md` and a thread in the inbox are two states of the same to-do.
+
+- The lines show in the inbox drawer under **Next actions**, asleep. Click one to **wake** it:
+  it becomes a thread in the inbox that opens with a brief, and the next brain update takes
+  the line out of the file.
+- **Defer**, next to Send, puts any thread to sleep: it moves under Next actions, and the next
+  brain update writes its to-do into `Next Actions.md` (with where you left off; text in the
+  box is kept for that) and deletes the thread. Replying in a deferred thread wakes it again.
+- **Done** is the same button as "Send and done": with an empty box it closes the thread
+  (also Alt+X), with text it keeps the message and closes without an answer.
+
+## Usage
+
+The amount in the top bar is what Claude used through this app today, counted at API prices
+as the Agent SDK reports it per run; click it for the last five hours, seven days, and today
+by kind. It covers both computers. It is not your plan's limit: the app cannot read how much
+of that is left.
+
 ## Threads find their project
 
 A thread you start without a project gets one by itself after its first answer: a small

@@ -47,6 +47,19 @@ If `Mail.md` is there, it holds the mail that arrived and went out since the las
 
 If `Cards.md` is there, it lists the opportunity and chase cards Florian accepted or declined since the last update, with the text as proposed and as he sent it. Where he wrote something about a card, those are his own words: a reason is a stated rule about that kind of item, to be logged with the outcome as the vault describes. A correction ("this is outdated, we already met") is a fact: fix it in the Brain note it concerns, as "Florian said DD-MM-YYYY that …". An accepted opportunity or chase card is a message he sent: record it where the vault says sent messages go, with the Waiting For row for the reply, and for a chase card move the row's chase date on by a week. A proposal card is different: it is work Claude offered to do. An accepted one became a thread, which is filed as a thread; for the card itself only the outcome is logged. Log every card's outcome the way `Claude/Learning From Feedback.md` describes for opportunities.
 
+## Next actions: woken and deferred
+
+A line in `Brain/Next Actions.md` and a thread in the app are two states of the same to-do, and Florian moves it between them with a click. His click is the confirmation the vault asks for, so these two changes to that file need no question:
+
+- A thread file that says "Woken from Next Actions" names a line: delete that line from `Brain/Next Actions.md` (and its project heading if it was the last line under it). The thread carries the to-do now.
+- A thread file that says "Deferred by Florian": file what the thread produced as usual, then write its to-do as one `- [ ]` line into `Brain/Next Actions.md` under the heading of its project (add the heading if needed). The line is the external action that is left, as he would recognise it, followed by where he left off: where the brief or draft is, and what is still open. Example: `- [ ] Call Erika Kattenstroth (AbL NRW), 05241 57069. Brief in [[Farmer Coalition]]; open: whether AbL joins`. If the thread leaves nothing for him to do, write no line and say so in your report.
+
+The two-minute rule decides what else belongs in that file: something he can finish in under two minutes of his own time with Claude's help (most mails) is a thread, never a line. Lines are for what only he can do: calls, meetings, decisions.
+
+## People
+
+Each file in `Brain/People/` carries a `Status:` line under `Last contacted:`, which the app uses to order people: `your move` (he owes them something), `keep warm` (a reason to stay in touch, nothing owed), `waiting: <what>` (nothing to do until that happens), or `nothing open`. When what you file changes a person's `Open threads:` line, set `Status:` to match what he said. When something a person was waiting for has now happened, set them to `your move`.
+
 ## What not to write
 
 - Never write a line into the four action files that Florian has not confirmed, and never create a project file he has not agreed to. The vault's exceptions (the Waiting For row for something he sent, a Calendar row for a date fixed in a mail) still apply. Put everything else of this kind under Questions.

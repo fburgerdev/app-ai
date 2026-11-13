@@ -28,6 +28,7 @@ import { logToolRead } from './reads.js';
 import { readCardLog } from './cards.js';
 import { saveNow } from './datasync.js';
 import { getState, readPad, setState, writePad } from './state.js';
+import * as nextActions from './nextactions.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
@@ -44,11 +45,14 @@ function setStep(step) {
 
 // Threads with something Florian said or did that no brain update has seen yet.
 // Cards are not conversations; their outcomes are filed from the card log.
-const unfiledThreads = () => store.listThreads().filter((t) => t.kind !== 'card' && store.isUnfiled(t));
+// A deferred thread, or one woken from Next Actions, has something to file even with
+// nothing new said: its line in Next Actions.md.
+const needsFiling = (t) => store.isUnfiled(t) || (t.deferred && !t.archived) || (t.nextAction && !t.nextAction.removed);
+const unfiledThreads = () => store.listThreads().filter((t) => t.kind !== 'card' && needsFiling(t));
 
 // Closed threads with nothing left to file: entirely in the brain. A brain update
 // archives them, so the Done list holds only what still has to go in.
-const filedDone = () => store.listThreads().filter((t) => t.kind !== 'card' && t.state === 'done' && !t.archived && !store.isUnfiled(t));
+const filedDone = () => store.listThreads().filter((t) => t.kind !== 'card' && t.state === 'done' && !t.archived && !needsFiling(t));
 function archiveFiled() {
   const list = filedDone();
   for (const t of list) store.updateThread(t.id, { archived: true });
@@ -141,6 +145,8 @@ function writeThreads(dir, changed) {
       `Started: ${dateTimeDMY(thread.createdAt)}`,
       `Project or area: ${thread.project || 'none named'}`,
       `Closed by Florian: ${thread.state === 'done' ? 'yes' : 'no, still open'}`,
+      ...(thread.nextAction && !thread.nextAction.removed ? [`Woken from Next Actions: Florian started this thread from the line "${thread.nextAction.text}" under "${thread.nextAction.project || 'no project'}" in \`Brain/Next Actions.md\`. Remove that line from the file.`] : []),
+      ...(thread.deferred ? [`Deferred by Florian, ${dateTimeDMY(thread.deferredAt)}: he put this thread to sleep. File what it produced, then write its to-do as one line into \`Brain/Next Actions.md\` (see "Next actions" in your instructions). The app deletes the thread afterwards.`] : []),
       ...(thread.spunFrom ? [`Spin-off: Florian spun this thread off from the thread "${thread.spunTitle}". Its first ${thread.spunAt} messages are a copy of that thread and are filed from there.`] : []),
       '',
       '## Files Claude made in this thread',
@@ -327,6 +333,7 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
         if (thread.state === 'done' && thread.messageCount <= c.count) patch.archived = true;
         store.updateThread(c.thread.id, patch);
       }
+      nextActions.afterUpdate(changed);
       const levels = mailOnly ? {} : { cardsLevel: pressedAt };
       if (mailRead) levels.mailLevel = pressedAt;
       setState(levels);
