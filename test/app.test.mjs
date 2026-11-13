@@ -74,7 +74,12 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], 
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data },
   stdio: 'ignore',
 });
-test.after(() => { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
+// On Windows the killed server (or a git it started) can still hold a file for a moment:
+// wait for it to exit, and retry the cleanup instead of failing on EBUSY.
+test.after(async () => {
+  if (server.exitCode === null) await new Promise((r) => { server.once('exit', r); server.kill(); setTimeout(r, 5000); });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+});
 
 const call = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });

@@ -39,7 +39,7 @@ function start(name, port, extra = {}) {
   procs[name] = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data }, stdio: ['ignore', out, out] });
 }
 const stop = (name) => new Promise((r) => { procs[name].once('exit', r); procs[name].kill(); });
-test.after(() => { for (const p of Object.values(procs)) p.kill(); if (process.env.KEEP) for (const n of ['pi', 'laptop']) console.log(fs.readFileSync(path.join(dir, `${n}.log`), 'utf8')); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => { for (const p of Object.values(procs)) p.kill(); if (process.env.KEEP) for (const n of ['pi', 'laptop']) console.log(fs.readFileSync(path.join(dir, `${n}.log`), 'utf8')); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
 const call = async (base, method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
