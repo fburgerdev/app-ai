@@ -44,13 +44,23 @@ export const isRemote = () => active === 'remote';
 // Background work (cards, events, sorting threads) runs on one computer only: on the
 // laptop while it does the work; on the Pi while the laptop has not said for a few
 // minutes that it does.
-export const mayRunBackground = () => (enabled() ? !isRemote() : Date.now() - leaseAt > LEASE_MS);
+export const mayRunBackground = () => !finalizing && (enabled() ? !isRemote() : Date.now() - leaseAt > LEASE_MS);
+
+// Getting ready to suspend: no new background work starts, and what is here is saved, so
+// the status line can say when the computer can sleep. Any message from Florian ends it.
+let finalizing = false;
+export const isFinalizing = () => finalizing;
+export function setFinalize(on) {
+  finalizing = Boolean(on);
+  if (finalizing) datasync.saveNow('getting ready to suspend').catch(() => {});
+  return finalizing;
+}
 export const leaseHeld = () => !enabled() && Date.now() - leaseAt <= LEASE_MS;
 export function takeLease(on) { leaseAt = on ? Date.now() : 0; }
 
 export function status() {
   return {
-    enabled: enabled(), choice, active, online, switching, note, step, handedOverAt, checkedAt,
+    enabled: enabled(), choice, active, online, switching, note, step, handedOverAt, checkedAt, finalizing,
     remote: config.remote, remoteName: config.remoteName, localName: config.localName,
   };
 }

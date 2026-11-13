@@ -88,6 +88,9 @@ const DEFAULTS = {
 
   // The queue: a small model decides what you see next, from what is waiting, your mood
   // line and what it has learned from your choices.
+  // Which tier a message gets when the tier is "auto": a cheap model reads it and picks.
+  routeModel: 'haiku',
+
   queue: {
     pickModel: 'haiku', // ranks what is waiting
     learnModel: 'sonnet', // rewrites the learned profile from your choices

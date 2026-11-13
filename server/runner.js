@@ -15,7 +15,7 @@ import * as google from './google.js';
 import { logRead, logToolRead } from './reads.js';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
-import { getState } from './state.js';
+import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices } from './projects.js';
 import * as repos from './repos.js';
 
@@ -277,6 +277,8 @@ async function runTurn(threadId, prompt) {
       store.updateThread(threadId, { repoSet: true, ...(r ? { repo: r } : {}) });
     }
     activity('Starting');
+    const tier = await tierFor(threadId, prompt);
+    store.updateThread(threadId, { lastTier: tier.name }, { quiet: true });
 
     const base = {
       cwd: brain.brainDir(),
@@ -284,8 +286,8 @@ async function runTurn(threadId, prompt) {
       repoDir,
       reposDir: config.reposDir,
       repoTools,
-      model: getState().model,
-      effort: getState().effort,
+      model: tier.model,
+      effort: tier.effort,
       mode: 'thread',
       artifactsDir: store.artifactsDir(threadId),
       readDirs: [store.uploadsDir(threadId)],
@@ -470,4 +472,62 @@ export async function backfillProjects() {
   const todo = store.listThreads().filter((t) => !t.project && !t.projectGuessed && !NO_GUESS.has(t.kind) && !t.archived && (t.messageCount || 0) >= 2);
   for (const t of todo) await guessProject(t.id).catch(() => {});
   return todo.length;
+}
+
+// ---------- how much a message is worth ----------
+//
+// Florian's five tiers, from cheap to extra. A thread can have one pinned; otherwise a
+// cheap model reads the message and picks, so he never has to choose. What it picked is
+// shown under Claude's answer, and "Again, higher" runs the same message one tier up.
+
+function tierOf(name) { return { name, ...TIERS[name] }; }
+
+export async function tierFor(threadId, prompt) {
+  const thread = store.getThread(threadId);
+  const pinned = thread?.tier && TIER_NAMES.includes(thread.tier) ? thread.tier : '';
+  if (pinned) return tierOf(pinned);
+  const chosen = getState().tier;
+  if (chosen !== 'auto') return tierOf(TIER_NAMES.includes(chosen) ? chosen : 'default');
+  const messages = store.readMessages(threadId);
+  const earlier = messages.slice(-5, -1).map((m) => `${m.role === 'user' ? 'Florian' : 'Claude'}: ${messageText(m).slice(0, 400)}`).join('\n');
+  let answer = '';
+  try {
+    if (config.fake) {
+      const text = String(prompt).toLowerCase();
+      answer = /strategy|negotiat|concept|paper/.test(text) ? 'high' : /quick|short|typo|look up/.test(text) ? 'cheap' : 'default';
+    } else {
+      const result = await runAgent({
+        prompt: readPrompt('route.md', {
+          tiers: TIER_NAMES.map((n) => `- ${n}: ${TIERS[n].about}`).join('\n'),
+          title: thread?.title || 'new',
+          project: thread?.project || 'none',
+          history: earlier ? `What was said before:\n\n${earlier}` : 'Nothing was said before; this starts the thread.',
+          message: String(prompt).slice(0, 4000),
+        }),
+        cwd: DATA_DIR,
+        systemAppend: 'You answer with one word from the list and nothing else.',
+        model: config.routeModel || 'haiku',
+        mode: 'plain',
+        usageKind: 'plain',
+        fake: false,
+      });
+      answer = String(result.finalText || result.text || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+    }
+  } catch { /* the default carries the turn */ }
+  return tierOf(TIER_NAMES.includes(answer) ? answer : 'default');
+}
+
+// The same message again, one tier higher, pinned on the thread from now on.
+export function againHigher(threadId) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('No such thread');
+  if (thread.state === 'working') throw new Error('Claude is still working on this thread.');
+  const messages = store.readMessages(threadId);
+  const last = [...messages].reverse().find((m) => m.role === 'user');
+  if (!last) throw new Error('There is nothing to run again here.');
+  const at = TIER_NAMES.indexOf(thread.lastTier || getState().tier);
+  const next = TIER_NAMES[Math.min(TIER_NAMES.length - 1, (at < 0 ? 2 : at) + 1)];
+  store.updateThread(threadId, { tier: next });
+  startTurn(threadId, promptFor(threadId, messageText(last), last.files || []));
+  return { thread: store.getThread(threadId), tier: next };
 }

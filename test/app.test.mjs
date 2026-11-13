@@ -97,16 +97,15 @@ const artifactText = async (id, name, v) => (await fetch(`${base}/api/threads/${
 let mailThread;
 let planThread;
 
-test('the app starts with Opus on high effort', async () => {
+test('the app starts on Auto, with the five tiers', async () => {
   const s = await until(async () => { const x = await state(); return x?.brain.brain.ready ? x : null; }, 'brain ready');
-  assert.equal(s.settings.model, 'opus');
-  assert.equal(s.settings.effort, 'high');
-  assert.deepEqual(s.settings.models, ['haiku', 'sonnet', 'opus', 'fable']);
-  assert.deepEqual(s.settings.efforts, ['medium', 'high']);
-  const changed = (await call('PUT', '/api/settings', { model: 'fable', effort: 'medium' })).data;
-  assert.equal(changed.model, 'fable');
-  assert.equal((await call('PUT', '/api/settings', { model: 'gpt', effort: 'low' })).data.model, 'fable', 'unknown values are ignored');
-  await call('PUT', '/api/settings', { model: 'opus', effort: 'high' });
+  assert.equal(s.settings.tier, 'auto');
+  assert.deepEqual(s.settings.tierNames, ['cheap', 'low', 'default', 'high', 'extra']);
+  assert.deepEqual(s.settings.tiers.cheap, { label: 'Cheap', model: 'opus', effort: 'low', about: s.settings.tiers.cheap.about });
+  assert.deepEqual(s.settings.tiers.extra, { label: 'Extra', model: 'fable', effort: 'high', about: s.settings.tiers.extra.about });
+  assert.equal((await call('PUT', '/api/settings', { tier: 'high' })).data.tier, 'high');
+  assert.equal((await call('PUT', '/api/settings', { tier: 'enormous' })).data.tier, 'high', 'unknown values are ignored');
+  await call('PUT', '/api/settings', { tier: 'auto' });
 });
 
 test('a thread started from a project carries it; the tree shows it', async () => {

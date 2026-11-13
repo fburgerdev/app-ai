@@ -10,7 +10,7 @@ const els = {
   app: $('app'), lists: $('rail-lists'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
   send: $('send'), spin: $('spin'), sendDone: $('send-done'), defer: $('defer'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
-  mood: $('mood'), model: $('model'), effort: $('effort'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
+  tier: $('tier'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
   openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openScratch: $('open-scratch'), openSettings: $('open-settings'),
@@ -27,7 +27,7 @@ const S = {
   brain: null,
   config: {},
   connections: null,
-  settings: { mood: '', model: 'opus', effort: 'high', models: [], efforts: [] },
+  settings: { model: 'opus', effort: 'high', tier: 'auto', tiers: {}, tierNames: [] },
   queue: { order: [], why: '', ranking: false },
   cards: { running: false, ready: 0 },
   projects: null,
@@ -189,13 +189,34 @@ function queueLists() {
       : h('button', { class: 'link', type: 'button', onclick: () => api('POST', '/api/cards/make', {}).catch((e) => toast(e.message)) }, 'Look for opportunities')),
   ], null, 'queue'));
   if (busy.length) parts.push(section('Claude is working', busy.length, busy.map(railItem)));
-  // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
-  // brain update writes their line. Click one to wake it into the inbox.
+  const toggle = closed.length ? h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show') : null;
+  parts.push(section('Done', closed.length, [
+    h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
+    ...(S.showDone ? closed.map(railItem) : []),
+  ], toggle, 'done'));
+  parts.push(...sleepingSection());
+  parts.push(...eventsSection());
+  return parts;
+}
+
+// Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
+// brain update writes their line. Waking one asks once more, in place: a next action
+// started by accident is a real nuisance.
+let armedWake = '';
+function sleepingSection() {
   const asleep = S.next?.actions || [];
   const deferred = (S.next?.deferred || []).filter((d) => S.threads.get(d.id)?.deferred);
   for (const t of all()) if (t.deferred && !t.archived && !deferred.some((d) => d.id === t.id)) deferred.push({ id: t.id, title: t.title, project: t.project || '' });
   if (asleep.length || deferred.length) {
     const wake = async (a, button) => {
+      // Once more, in place: the first click only arms it.
+      if (armedWake !== a.text) {
+        armedWake = a.text;
+        renderRail();
+        setTimeout(() => { if (armedWake === a.text) { armedWake = ''; renderRail(); } }, 4000);
+        return;
+      }
+      armedWake = '';
       button.disabled = true;
       try {
         const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
@@ -204,21 +225,38 @@ function queueLists() {
         openThread(out.thread.id);
       } catch (err) { toast(err.message); button.disabled = false; }
     };
-    parts.push(section('Next actions', asleep.length + deferred.length, [
-      ...asleep.map((a) => h('button', { class: 'item sleep-item', type: 'button', title: `${a.show}\n\nAsleep in Next Actions.md. Click to wake it: it becomes a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
-        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
-        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show), a.project ? h('span', { class: 'sleep-sub' }, a.project) : null))),
+    return [section('Next actions', asleep.length + deferred.length, [
+      ...asleep.map((a) => h('button', { class: `item sleep-item${armedWake === a.text ? ' is-armed' : ''}`, type: 'button', title: `${a.show}\n\nAsleep in Next Actions.md. Waking it makes it a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
+        h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, armedWake === a.text ? '→' : 'z'),
+        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show),
+          h('span', { class: 'sleep-sub' }, armedWake === a.text ? 'Click again to start it' : (a.project || 'no project'))))),
       ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
         h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
-    ]));
+    ])];
   }
-  const toggle = closed.length ? h('button', { class: 'link', type: 'button', onclick: () => { S.showDone = !S.showDone; renderRail(); } }, S.showDone ? 'Hide' : 'Show') : null;
-  parts.push(section('Done', closed.length, [
-    h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
-    ...(S.showDone ? closed.map(railItem) : []),
-  ], toggle, 'done'));
-  return parts;
+  return [];
+}
+
+// Events: what is coming up in the calendar, with its thread. Not part of the queue.
+function eventsSection() {
+  const open = openEvents();
+  const coming = comingEvents();
+  if (!open.length && !coming.length) return [];
+  const item = (t, soon) => h('button', {
+    class: `item event-item${soon ? ' is-coming' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', disabled: soon,
+    title: soon ? `${t.title}\n${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
+    onclick: () => openThread(t.id),
+  },
+  h('span', { class: 'sleep-main' },
+    h('span', { class: 'sleep-text' }, t.title),
+    h('span', { class: 'sleep-sub' }, `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ' · not open yet' : ''}`)),
+  soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event)));
+  return [section('Events', open.length, [
+    ...open.map((t) => item(t, false)),
+    ...coming.map((t) => item(t, true)),
+    h('p', { class: 'group-foot group-note' }, 'From your calendar. Each stays until you mark it done.'),
+  ])];
 }
 
 // ---------- the folder outline: areas, projects, and the threads in them ----------
@@ -248,14 +286,15 @@ function pathOf(project) {
 // projects and areas without a project are grey and at the bottom. Click one to see its
 // threads and what can be done there. Drop a thread on one to file it.
 
-function outlineRow({ name, project, about, touched, open, grey, isArea, hereName }) {
+function outlineRow({ name, sub, project, about, touched, open, grey, isArea, hereName }) {
   return h('div', { class: `out${grey ? ' is-grey' : ''}${hereName === project ? ' is-here' : ''}`, dataset: { drop: 'folder', project } },
     h('button', {
       class: 'out-row', type: 'button',
       title: `${name}${about ? `\n${about}` : ''}${open ? `\n${open} open ${open === 1 ? 'thread' : 'threads'}` : ''}\nClick to read its note`,
       onclick: () => openPanel({ kind: 'note', link: project }),
     },
-    h('span', { class: 'out-name' }, name, open ? h('span', { class: 'out-mark', 'aria-label': 'has open threads' }) : null),
+    h('span', { class: 'out-name' }, name, open ? h('span', { class: 'out-mark', 'aria-label': 'has open threads' }) : null,
+      sub ? h('span', { class: 'out-sub' }, sub) : null),
     touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null),
     h('button', { class: 'out-plus', type: 'button', title: `New thread ${isArea ? 'in' : 'on'} ${name}`, 'aria-label': `New thread on ${name}`, onclick: () => openNew(project) }, '+'));
 }
@@ -314,12 +353,18 @@ function treeNodes() {
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Projects'),
       bulkButton('active', '+ active', active.length, `Start a check-in thread on every active project. ${each}.`),
       bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`)),
-    h('div', { class: 'out-list' }, ...active.map((p) => row(p, false)), ...paused.map((p) => row(p, true))),
+    h('div', { class: 'out-list' }, ...active.map((p) => row(p, false))),
     !projects.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
-    ...somedayNodes(t.someday || []),
+    // Paused means he is waiting on something, so they are folded away and unfold on hover.
+    paused.length ? h('div', { class: 'out-folded' },
+      h('div', { class: 'out-folded-head' }, `${paused.length} paused`),
+      h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row(p, true)))) : null,
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Areas'),
       bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
+    h('button', { class: 'tree-sub', type: 'button', title: 'The order and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
+      ranked.length ? `Order from 30,000 ft · ${ranked.length} of ${areas.length} ranked` : 'No order in 30,000 ft yet · by recency'),
     h('div', { class: 'out-list' }, ...areas.sort(byRank).map(areaRow)),
+    ...somedayNodes(t.someday || []),
   ].filter(Boolean);
   const second = peopleNodes(t.people || [], row, dealt);
   return { first, second };
@@ -330,7 +375,8 @@ function treeNodes() {
 function peopleNodes(people, row, dealt) {
   if (!people.length) return [h('p', { class: 'tree-note' }, 'No people in the vault.')];
   const list = people.map((p) => ({
-    name: p.name.replace(/\s*\(([^)]*)\)$/, ''), project: p.name, group: p.group,
+    // "Flo (Mensa Revolution)": the name, and underneath it what it says about them.
+    name: p.name.replace(/\s*\(([^)]*)\)\s*$/, ''), sub: /\(([^)]*)\)\s*$/.exec(p.name)?.[1] || '', project: p.name, group: p.group,
     about: `${p.name}${p.waitsFor ? `\nWaiting for: ${p.waitsFor}` : ''}\n${p.about || ''}`,
     touched: dealt(p.name, p.contacted), open: threadsIn(p.name).filter((x) => x.state !== 'done').length,
   }));
@@ -931,6 +977,18 @@ function renderHead() {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
   } else if (t.state === 'ready') {
     status = h('span', { class: 'status status-ready' }, 'Waiting for you');
+    // What the last turn was worth, and the way to say "that deserved more".
+    if (t.lastTier && t.kind !== 'card') {
+      const label = S.settings.tiers?.[t.lastTier]?.label || t.lastTier;
+      const top = t.lastTier === (S.settings.tierNames || []).at(-1);
+      actions.push(h('button', {
+        class: 'btn btn-quiet btn-tier', type: 'button', disabled: top,
+        title: top ? `This ran on ${label}, the highest tier.` : `This ran on ${label}${t.tier ? ' (pinned)' : ' (picked for the message)'}. Run the same message again one tier up, and keep that tier for this thread.`,
+        onclick: async () => {
+          try { const out = await api('POST', `/api/threads/${t.id}/again`, {}); S.threads.set(t.id, out.thread); toast(`Again on ${S.settings.tiers?.[out.tier]?.label || out.tier}.`); } catch (err) { toast(err.message); }
+        },
+      }, label, top ? null : h('span', { class: 'tier-up', 'aria-hidden': 'true' }, '↑')));
+    }
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
@@ -968,6 +1026,7 @@ function renderComposer() {
   }
   els.send.textContent = verb;
   composerVerb = verb;
+  renderSettings(); // the tier belongs to the open thread
   els.defer.hidden = !t || t.state === 'done';
   renderDoneButton();
   renderAttached();
@@ -1302,7 +1361,7 @@ async function send(done = false) {
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
     // An event's thread is a session: it stays open while Claude answers.
-    if (!done && from && S.threads.get(from)?.kind === 'event') { renderEvents(); return; }
+    if (!done && from && S.threads.get(from)?.kind === 'event') { renderRail(); return; }
     advance(from);
   } catch (err) {
     toast(err.message);
@@ -1742,7 +1801,7 @@ async function fillConnections(body, token) {
   const d = c.data;
   body.append(block('Saving the app’s state', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
     note(d.error || (d.enabled
-      ? `Threads, water levels, the scratchpad, the mood line and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
+      ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
       : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
   if (c.app?.commit) {
@@ -1811,7 +1870,6 @@ function fillKeys(body) {
     ['Alt J / Alt K', 'Next / previous thread in the inbox'],
     ['Alt A', 'Show or hide the files Claude made in this thread'],
     ['Alt U', 'Update the brain'],
-    ['Alt M', 'Jump to the mood line'],
     ['Alt P', 'Scratchpad, and back'],
     ['Esc', 'Close the side panel or this window'],
   ];
@@ -1885,6 +1943,8 @@ document.addEventListener('visibilitychange', () => {
 // safe to suspend the laptop, and offers to hand everything over to the Pi (and back).
 
 let statusNow = null;
+// A little single-board computer, for the Pi. (Not the Raspberry Pi logo: that is theirs.)
+const BOARD = '<svg class="board" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M8 2.5v2.5M12 2.5v2.5M16 2.5v2.5M8 19v2.5M12 19v2.5M16 19v2.5M2.5 8H5M2.5 12H5M2.5 16H5M19 8h2.5M19 12h2.5M19 16h2.5"/></svg>';
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const quoted = (list, n = 2) => list.slice(0, n).map((t) => `“${clip(t.title, 30)}”`).join(', ') + (list.length > n ? ` and ${list.length - n} more` : '');
 
@@ -1909,6 +1969,10 @@ function renderStatus() {
   const act = (label, choice, opts = {}) => h('button', { class: `btn ${opts.quiet ? 'btn-quiet' : ''} status-btn`, type: 'button', disabled: Boolean(opts.off), title: opts.title || '', onclick: async () => {
     try { statusNow = { ...st, link: await api('POST', '/api/link', { choice }) }; renderStatus(); setTimeout(checkStatus, 400); } catch (err) { toast(err.message); }
   } }, label);
+  // Getting ready to suspend: nothing new starts, everything is saved, and the line says when.
+  const ready = (on) => h('button', { class: `btn ${on ? '' : 'btn-quiet'} status-btn`, type: 'button', title: on ? 'Stop getting ready; the app works as usual again.' : 'Finish what is running, start nothing new, save everything to GitHub, and say when it is safe to suspend.', onclick: async () => {
+    try { await api('POST', '/api/status/finalize', { on: !on }); checkStatus(); } catch (err) { toast(err.message); }
+  } }, on ? 'Never mind' : 'Get ready to suspend');
 
   if (l.enabled && l.step && l.choice === 'remote' && !onPi) {
     tone = 'busy';
@@ -1929,17 +1993,19 @@ function renderStatus() {
     text = `Handed over: the ${pi} has everything and does the work. Safe to suspend the ${lap}; it takes everything back when it wakes.`;
     buttons.push(act(`Take back to the ${lap}`, 'local', { quiet: true }));
   } else {
-    if (running.length) { tone = 'busy'; text = `${running.join(', ').replace(/^./, (c) => c.toUpperCase())}. Keep the ${lap} awake.`; }
+    const getting = l.finalizing;
+    if (running.length) { tone = 'busy'; text = `${getting ? 'Getting ready: ' : ''}${running.join(', ').replace(/^./, (c) => c.toUpperCase())}. Keep the ${lap} awake.`; }
     else if (unsaved) { tone = 'busy'; text = st.saved.error ? `Not saved to GitHub: ${st.saved.error}` : 'Saving the latest changes to GitHub…'; }
-    else { tone = 'ok'; text = `Everything is saved. Safe to suspend the ${lap}.`; }
+    else { tone = 'ok'; text = getting ? `Ready. Nothing is running, everything is saved: safe to suspend the ${lap}.` : `Everything is saved. Safe to suspend the ${lap}.`; }
     if (l.note) text = `${text} ${l.note}`;
+    buttons.push(ready(Boolean(getting)));
     if (l.enabled) {
       const missing = [...running, ...(unsaved ? [plural(st.saved.files + st.saved.ahead, 'change', 'changes') + ' not on GitHub yet'] : [])];
       const title = !l.online ? `The ${pi} is not reachable.`
         : missing.length ? `Still to transfer: ${missing.join('; ')}. The handover waits for that.` : `Ready: everything is saved, the ${pi} can take over now.`;
       buttons.push(h('span', { class: `status-ready ${l.online ? (missing.length ? 'is-wait' : 'is-go') : 'is-off'}`, title },
         !l.online ? `${pi} is off` : missing.length ? `${pi}: waits for ${missing.length === 1 ? 'one thing' : `${missing.length} things`}` : `${pi} is ready`));
-      buttons.push(act(`Hand over to the ${pi}`, 'remote', { off: !l.online, title: l.online ? `The ${lap} saves everything to GitHub, the ${pi} takes it in, and the ${pi} does the work until the ${lap} takes it back. The line here says when it is safe to suspend.` : `The ${pi} is not reachable.` }));
+      buttons.push(act(h('span', { class: 'pi-name' }, 'Hand over to the ', svg(BOARD), pi), 'remote', { off: !l.online, title: l.online ? `The ${lap} saves everything to GitHub, the ${pi} takes it in, and the ${pi} does the work until the ${lap} takes it back. The line here says when it is safe to suspend.` : `The ${pi} is not reachable.` }));
     }
   }
   const warn = st.unpushed.length
@@ -1948,7 +2014,7 @@ function renderStatus() {
     : null;
   bar.className = `statusbar is-${tone}`;
   bar.replaceChildren(...[
-    h('span', { class: 'status-side' }, h('span', { class: `status-dot ${onPi ? 'is-remote' : 'is-local'}`, 'aria-hidden': 'true' }), onPi ? pi : lap),
+    h('span', { class: 'status-side' }, h('span', { class: `status-dot is-${tone}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap),
     h('span', { class: 'status-text', role: 'status' }, text),
     warn,
     h('span', { class: 'status-actions' }, buttons),
@@ -2011,9 +2077,10 @@ setInterval(() => { if (!document.hidden) checkUsage(); }, 60_000);
 
 // ---------- events: what is coming up in the calendar ----------
 //
-// Not in the inbox. Each entry worth preparing has a thread of its own that opens a day
-// before (important) or on the morning of the day, and stays until it is marked done:
-// for preparing before and debriefing after.
+// Each entry worth preparing has a thread of its own that opens a day before (important)
+// or on the morning of the day, and stays until it is marked done: for preparing before
+// and debriefing after. They live in their own section of the inbox drawer, below the
+// next actions, and never in the queue.
 
 const eventThreads = () => [...S.threads.values()].filter((t) => t.kind === 'event' && t.event);
 const openEvents = () => eventThreads().filter((t) => !t.hidden && t.state !== 'done').sort((a, b) => a.event.start - b.event.start);
@@ -2034,45 +2101,16 @@ function eventPhase(e) {
   return 'Debrief';
 }
 
-function renderEvents() {
-  const box = document.getElementById('events');
-  if (box.classList.contains('is-open')) return;
-  const open = openEvents();
-  const waiting = open.filter((t) => t.state === 'ready').length;
-  const next = open[0];
-  const button = h('button', { class: `top-btn events-btn${open.length ? '' : ' is-empty'}`, type: 'button', 'aria-haspopup': 'menu', title: open.length ? 'Events: preparing before, debriefing after' : 'Events: nothing coming up' },
-    svg('<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>'),
-    h('span', { class: 'top-label' }, next ? clip(next.title, 22) : 'Events'),
-    next ? h('span', { class: 'events-when' }, eventPhase(next.event) === 'Debrief' ? 'debrief' : eventWhen(next.event).replace(/^Today /, '')) : null,
-    waiting ? h('span', { class: 'top-count' }, String(waiting)) : null);
-  button.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (box.classList.contains('is-open')) { closePickers(); return; }
-    closePickers();
-    box.classList.add('is-open');
-    const item = (t, coming) => h('button', { class: `pick-opt event-opt${t.id === S.current ? ' is-on' : ''}${coming ? ' is-coming' : ''}`, type: 'button', disabled: coming, onclick: () => { closePickers(); openThread(t.id); } },
-      h('span', { class: 'event-main' },
-        h('span', { class: 'event-title' }, t.title),
-        h('span', { class: 'event-sub' }, coming ? `${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${t.event.important ? '' : ' · small'}`)),
-      coming ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event)));
-    const open = openEvents();
-    const coming = comingEvents();
-    box.append(h('div', { class: 'pick-menu events-menu', role: 'menu' },
-      open.length ? open.map((t) => item(t, false)) : h('p', { class: 'link-status' }, 'Nothing to prepare or debrief right now.'),
-      coming.length ? [h('p', { class: 'events-head' }, 'Coming'), ...coming.map((t) => item(t, true))] : null,
-      h('p', { class: 'link-status' }, 'From your calendar. Important entries open a day before, smaller ones on the day. Each stays until you mark it done.')));
-  });
-  box.replaceChildren(button);
-}
-setInterval(() => { if (!document.hidden) renderEvents(); }, 60_000);
+// The event rows say "Today 15:00": they are redrawn so that stays true.
+setInterval(() => { if (!document.hidden) renderRail(); }, 60_000);
 
 // ---------- pickers: model and effort ----------
 
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
-const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } renderEvents(); renderUsage(); };
+const closePickers = () => { for (const el of document.querySelectorAll('.pick.is-open')) { el.classList.remove('is-open'); el.querySelector('.pick-menu')?.remove(); } renderUsage(); };
 
-function picker(host, { options, value, onPick }) {
-  const name = (m) => m.charAt(0).toUpperCase() + m.slice(1);
+function picker(host, { options, value, onPick, name: naming, describe }) {
+  const name = naming || ((m) => m.charAt(0).toUpperCase() + m.slice(1));
   const label = host.dataset.label;
   const button = h('button', { class: 'pick-btn', type: 'button', 'aria-haspopup': 'listbox', 'aria-label': `${label}: ${name(value)}` },
     h('span', { class: 'pick-label' }, label), h('span', {}, name(value)), svg(CHEVRON));
@@ -2081,10 +2119,11 @@ function picker(host, { options, value, onPick }) {
     const wasOpen = host.classList.contains('is-open');
     closePickers();
     if (wasOpen) return;
-    const menu = h('div', { class: 'pick-menu', role: 'listbox' }, options.map((o) => h('button', {
+    const menu = h('div', { class: `pick-menu${describe ? ' is-wide' : ''}`, role: 'listbox' }, options.map((o) => h('button', {
       class: `pick-opt${o === value ? ' is-on' : ''}`, type: 'button', role: 'option', 'aria-selected': String(o === value),
+      title: describe ? describe(o) : '',
       onclick: () => { closePickers(); if (o !== value) onPick(o); button.focus(); },
-    }, name(o))));
+    }, describe ? h('span', { class: 'pick-two' }, h('span', {}, name(o)), h('span', { class: 'pick-sub' }, describe(o))) : name(o))));
     menu.addEventListener('keydown', (ev) => {
       const opts = [...menu.children];
       const i = opts.indexOf(document.activeElement);
@@ -2183,16 +2222,34 @@ document.addEventListener('mouseup', () => setTimeout(maybeShowQuote, 0));
 document.addEventListener('keyup', (e) => { if (e.shiftKey) maybeShowQuote(); });
 els.scroller.addEventListener('scroll', hideQuote, { passive: true });
 
-// The mood line saves as you type. Enter just puts you back in the reply box.
-const saveMood = debounce(() => api('PUT', '/api/settings', { mood: els.mood.value }).catch((e) => toast(e.message)), 500);
-els.mood.addEventListener('input', saveMood);
-els.mood.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); els.mood.blur(); if (!els.composer.hidden) focusInput(); } });
+// How much a message is worth: five tiers, or Auto, where a cheap model picks per
+// message. A tier chosen while a thread is open is pinned on that thread; with no thread
+// open it sets what new threads get.
 function renderSettings() {
   const s = S.settings;
-  if (document.activeElement !== els.mood) els.mood.value = s.mood || '';
-  const set = (key) => (value) => { S.settings = { ...S.settings, [key]: value }; renderSettings(); api('PUT', '/api/settings', { [key]: value }).catch((e) => toast(e.message)); };
-  picker(els.model, { options: s.models || [], value: s.model, onPick: set('model') });
-  picker(els.effort, { options: s.efforts || [], value: s.effort, onPick: set('effort') });
+  const t = S.current ? S.threads.get(S.current) : null;
+  const names = s.tierNames || [];
+  const value = t?.tier || (t ? 'auto' : s.tier || 'auto');
+  const label = (n) => (n === 'auto' ? (t ? 'Auto' : 'Auto') : (s.tiers?.[n]?.label || n));
+  picker(els.tier, {
+    options: ['auto', ...names],
+    value,
+    name: label,
+    describe: (n) => (n === 'auto'
+      ? `Picked per message by a cheap model${t ? '' : ', so you never have to choose'}.`
+      : `${s.tiers?.[n]?.model || ''} ${s.tiers?.[n]?.effort || ''} — ${s.tiers?.[n]?.about || ''}`),
+    onPick: (n) => {
+      if (t) {
+        api('POST', `/api/threads/${t.id}/tier`, { tier: n === 'auto' ? '' : n })
+          .then((out) => { S.threads.set(t.id, out.thread); renderSettings(); })
+          .catch((e) => toast(e.message));
+        return;
+      }
+      S.settings = { ...S.settings, tier: n };
+      renderSettings();
+      api('PUT', '/api/settings', { tier: n }).catch((e) => toast(e.message));
+    },
+  });
 }
 
 document.addEventListener('click', (e) => {
@@ -2241,7 +2298,6 @@ window.addEventListener('keydown', (e) => {
     KeyX: markDone,
     KeyU: () => updateBrain(),
     KeyA: toggleFiles,
-    KeyM: () => { els.mood.focus(); els.mood.select(); },
     KeyL: () => setRail(!els.app.classList.contains('rail-open')),
     KeyP: () => openPad(),
     KeyJ: () => step(1),
@@ -2306,7 +2362,7 @@ els.messages.addEventListener('touchcancel', () => endSwipe(true));
 // ---------- events from the server ----------
 
 function onThread(t) {
-  if (t.kind === 'event') queueMicrotask(renderEvents);
+  if (t.kind === 'event') queueMicrotask(renderRail);
   const before = S.threads.get(t.id);
   S.threads.set(t.id, t);
   renderRail();
@@ -2443,7 +2499,6 @@ async function load() {
   S.brain = state.brain;
   renderSettings();
   renderRail();
-  renderEvents();
   renderTree();
   renderBrain();
 }

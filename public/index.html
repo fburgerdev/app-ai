@@ -22,19 +22,16 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7h11L20 13v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5zM4 13h4.5a3.5 3.5 0 007 0H20"/></svg>
         <span class="top-label">Inbox</span><span id="inbox-count" class="top-count"></span>
       </button>
-      <input id="mood" class="mood" type="text" maxlength="300" autocomplete="off" spellcheck="false"
-             placeholder="Mood: what do you feel like?" aria-label="Mood line. The queue takes it into account; nothing is sent.">
       <span class="top-space"></span>
       <div id="usage" class="pick usage-pick"></div>
-      <div id="events" class="pick events-pick"></div>
+      <button id="open-scratch" class="top-btn" type="button" title="Scratchpad (Alt P)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h4"/></svg>
+        <span class="top-label">Scratchpad</span>
+      </button>
       <a id="talk-link" class="top-btn" href="/walk" title="Talk to the host">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
         <span class="top-label">Talk</span>
       </a>
-      <button id="open-scratch" class="top-btn" type="button" title="Scratchpad (Alt P)">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l1-4L16.5 4.5a2 2 0 013 3L9 18l-4 1zM14.5 6.5l3 3"/></svg>
-        <span class="top-label">Scratchpad</span>
-      </button>
       <button id="open-settings" class="top-btn top-icon" type="button" aria-label="Settings" title="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
       </button>
@@ -71,8 +68,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5l-8 8a5 5 0 01-7-7l8.5-8.5a3.3 3.3 0 014.7 4.7L9.8 17.1a1.7 1.7 0 01-2.4-2.4l7.4-7.4"/></svg>
             </button>
             <input id="file-input" type="file" multiple hidden>
-            <div id="model" class="pick" data-label="Model"></div>
-            <div id="effort" class="pick" data-label="Effort"></div>
+            <div id="tier" class="pick" data-label="Effort"></div>
             <span class="foot-space"></span>
             <button id="spin" class="btn btn-quiet btn-spin" type="button" title="Send this into a spin-off: a new thread that starts as a copy of this one. Nothing is sent here, and this thread goes to the back of the queue. (Alt Enter)">Send into spin-off</button>
             <button id="defer" class="btn btn-quiet" type="button" title="Defer: not now, but it stays yours. The thread sleeps under Next actions; the next brain update writes it into Next Actions.md and deletes the thread. Text in the box is kept as where you left off.">Defer</button>

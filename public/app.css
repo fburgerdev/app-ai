@@ -1273,8 +1273,6 @@ a.chip:hover { border-color: var(--muted); }
 .statusbar.is-busy { background: rgba(240, 180, 90, 0.06); }
 .status-side { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-weight: 600; flex: none; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
-.status-dot.is-local { background: var(--you); }
-.status-dot.is-remote { background: var(--done); }
 .statusbar.is-busy .status-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
 @keyframes pulse-dot { 50% { opacity: 0.35; } }
 .status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1331,3 +1329,36 @@ a.chip:hover { border-color: var(--muted); }
 .usage-bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
 .usage-bar span { width: 100%; border-radius: 3px 3px 0 0; background: var(--you); opacity: 0.8; }
 .usage-bar small { color: var(--faint); font-size: 10.5px; }
+
+/* ---------- what the composer is worth, people, folded projects ---------- */
+.pick-two { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.pick-sub { color: var(--muted); font-size: 11.5px; max-width: 260px; white-space: normal; }
+.out-sub { display: block; color: var(--faint); font-size: 11.5px; margin-top: 1px; }
+.tree-sub {
+  display: block; width: calc(100% - 16px); margin: -2px 8px 4px; padding: 2px 0;
+  border: 0; background: none; text-align: left; cursor: pointer;
+  color: var(--faint); font-size: 11.5px;
+}
+.tree-sub:hover { color: var(--you); }
+.out-folded { margin: 2px 0 0; }
+.out-folded-head { margin: 0 8px 2px 18px; color: var(--faint); font-size: 11.5px; cursor: default; }
+.out-folded-list { max-height: 0; overflow: hidden; transition: max-height 180ms ease; }
+.out-folded:hover .out-folded-list, .out-folded:focus-within .out-folded-list { max-height: 60vh; overflow: auto; }
+.out-folded:hover .out-folded-head, .out-folded:focus-within .out-folded-head { color: var(--muted); }
+
+/* ---------- the status line ---------- */
+.status-dot.is-ok { background: var(--done); }
+.status-dot.is-busy { background: var(--work); }
+.pi-name { display: inline-flex; align-items: center; gap: 5px; }
+.board { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+
+/* ---------- events in the inbox drawer ---------- */
+.event-item { align-items: center; }
+.event-item.is-coming { opacity: 0.5; cursor: default; }
+.sleep-item.is-armed { opacity: 1; background: var(--raised); }
+.sleep-item.is-armed .sleep-sub { color: var(--you); }
+.pick-menu.is-wide { width: 300px; }
+.pick-menu.is-wide .pick-opt { align-items: flex-start; white-space: normal; }
+.btn-tier { color: var(--faint); }
+.btn-tier:hover:not(:disabled) { color: var(--text); }
+.tier-up { margin-left: 4px; }

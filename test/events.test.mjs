@@ -185,3 +185,46 @@ test('usage is counted per run', async () => {
   assert.ok(u.byKind.some((k) => k.kind === 'Threads'));
   assert.ok(u.byKind.some((k) => k.kind === 'Brain update'));
 });
+
+test('the tier is picked per message, can be pinned, and runs again one higher', async () => {
+  // Auto: the stand-in picks "high" for strategy, "cheap" for something quick.
+  const hard = (await call('POST', '/api/threads', { text: 'Work out the negotiation strategy for the next meeting' })).data.thread;
+  await ready(hard.id);
+  assert.equal((await thread(hard.id)).thread.lastTier, 'high');
+  const quick = (await call('POST', '/api/threads', { text: 'Quick: what is the date of the next meeting?' })).data.thread;
+  await ready(quick.id);
+  assert.equal((await thread(quick.id)).thread.lastTier, 'cheap');
+  // Pinned on the thread, the picker is not asked again.
+  assert.equal((await call('POST', `/api/threads/${quick.id}/tier`, { tier: 'extra' })).data.thread.tier, 'extra');
+  await call('POST', `/api/threads/${quick.id}/messages`, { text: 'And the one after that?' });
+  await until(async () => (await thread(quick.id)).messages.filter((m) => m.role === 'assistant').length >= 2, 'second answer');
+  assert.equal((await thread(quick.id)).thread.lastTier, 'extra');
+  assert.equal((await call('POST', `/api/threads/${quick.id}/tier`, { tier: 'enormous' })).status, 400);
+  // Again, higher: the last message runs once more, one tier up.
+  await call('POST', `/api/threads/${hard.id}/tier`, { tier: '' });
+  const again = (await call('POST', `/api/threads/${hard.id}/again`, {})).data;
+  assert.equal(again.tier, 'extra');
+  const after = await ready(hard.id);
+  assert.equal(after.thread.lastTier, 'extra');
+  assert.equal(after.messages.filter((m) => m.role === 'user').length, 1, 'the message is not sent twice');
+  assert.equal(after.messages.filter((m) => m.role === 'assistant').length, 2);
+  // A fixed tier for everything, set in the settings.
+  await call('PUT', '/api/settings', { tier: 'low' });
+  const plain = (await call('POST', '/api/threads', { text: 'Work out the negotiation strategy, again' })).data.thread;
+  await ready(plain.id);
+  assert.equal((await thread(plain.id)).thread.lastTier, 'low', 'no picking when a tier is set');
+  await call('PUT', '/api/settings', { tier: 'auto' });
+});
+
+test('getting ready to suspend holds back background work and says when it is safe', async () => {
+  const before = (await call('GET', '/api/status')).data;
+  assert.equal(before.link.finalizing, undefined === before.link.finalizing ? undefined : false);
+  await call('POST', '/api/status/finalize', { on: true });
+  const on = (await call('GET', '/api/status')).data;
+  assert.equal(on.link.finalizing, true);
+  assert.equal(on.safe, true, 'nothing is running');
+  // A message from Florian means he is working again.
+  const t = (await call('POST', '/api/threads', { text: 'One more thing' })).data.thread;
+  assert.equal((await call('GET', '/api/status')).data.link.finalizing, false);
+  await ready(t.id);
+});

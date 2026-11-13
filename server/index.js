@@ -25,7 +25,7 @@ import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus } from './selfupdate.js';
 import { parseMail } from './mail.js';
-import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS } from './state.js';
+import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import { dateTimeDMY } from './util.js';
 import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
@@ -109,6 +109,8 @@ app.get('/api/status', async (req, res) => {
   const carding = cards.cardsStatus().running;
   const [saved, unpushed] = await Promise.all([datasync.unsaved(), repos.unpushed().catch(() => [])]);
   const busy = threads.length > 0 || extracting || carding;
+  // While getting ready: save as soon as the last turn ends, so "safe" is true when it is.
+  if (l.finalizing && !busy && saved.enabled && (saved.files || saved.ahead) && !saved.error) datasync.saveNow('getting ready to suspend').catch(() => {});
   const savedAll = !saved.enabled || (saved.files === 0 && saved.ahead === 0);
   // Changes waiting for the next timed save: saved now, so "saving" means saving.
   if (!savedAll && !saved.error && Date.now() - lastStatusSave > 15_000) { lastStatusSave = Date.now(); datasync.saveNow('state').catch(() => {}); }
@@ -122,6 +124,11 @@ app.get('/api/status', async (req, res) => {
   });
 });
 app.post('/api/status/save', async (req, res) => res.json(await datasync.saveNow('state')));
+// Getting ready to suspend: nothing new starts and everything is saved; the status line
+// says when it is safe. Works whether or not the Pi is there.
+app.post('/api/status/finalize', (req, res) => {
+  res.json({ finalizing: link.setFinalize(req.body?.on !== false) });
+});
 app.post('/api/sync/push', async (req, res) => {
   const out = await datasync.saveNow('handover');
   if (out.error) return res.status(502).json({ error: out.error });
@@ -184,7 +191,7 @@ app.get('/api/state', (req, res) => {
     brain: extraction.extractionStatus(),
     config: publicConfig(req),
     connections: connections(req),
-    settings: { ...getState(), models: MODELS, efforts: EFFORTS },
+    settings: { ...getState(), models: MODELS, efforts: EFFORTS, tiers: TIERS, tierNames: TIER_NAMES },
     queue: queue.queueStatus(),
     cards: cards.cardsStatus(),
   });
@@ -192,8 +199,8 @@ app.get('/api/state', (req, res) => {
 
 // The mood line, the model, the effort and the sleep time. Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, sleep } = req.body || {};
-  res.json(setState({ mood, model, effort, sleep }));
+  const { mood, model, effort, tier, sleep } = req.body || {};
+  res.json(setState({ mood, model, effort, tier, sleep }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.
@@ -349,6 +356,7 @@ app.get('/api/threads/:id/upload', (req, res) => {
 });
 
 app.post('/api/threads', (req, res) => {
+  link.setFinalize(false); // he is working again
   const text = cleanText(req.body.text);
   const waitingFiles = pendingFiles(req.body.files);
   if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
@@ -374,6 +382,7 @@ app.get('/api/threads/:id', (req, res) => {
 });
 
 app.post('/api/threads/:id/messages', (req, res) => {
+  link.setFinalize(false); // he is working again
   const thread = need(req, res);
   if (!thread) return;
   const text = cleanText(req.body.text);
@@ -431,6 +440,12 @@ app.post('/api/threads/:id/defer', (req, res) => {
     res.json({ thread: nextActions.defer(thread.id, String(req.body?.text || '')) });
   } catch (err) { res.status(409).json({ error: err.message }); }
 });
+// The same message again, one tier higher, pinned on the thread from now on.
+app.post('/api/threads/:id/again', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try { res.json(runner.againHigher(thread.id)); } catch (err) { res.status(409).json({ error: err.message }); }
+});
 // Next Actions, as sleeping threads; waking one makes it a thread in the inbox.
 app.get('/api/next-actions', (req, res) => res.json(nextActions.list()));
 app.post('/api/next-actions/wake', (req, res) => {
@@ -462,6 +477,14 @@ app.post('/api/queue/opened', (req, res) => {
   res.json({ ok: true });
 });
 
+// A tier pinned on this thread, or '' to let the picker decide per message again.
+app.post('/api/threads/:id/tier', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const tier = String(req.body?.tier || '');
+  if (tier && !TIER_NAMES.includes(tier)) return res.status(400).json({ error: 'Unknown tier' });
+  res.json({ thread: store.updateThread(thread.id, { tier }) });
+});
 app.post('/api/threads/:id/project', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;

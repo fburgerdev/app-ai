@@ -10,12 +10,23 @@ import { events } from './store.js';
 const FILE = path.join(DATA_DIR, 'state.json');
 
 export const MODELS = ['haiku', 'sonnet', 'opus', 'fable'];
-export const EFFORTS = ['medium', 'high'];
+export const EFFORTS = ['low', 'medium', 'high'];
+
+// What Claude costs for one turn, as five steps. Florian's names, 13-11-2026.
+export const TIERS = {
+  cheap: { label: 'Cheap', model: 'opus', effort: 'low', about: 'quick and mechanical: a short reply, a small edit, looking one thing up' },
+  low: { label: 'Low', model: 'opus', effort: 'medium', about: 'ordinary work: a normal mail, a small change, a clear question with a known answer' },
+  default: { label: 'Default', model: 'opus', effort: 'high', about: 'most real work: drafting something that matters, a few sources, a decision with context' },
+  high: { label: 'High', model: 'fable', effort: 'medium', about: 'hard: strategy, a tricky negotiation, a long document, code that has to be right' },
+  extra: { label: 'Extra', model: 'fable', effort: 'high', about: 'the hardest: a big piece of thinking or building, where getting it right is worth the wait' },
+};
+export const TIER_NAMES = ['cheap', 'low', 'default', 'high', 'extra'];
 
 const DEFAULTS = {
   mood: '',
   model: 'opus',
   effort: 'high',
+  tier: 'auto', // auto: a cheap model picks the tier per message; otherwise a fixed tier
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
@@ -35,6 +46,7 @@ function load() {
   state = { ...DEFAULTS, ...stored };
   if (!MODELS.includes(state.model)) state.model = DEFAULTS.model;
   if (!EFFORTS.includes(state.effort)) state.effort = DEFAULTS.effort;
+  if (state.tier !== 'auto' && !TIER_NAMES.includes(state.tier)) state.tier = DEFAULTS.tier;
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   return state;
 }
@@ -51,6 +63,7 @@ export function setState(patch) {
   if (typeof patch.mood === 'string') next.mood = patch.mood.slice(0, 300);
   if (MODELS.includes(patch.model)) next.model = patch.model;
   if (EFFORTS.includes(patch.effort)) next.effort = patch.effort;
+  if (patch.tier === 'auto' || TIER_NAMES.includes(patch.tier)) next.tier = patch.tier;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   if (patch.sleep && typeof patch.sleep === 'object') {

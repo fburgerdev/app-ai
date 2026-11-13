@@ -226,10 +226,12 @@ Events only come while the calendar is connected (Settings → Connections → G
 
 The outline on the right has two slides; scroll sideways (it snaps) or click the words on top.
 
-- **Projects**: projects as before, then **Someday** (each item, newest first, the parked old
-  actions grey; **+** starts a thread on the item: do it now, keep it, or fold it), then the
-  **areas** in the order of `Brain/Horizons/30,000 ft Goals.md` (a numbered list,
-  `1. [[Area]] — where it should stand`; areas not in it follow by recency).
+- **Projects**: the active projects, the paused ones folded away (they unfold on hover: paused
+  means you are waiting on something), then the **areas** in the order of
+  `Brain/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`;
+  areas not in it follow by recency, and the line above them opens that file), then **Someday**
+  (each item newest first, the parked old actions grey; **+** starts a thread on the item: do
+  it now, keep it, or fold it).
 - **People**: everyone in `Brain/People/`, in four groups from the `Status:` line in each
   person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**.
   Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
@@ -237,18 +239,33 @@ The outline on the right has two slides; scroll sideways (it snaps) or click the
 The order is the Brain's, not the app's: change a `Status:` line or the 30,000 ft list (ask
 Claude in a thread) and the outline follows.
 
+## What a message is worth
+
+Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium), **Default**
+(Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer
+starts on **Auto**: before each turn a cheap model reads the message and picks a tier, so there
+is nothing to choose. The tier it used is shown in the thread header; clicking it runs the same
+message again one tier up and pins that tier on the thread. Picking a tier while a thread is
+open pins it there; picking one with no thread open sets what everything gets.
+
 ## Next actions, Done and Defer
 
 A line in `Brain/Next Actions.md` and a thread in the inbox are two states of the same to-do.
 
-- The lines show in the inbox drawer under **Next actions**, asleep. Click one to **wake** it:
-  it becomes a thread in the inbox that opens with a brief, and the next brain update takes
-  the line out of the file.
+- The lines show in the inbox drawer under **Next actions**, below Done, asleep. Click one and
+  click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a
+  brief, and the next brain update takes the line out of the file. Below them is **Events**.
 - **Defer**, next to Send, puts any thread to sleep: it moves under Next actions, and the next
   brain update writes its to-do into `Next Actions.md` (with where you left off; text in the
   box is kept for that) and deletes the thread. Replying in a deferred thread wakes it again.
 - **Done** is the same button as "Send and done": with an empty box it closes the thread
   (also Alt+X), with text it keeps the message and closes without an answer.
+
+## Getting ready to suspend
+
+The status line's **Get ready to suspend** finishes what is running, starts nothing new (no
+cards, no events, no sorting), saves everything to GitHub, and turns green when it is safe to
+close the lid. It works whether or not the Pi is reachable. Anything you send ends it.
 
 ## Usage
 
