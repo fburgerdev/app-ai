@@ -332,7 +332,9 @@ async function runTurn(threadId, prompt) {
     const pending = fresh.pending || [];
     running.delete(threadId);
     if (pending.length && !result.aborted) {
-      store.updateThread(threadId, { pending: [] });
+      // What he added while Claude was working belongs to that work: it runs on the
+      // same tier, without asking him or the picker again.
+      store.updateThread(threadId, { pending: [], nextTier: fresh.nextTier || fresh.lastTier || '' });
       startTurn(threadId, pending.join('\n\n'));
     } else {
       const lastText = parts.filter((p) => p.type === 'text').at(-1)?.text || '';

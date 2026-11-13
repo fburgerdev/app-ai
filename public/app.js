@@ -133,7 +133,11 @@ const all = () => [...S.threads.values()].filter((t) => !t.hidden);
 // the server's, so threads from before pins existed fall under it too.)
 const isPinned = (t) => Boolean(t) && t.kind !== 'card' && (t.pinned ?? t.kind === 'event');
 const pinPlace = (t) => t.pinAt ?? t.event?.start ?? t.createdAt ?? 0;
-const pinned = () => all().filter((t) => isPinned(t) && t.state !== 'done').sort((a, b) => pinPlace(a) - pinPlace(b));
+// Two kinds, kept apart: events always first and always by date (their order is the
+// information, like a calendar's), then the threads he pinned, in the order he gave them.
+const pinnedEvents = () => all().filter((t) => isPinned(t) && t.event && t.state !== 'done').sort((a, b) => a.event.start - b.event.start);
+const pinnedThreads = () => all().filter((t) => isPinned(t) && !t.event && t.state !== 'done').sort((a, b) => pinPlace(a) - pinPlace(b));
+const pinned = () => [...pinnedEvents(), ...pinnedThreads()];
 function inbox() {
   const ready = all().filter((t) => t.state === 'ready' && !isPinned(t)).sort((a, b) => a.queuedAt - b.queuedAt);
   const pos = new Map(S.queue.order.map((id, i) => [id, i]));
@@ -252,12 +256,14 @@ function sleepingSection() {
 
 // Pinned: on the very top of the inbox, and not part of the queue. Events from the
 // calendar are here from the start; any thread can be pinned (the button in its header,
-// or drag it here) and unpinned. Drag inside the section to reorder. Events that have
-// not opened yet wait greyed at the bottom.
+// or drag it here) and unpinned. Events come first, by date, with those not open yet
+// greyed after them; then a thin divider; then his own pinned threads, which he reorders
+// by dragging. Events are not reordered: their order is their date.
 function pinnedSection() {
-  const open = pinned();
+  const events = pinnedEvents();
+  const mine = pinnedThreads();
   const coming = comingEvents();
-  if (!open.length && !coming.length) return [];
+  if (!events.length && !mine.length && !coming.length) return [];
   const plain = (t) => {
     const row = railItem(t);
     row.classList.add('pin-item');
@@ -274,9 +280,11 @@ function pinnedSection() {
     h('span', { class: 'sleep-text' }, t.title),
     h('span', { class: 'sleep-sub' }, `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ' · not open yet' : ''}`)),
   soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event))));
-  return [section('Pinned', open.length, [
-    ...open.map((t) => item(t, false)),
+  return [section('Pinned', events.length + mine.length, [
+    ...events.map((t) => item(t, false)),
     ...coming.map((t) => item(t, true)),
+    (events.length || coming.length) && mine.length ? h('div', { class: 'pin-divide', role: 'separator' }) : null,
+    ...mine.map((t) => item(t, false)),
   ], null, 'pin')];
 }
 
@@ -576,7 +584,10 @@ function dropAt(x, y) {
   if (kind === 'pin') {
     // Onto the pinned section: pins it, at the place it is dropped.
     if (t.kind === 'card' || t.hidden) return null;
-    const others = [...zone.querySelectorAll('.item[data-id]:not(.is-coming)')].filter((el) => el.dataset.id !== drag.id);
+    // An event has no place of its own to be dragged to: it stands by its date. One
+    // that was unpinned can be dropped here to pin it again.
+    if (t.event) return isPinned(t) && t.state !== 'done' ? null : { kind, zone, index: 0, others: [] };
+    const others = [...zone.querySelectorAll('.pin-item[data-id]')].filter((el) => el.dataset.id !== drag.id);
     let index = others.findIndex((el) => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2; });
     if (index < 0) index = others.length;
     return { kind, zone, index, others };
@@ -639,13 +650,16 @@ async function endDrag(drop) {
   if (target && t) {
     try {
       if (target.kind === 'pin') {
-        const ids = pinned().map((x) => x.id).filter((id) => id !== d.id);
-        ids.splice(target.index, 0, d.id);
         if (!isPinned(t) || t.state === 'done') S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/pin`, { pinned: true })).thread);
-        // Shown at once; the server's order follows.
-        ids.forEach((id, i) => { const x = S.threads.get(id); if (x) S.threads.set(id, { ...x, pinAt: i }); });
-        const out = await api('POST', '/api/pins/order', { ids });
-        for (const x of out.threads || []) S.threads.set(x.id, x);
+        // Only his own pinned threads have an order to keep; events stand by date.
+        if (!t.event) {
+          const ids = pinnedThreads().map((x) => x.id).filter((id) => id !== d.id);
+          ids.splice(target.index, 0, d.id);
+          // Shown at once; the server's order follows.
+          ids.forEach((id, i) => { const x = S.threads.get(id); if (x) S.threads.set(id, { ...x, pinAt: i }); });
+          const out = await api('POST', '/api/pins/order', { ids });
+          for (const x of out.threads || []) S.threads.set(x.id, x);
+        }
       } else if (target.kind === 'queue') {
         if (isPinned(t)) S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/pin`, { pinned: false })).thread);
         if (t.state === 'done') S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/state`, { state: 'ready' })).thread);
@@ -1123,8 +1137,9 @@ function updateButton() {
 
 // Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for the last
 // one used, Escape to go back to writing. Nothing is sent until one is picked. It asks
-// wherever a message starts a turn of Claude's (Send, Start, Add, a spin-off) and never
-// for "Done", which Claude does not answer. `go` gets the tier and sends.
+// where a message starts new work (Send, Start, a spin-off). Never for "Done", which
+// Claude does not answer, nor for a message added while Claude is working, which runs on
+// the tier of the work it belongs to. `go` gets the tier and sends.
 const asksTier = () => S.settings.tier === 'ask';
 function askTier(go) {
   closeTierAsk();
@@ -1481,7 +1496,9 @@ async function send(done = false, tier = '') {
   // "Done": Claude does not answer that, so there is nothing to pick. Not in a thread
   // that keeps a tier ("Again, higher") either.
   const t = S.current ? S.threads.get(S.current) : null;
-  if (!done && !tier && !t?.keepTier && asksTier()) return askTier((n) => send(false, n));
+  // Nor for a message added while Claude is working: it belongs to the work that is
+  // running and gets the tier chosen for that.
+  if (!done && !tier && !t?.keepTier && t?.state !== 'working' && asksTier()) return askTier((n) => send(false, n));
   closeTierAsk();
   const from = S.current;
   els.send.disabled = true;

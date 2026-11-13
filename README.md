@@ -246,8 +246,9 @@ Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium)
 is one switch, the same in every thread. **Auto**: before each turn a cheap model reads the
 message and picks a tier, so there is nothing to choose. **Quick select** instead asks on
 sending: five buttons over the box, 1 to 5 or a click, Enter for the one you used last, Escape
-back to writing. It asks wherever a message starts a turn (Send, Start, Add, a spin-off) and
-not for Done, which Claude does not answer. The tier a turn used is shown in the thread
+back to writing. It asks where a message starts new work (Send, Start, a spin-off). It does
+not ask for Done, which Claude does not answer, nor for a message added while Claude is
+working, which runs on the tier of the work it belongs to. The tier a turn used is shown in the thread
 header; clicking it runs the same message again one tier up and keeps that tier for the
 thread, until you pick Auto or Quick select there again.
 
@@ -256,8 +257,9 @@ thread, until you pick Auto or Quick select there again.
 The top of the inbox is **Pinned**. Events from the calendar are there from the start; any
 other thread gets there with **Pin** in its header or by dragging it onto the section. Pinned
 threads are not part of the queue: the app never jumps to one by itself, and each shows
-"Claude…" or "yours". Drag inside the section to reorder; the order is kept with the thread,
-so every device shows the same. Unpin (the button, or drag it into Next up) puts a thread back
+"Claude…" or "yours". Events always come first, by date, and cannot be reordered; below a thin
+line are the threads you pinned, which you drag into your own order. That order is kept with
+the thread, so every device shows the same. Unpin (the button, or drag it into Next up) puts a thread back
 among the others. Done or Defer takes the pin off.
 
 ## A thread's name, project and type

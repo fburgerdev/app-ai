@@ -1403,6 +1403,7 @@ a.chip:hover { border-color: var(--muted); }
 .pin-item { align-items: center; }
 .pin-item .item-mark { align-self: stretch; }
 .pin-item .item-text { flex: 1; }
+.pin-divide { height: 1px; margin: 6px 8px; background: var(--line); opacity: 0.7; }
 .pin-state { color: var(--muted); }
 .pin-state.is-ready { color: var(--s-ready); }
 .pin-state.is-working { color: var(--s-working); }
