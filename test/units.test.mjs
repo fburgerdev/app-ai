@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { buildPolicy, describeTool } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
+import { parseRanks } from '../server/projects.js';
 
 test('thread policy: writes only into the artifacts folder', async () => {
   const cwd = path.resolve('/vault');
@@ -48,4 +49,44 @@ test('diff marks added and removed words and keeps the rest', () => {
   assert.deepEqual(parts.map((p) => p.type), ['removed', 'added', 'same']);
   assert.equal(parts.filter((p) => p.type !== 'removed').map((p) => p.text).join(''), 'danke für das Gespräch');
   assert.equal(parts.filter((p) => p.type !== 'added').map((p) => p.text).join(''), 'vielen Dank für das Gespräch');
+});
+
+test('area ranks: only the list under "## Order" counts, and the rank is the place in it', () => {
+  const ranks = parseRanks([
+    '# 30,000 ft Goals',
+    '',
+    '1. [[Before]] — above the heading, not the ranking',
+    '',
+    '## Order',
+    '',
+    '1. [[Health]] — run a marathon',
+    '2. a line without an area',
+    '3. **[[Campaign|The campaign]]** — win [[Münster]]',
+    '4. [[Health]] — named twice, the first stands',
+    '',
+    '## Notes',
+    '',
+    '1. [[Writing]] — under a later heading, not the ranking',
+  ].join('\n'));
+  assert.deepEqual([...ranks.keys()], ['Health', 'Campaign']);
+  assert.deepEqual(ranks.get('Health'), { rank: 1, goal: 'run a marathon' });
+  // The unreadable line leaves no gap: third in the file, second in the ranking.
+  assert.deepEqual(ranks.get('Campaign'), { rank: 2, goal: 'win Münster' });
+});
+
+test('area ranks: without an "## Order" heading every numbered area line counts', () => {
+  const ranks = parseRanks([
+    '# Goals',
+    '1. [[Health]] — run a marathon',
+    '- [[Garden]] — a bullet, not numbered',
+    '## Later',
+    '5. [[Writing]] — one essay a month',
+    '7. [[Family]]',
+  ].join('\r\n'));
+  assert.deepEqual([...ranks], [
+    ['Health', { rank: 1, goal: 'run a marathon' }],
+    ['Writing', { rank: 2, goal: 'one essay a month' }],
+    ['Family', { rank: 3, goal: '' }],
+  ]);
+  assert.equal(parseRanks('').size, 0);
 });

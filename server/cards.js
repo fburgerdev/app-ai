@@ -215,6 +215,14 @@ export function decideCard(thread, outcome, how = '', reason = '') {
     title: thread.title,
     project: thread.project || '',
     to: thread.card.to || '',
+    // For looking at the cards later: why it was proposed, the link it came with, when
+    // it was made and how long it waited for him.
+    why: thread.card.why || '',
+    link: thread.card.link || '',
+    subject: cardText(thread).mail?.subject || '',
+    madeAt: thread.createdAt || 0,
+    waitedMs: thread.createdAt ? Date.now() - thread.createdAt : 0,
+    thread: thread.id,
     outcome,
     how,
     reason,

@@ -61,6 +61,10 @@ export function loadThreads() {
       meta.pending = [];
       writeJson(metaFile(id), meta);
     }
+    // Left over from older versions: a tier fixed on the thread (no longer read), and a
+    // tier picked for a message that started no turn, which the next message would get.
+    delete meta.tier;
+    if (meta.nextTier) meta.nextTier = '';
     threads.set(id, meta);
   }
   log(`loaded ${threads.size} threads`);
@@ -199,11 +203,25 @@ export function deleteThread(id) {
   return true;
 }
 
+// Pinned threads sit on top of the inbox and are not part of the queue. An event is
+// pinned unless Florian unpinned it; any other thread only once he pinned it. Threads
+// from before pins existed have no `pinned` field and fall under the same rule.
+export function isPinned(thread) {
+  return Boolean(thread) && thread.kind !== 'card' && (thread.pinned ?? thread.kind === 'event');
+}
+
+// Where a pinned thread stands among the pinned: the place he dragged it to, else when
+// it starts (an event) or when it was made.
+export const pinPlace = (t) => t.pinAt ?? t.event?.start ?? t.createdAt ?? 0;
+
 // `quiet` skips the disk write and is for fast-changing display fields only.
 export function updateThread(id, patch, { quiet = false } = {}) {
   const meta = threads.get(id);
   if (!meta) return null;
   Object.assign(meta, patch);
+  // Closing or deferring a thread he pinned by hand takes the pin off. An event keeps
+  // its place in case it is reopened.
+  if (patch.state === 'done' && meta.pinned && meta.kind !== 'event') meta.pinned = false;
   if (!quiet) writeJson(metaFile(id), meta);
   events.emit('thread', meta);
   return meta;

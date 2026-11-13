@@ -1399,6 +1399,27 @@ a.chip:hover { border-color: var(--muted); }
 .tier-ask-x { margin-left: auto; border: 0; background: none; color: var(--faint); font-size: 17px; cursor: pointer; padding: 0 4px; }
 .tier-ask-x:hover { color: var(--text); }
 
+/* ---------- pinned threads, on top of the inbox ---------- */
+.pin-item { align-items: center; }
+.pin-item .item-mark { align-self: stretch; }
+.pin-item .item-text { flex: 1; }
+.pin-divide { height: 1px; margin: 6px 8px; background: var(--line); opacity: 0.7; }
+.pin-state { color: var(--muted); }
+.pin-state.is-ready { color: var(--s-ready); }
+.pin-state.is-working { color: var(--s-working); }
+.group[data-drop="pin"].is-drop { background: rgba(245, 183, 92, 0.08); border-radius: 8px; }
+.pin-btn.is-on { color: var(--s-event); }
+
+/* ---------- Defer: it changes a lot, so it looks different and asks once more ---------- */
+#defer { color: var(--bad); }
+#defer:hover { color: var(--bad); border-color: var(--bad); }
+#defer.is-armed { background: var(--bad); border-color: var(--bad); color: #2a0f0f; font-weight: 600; }
+
+/* ---------- areas: the rank as a quiet marker, and a divider before the unranked ---------- */
+.out-rank { flex: none; min-width: 1.1em; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.out-list.has-ranks .out-row:not(:has(.out-rank))::before { content: ''; flex: none; min-width: 1.1em; }
+.out-divide { height: 1px; margin: 7px 8px 7px 14px; background: var(--line); opacity: 0.7; }
+
 /* Nothing of the app is shown until it is clear whether the sleep screen belongs over it. */
 body.is-booting .shell { visibility: hidden; }
 .update-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
