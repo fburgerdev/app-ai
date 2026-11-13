@@ -88,6 +88,10 @@ const DEFAULTS = {
 
   // The queue: a small model decides what you see next, from what is waiting, your mood
   // line and what it has learned from your choices.
+  // The app repairs itself: a failure opens a thread in which Claude finds the cause and
+  // fixes the app's own repo; a fix whose tests pass is merged and pushed by the app.
+  repair: { auto: true, autoMerge: true, repo: 'fburgerdev/app-ai' },
+
   // Which tier a message gets when the tier is "auto": a cheap model reads it and picks.
   routeModel: 'haiku',
 
@@ -163,7 +167,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);

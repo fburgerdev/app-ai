@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { DATA_DIR, log } from './config.js';
 import { git, gitOk } from './git.js';
 import { ROOT } from './util.js';
+import { report } from './repair.js';
 
 export const RESTART_CODE = 75;
 const PREV = path.join(DATA_DIR, 'update-prev.txt'); // the version to go back to
@@ -75,6 +76,7 @@ async function check() {
   } catch (err) {
     status.error = err.message;
     log(`update: ${err.message}`);
+    report('the app updating itself', err.message);
   } finally {
     running = false;
   }

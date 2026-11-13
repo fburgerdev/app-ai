@@ -11,6 +11,7 @@
 // GitHub stays the ground truth. Nothing else may write this folder, so anything found
 // changed outside a brain update is thrown away.
 
+import { isNetworkError, report } from './repair.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git, gitOk } from './git.js';
@@ -85,6 +86,12 @@ export function ensureClone() {
 
 // Brings the clone up to GitHub's state. Skipped while a brain update owns the tree.
 // Never throws: offline, the threads simply work on the last state the laptop saw.
+let netFails = 0;
+let netSince = 0;
+let retryTimer = null;
+let onRetried = null; // tells the page when a quiet retry got through
+export const onBrainRetried = (fn) => { onRetried = fn; };
+
 export function refresh({ force = false } = {}) {
   return serial(async () => {
     if (!status.ready || writer) return brainStatus();
@@ -114,9 +121,25 @@ export function refresh({ force = false } = {}) {
       status.head = await head();
       status.refreshedAt = Date.now();
       status.error = '';
+      netSince = 0;
+      netFails = 0;
     } catch (err) {
+      if (isNetworkError(err.message)) {
+        // The network is away (the laptop just woke): try again by itself, with growing
+        // pauses, and say nothing unless it lasts.
+        netFails += 1;
+        netSince ||= Date.now();
+        const wait = Math.min(120_000, 10_000 * 2 ** Math.min(netFails - 1, 4));
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => refresh({ force: true }).then(() => onRetried?.()), wait);
+        retryTimer.unref?.();
+        if (netFails === 1) log(`brain: GitHub is not reachable; trying again by itself (${err.message.slice(-80)})`);
+        if (Date.now() - netSince > 10 * 60_000) status.error = 'GitHub has not been reachable for more than ten minutes. The app keeps trying; the brain here may be behind.';
+        return brainStatus();
+      }
       status.error = `The brain could not be brought up to date: ${err.message}`;
       log(status.error);
+      report('bringing the brain up to date', err.message);
       try {
         status.unpushed = Number((await git(dir, ['rev-list', '--count', `origin/${branch}..HEAD`])).trim());
       } catch { /* leave as is */ }

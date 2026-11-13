@@ -264,3 +264,21 @@ test('the status has four stages', async () => {
   assert.equal(yellow.stage, 'busy');
   await ready(busy.id);
 });
+
+test('network trouble is retried quietly; a real failure opens a repair thread, once', async () => {
+  const { isNetworkError } = await import('../server/repair.js');
+  assert.ok(isNetworkError("fatal: unable to access 'https://github.com/x/': Failed to connect to github.com port 443 after 21133 ms: Could not connect to server"));
+  assert.ok(isNetworkError('Could not resolve host: github.com'));
+  assert.ok(!isNetworkError('TypeError: cannot read properties of undefined'));
+  const before = (await state()).threads.filter((t) => t.kind === 'repair').length;
+  const made = (await call('POST', '/api/repair/test', { source: 'the brain update', message: 'TypeError: x is not a function at extract.js:12' })).data;
+  assert.ok(made.thread);
+  const t = await ready(made.thread);
+  assert.equal(t.thread.kind, 'repair');
+  assert.equal(t.thread.repo, 'fburgerdev/app-ai');
+  assert.match(t.messages[0].text, /TypeError: x is not a function/);
+  assert.match(t.messages[0].text, /The end of the app's log/);
+  assert.equal((await call('POST', '/api/repair/test', { source: 'the brain update', message: 'TypeError: x is not a function at extract.js:99' })).data.thread, null, 'the same error does not open a second thread');
+  assert.equal((await call('POST', '/api/repair/test', { source: 'saving', message: 'Could not resolve host: github.com' })).data.thread, null, 'the network is not a bug');
+  assert.equal((await state()).threads.filter((x) => x.kind === 'repair').length, before + 1);
+});

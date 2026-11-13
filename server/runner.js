@@ -18,6 +18,7 @@ import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from '
 import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices } from './projects.js';
 import * as repos from './repos.js';
+import * as repair from './repair.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -97,6 +98,7 @@ function startTurn(threadId, prompt, background = false) {
   running.set(threadId, { abort: new AbortController(), parts: [] }); // holds the slot until runTurn takes over
   runTurn(threadId, prompt).catch((err) => {
     log(`turn failed unexpectedly: ${err.stack || err.message}`);
+    if (store.getThread(threadId)?.kind !== 'repair') repair.report('a turn', err.stack || err.message);
     running.delete(threadId);
     store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', error: err.message });
   });
@@ -324,6 +326,7 @@ async function runTurn(threadId, prompt) {
     // Florian does next (another repo, merging) meets a turn still holding it.
     await repos.saveWork(threadId).catch(() => {});
     repos.releaseAll(threadId);
+    if (store.getThread(threadId)?.kind === 'repair') repair.afterTurn(threadId).catch(() => {});
     const fresh = store.getThread(threadId);
     const pending = fresh.pending || [];
     running.delete(threadId);

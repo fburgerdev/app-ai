@@ -19,6 +19,7 @@ import * as google from './google.js';
 import * as store from './store.js';
 import * as runner from './runner.js';
 import { createEvent } from './events.js';
+import { isNetworkError, report } from './repair.js';
 import { isKnownProject } from './projects.js';
 import { getState, readPad } from './state.js';
 import { parseMail, serializeMail } from './mail.js';
@@ -183,7 +184,8 @@ export async function makeCards({ cards: wantCards = true } = {}) {
     if (wantCards) lastMade = count;
     log(`cards: made ${count}${preps ? `, ${preps} event${preps === 1 ? '' : 's'} to prepare` : ''}`);
   } catch (err) {
-    lastError = err.message;
+    lastError = isNetworkError(err.message) ? '' : err.message;
+    report('looking for opportunities', err.message);
     lastMade = -1;
     log(`cards: run failed: ${err.message}`);
   } finally {

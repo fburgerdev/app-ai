@@ -21,6 +21,7 @@ import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
 import * as events from './events.js';
+import { initRepair, report } from './repair.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus } from './selfupdate.js';
@@ -183,7 +184,7 @@ function connections(req) {
 const version = (() => {
   try {
     const out = execFileSync('git', ['log', '-1', '--format=%h|%cI|%s'], { cwd: ROOT, encoding: 'utf8', windowsHide: true }).trim().split('|');
-    return { commit: out[0], date: out[1], subject: out.slice(2).join('|') };
+    return { commit: out[0], date: out[1], subject: out.slice(2).join('|'), startedAt: Date.now() };
   } catch {
     return { commit: '', date: '', subject: '' };
   }
@@ -458,6 +459,8 @@ app.post('/api/next-actions/wake', (req, res) => {
   try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
+// For the tests: report a failure the way the app's own parts do.
+if (config.fake) app.post('/api/repair/test', (req, res) => res.json({ thread: report(String(req.body.source), String(req.body.message)) }));
 
 // Requeue: not now. The thread stays waiting but goes to the back for a while, and the
 // queue learns from it.
@@ -753,6 +756,9 @@ const server = app.listen(config.port, '127.0.0.1', () => {
 attachVoice(server, config, allowedHosts);
 datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
+initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground, mergeThread: repos.merge, repoDirOf: repos.dirOf });
+brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatus()));
+process.on('unhandledRejection', (err) => { log(`unhandled: ${err?.stack || err}`); report('the app itself', String(err?.stack || err)); });
 cards.setMayRun(link.mayRunBackground);
 events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before projects were found by themselves get one now, in the background.

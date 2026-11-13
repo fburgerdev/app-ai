@@ -284,6 +284,18 @@ itself; anything you send unlocks it again.
 events, no sorting), everything is saved to GitHub, and the line turns green. It works whether
 or not the server is reachable. **Handover** gives everything to the server (see above).
 
+## The app looks after itself
+
+- **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again
+  by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
+- **Anything else fails** (a brain update, the card run, saving, updating, a crash): the app
+  opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the
+  cause, and if it is a bug fixes it in the app's own repo. When that turn ends with commits
+  and `npm test` passes, the app merges and pushes the fix itself, and the self-update takes
+  it (and goes back if the new version does not start). If the tests fail, the thread waits in
+  the inbox with its Merge button. One repair thread per kind of error per day. Turn it off
+  with `"repair": { "auto": false }`, or only the merging with `"autoMerge": false`.
+
 ## Usage
 
 The amount in the top bar is what Claude used through this app today, counted at API prices

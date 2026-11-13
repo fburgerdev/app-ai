@@ -29,6 +29,7 @@ import { readCardLog } from './cards.js';
 import { saveNow } from './datasync.js';
 import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
+import { report } from './repair.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
@@ -260,6 +261,7 @@ export function startExtraction({ only = '' } = {}) {
   runExtraction(id, changed, pressedAt, mailOnly)
     .catch((err) => {
       log(`brain update failed: ${err.stack || err.message}`);
+      report('the brain update', err.stack || err.message);
       return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {

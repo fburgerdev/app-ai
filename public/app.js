@@ -140,7 +140,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { event: 'Event', 'next-action': 'Next action', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
+const KIND = { event: 'Event', repair: 'Repair', 'next-action': 'Next action', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 function kindLabel(t) {
   if (t.kind === 'card') return { chase: 'Chase', proposal: 'Proposal' }[t.card?.type] || 'Opportunity';
   return KIND[t.kind] || '';
@@ -1830,8 +1830,9 @@ async function fillConnections(body, token) {
       : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
   if (c.app?.commit) {
-    body.append(block('App version', { text: c.app.commit },
-      note(`${c.app.subject}${c.app.date ? ` (${stamp(Date.parse(c.app.date))})` : ''}.${c.app.update?.enabled ? ` Updates itself from GitHub${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`)));
+    const when = (ts) => new Date(ts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    body.append(block('App version', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
+      note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`)));
   }
 
   const v = c.voice;
