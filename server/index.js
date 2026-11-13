@@ -24,7 +24,7 @@ import * as events from './events.js';
 import { initRepair, report } from './repair.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
-import { startSelfUpdate, updateStatus } from './selfupdate.js';
+import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import { dateTimeDMY } from './util.js';
@@ -459,6 +459,8 @@ app.post('/api/next-actions/wake', (req, res) => {
   try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
+// Check for a new version now; `force` updates even while Claude is working.
+app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
 // For the tests: report a failure the way the app's own parts do.
 if (config.fake) app.post('/api/repair/test', (req, res) => res.json({ thread: report(String(req.body.source), String(req.body.message)) }));
 

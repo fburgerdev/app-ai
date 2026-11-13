@@ -284,6 +284,13 @@ itself; anything you send unlocks it again.
 events, no sorting), everything is saved to GitHub, and the line turns green. It works whether
 or not the server is reachable. **Handover** gives everything to the server (see above).
 
+## Updating now
+
+The app updates itself every ten minutes. For something urgent, **Settings → Connections →
+Check for updates** looks right away and restarts into the new version; the page reloads by
+itself. If Claude is working, it says so and offers **Update now anyway**, which cuts that
+turn off.
+
 ## The app looks after itself
 
 - **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again

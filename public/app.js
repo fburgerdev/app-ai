@@ -1033,6 +1033,34 @@ function renderComposer() {
   renderAttached();
 }
 
+// Check for updates now. If a new version waits for Claude, the button offers to update
+// anyway (that turn is cut off). The page reloads by itself once the app is back.
+function updateButton() {
+  const out = h('span', { class: 'panel-note update-out' });
+  const go = async (force) => {
+    button.disabled = true;
+    out.textContent = force ? 'Updating…' : 'Looking…';
+    try {
+      const r = await api('POST', '/api/update/check', { force });
+      const say = {
+        current: 'This is the newest version.',
+        updating: 'Updating. The app restarts and this page reloads in a few seconds.',
+        offline: 'GitHub is not reachable right now.',
+        skipped: 'The newest version did not start last time, so the app stays on this one.',
+        busy: 'A check is already running; try again in a moment.',
+        error: `It did not work: ${r.status?.error || 'see the log'}.`,
+      }[r.outcome];
+      if (r.outcome === 'waiting') {
+        out.replaceChildren(`A new version (${r.status.waiting}) is waiting until Claude has finished. `,
+          h('button', { class: 'link', type: 'button', onclick: () => go(true) }, 'Update now anyway'), ' (cuts off what Claude is doing).');
+      } else out.textContent = say || r.outcome;
+    } catch (err) { out.textContent = err.message; }
+    button.disabled = false;
+  };
+  const button = h('button', { class: 'btn', type: 'button', onclick: () => go(false) }, 'Check for updates');
+  return h('div', { class: 'update-row' }, button, out);
+}
+
 // Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for the last
 // one used, Escape to go back to writing. Nothing is sent until one is picked.
 let tierAsk = null;
@@ -1832,7 +1860,8 @@ async function fillConnections(body, token) {
   if (c.app?.commit) {
     const when = (ts) => new Date(ts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
     body.append(block('App version', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
-      note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`)));
+      note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub every ten minutes${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`),
+      c.app.update?.enabled ? updateButton() : null));
   }
 
   const v = c.voice;

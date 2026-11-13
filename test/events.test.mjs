@@ -282,3 +282,8 @@ test('network trouble is retried quietly; a real failure opens a repair thread, 
   assert.equal((await call('POST', '/api/repair/test', { source: 'saving', message: 'Could not resolve host: github.com' })).data.thread, null, 'the network is not a bug');
   assert.equal((await state()).threads.filter((x) => x.kind === 'repair').length, before + 1);
 });
+
+test('checking for updates by hand answers at once', async () => {
+  const r = (await call('POST', '/api/update/check', {})).data;
+  assert.equal(r.outcome, 'off', 'the stand-in does not update itself');
+});

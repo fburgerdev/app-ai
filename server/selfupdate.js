@@ -36,15 +36,18 @@ function npmInstall() {
   });
 }
 
-async function check() {
-  if (running) return;
+// Returns what happened: 'current', 'updating', 'waiting' (Claude is working), 'offline',
+// 'skipped' (a version that did not start before) or 'busy' (a check is already running).
+// `force` updates even while Claude is working: that turn is cut off.
+async function check({ force = false } = {}) {
+  if (running) return 'busy';
   running = true;
   try {
     const branch = (await git(ROOT, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
     if (!(await gitOk(ROOT, ['fetch', '--quiet', 'origin', branch]))) {
       if (status.error !== 'GitHub is not reachable.') log('update: GitHub is not reachable; trying again later');
       status.error = 'GitHub is not reachable.';
-      return;
+      return 'offline';
     }
     status.checkedAt = Date.now();
     status.error = '';
@@ -54,29 +57,31 @@ async function check() {
     if (head !== startedAt && !isBusy()) {
       log(`update: the code on disk is ${head.slice(0, 7)}, this runs ${startedAt.slice(0, 7)}; restarting`);
       setTimeout(() => process.exit(RESTART_CODE), 300);
-      return;
+      return 'updating';
     }
     const next = (await git(ROOT, ['rev-parse', `origin/${branch}`])).trim();
-    if (head === next || !(await gitOk(ROOT, ['merge-base', '--is-ancestor', 'HEAD', `origin/${branch}`]))) { status.waiting = ''; waitingSince = 0; return; }
+    if (head === next || !(await gitOk(ROOT, ['merge-base', '--is-ancestor', 'HEAD', `origin/${branch}`]))) { status.waiting = ''; waitingSince = 0; return 'current'; }
     let bad = '';
     try { bad = fs.readFileSync(BAD, 'utf8').trim(); } catch { /* none */ }
-    if (bad === next) return;
-    if (isBusy()) {
+    if (bad === next && !force) return 'skipped';
+    if (isBusy() && !force) {
       waitingSince ||= Date.now();
       status.waiting = next.slice(0, 7);
-      if (Date.now() - waitingSince < 60 * 60_000) return;
+      if (Date.now() - waitingSince < 60 * 60_000) return 'waiting';
     }
     const lockBefore = await git(ROOT, ['rev-parse', 'HEAD:package-lock.json']).catch(() => '');
     await git(ROOT, ['merge', '--ff-only', '--quiet', `origin/${branch}`]);
     const lockAfter = await git(ROOT, ['rev-parse', 'HEAD:package-lock.json']).catch(() => '');
     if (lockBefore !== lockAfter) await npmInstall();
     fs.writeFileSync(PREV, head);
-    log(`update: ${head.slice(0, 7)} → ${next.slice(0, 7)}; restarting`);
+    log(`update: ${head.slice(0, 7)} → ${next.slice(0, 7)}${force ? ' (by hand)' : ''}; restarting`);
     setTimeout(() => process.exit(RESTART_CODE), 300);
+    return 'updating';
   } catch (err) {
     status.error = err.message;
     log(`update: ${err.message}`);
     report('the app updating itself', err.message);
+    return 'error';
   } finally {
     running = false;
   }
@@ -94,4 +99,11 @@ export function startSelfUpdate(cfg, { busy }) {
   const every = Math.max(1, Number(config.selfUpdateMinutes) || 10) * 60_000;
   setTimeout(check, 30_000).unref?.();
   setInterval(check, every).unref?.();
+}
+
+// "Check for updates" in the settings: right now instead of within ten minutes.
+export async function checkNow({ force = false } = {}) {
+  if (!status.enabled) return { outcome: 'off', status: updateStatus() };
+  const outcome = await check({ force });
+  return { outcome, status: updateStatus() };
 }

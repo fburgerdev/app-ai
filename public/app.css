@@ -1401,3 +1401,5 @@ a.chip:hover { border-color: var(--muted); }
 
 /* Nothing of the app is shown until it is clear whether the sleep screen belongs over it. */
 body.is-booting .shell { visibility: hidden; }
+.update-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.update-out .link { padding: 0; }
