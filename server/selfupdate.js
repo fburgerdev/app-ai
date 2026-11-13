@@ -23,6 +23,7 @@ let config;
 let isBusy = () => false;
 let waitingSince = 0;
 let running = false;
+let startedAt = ''; // the commit this process started from
 const status = { enabled: false, checkedAt: 0, waiting: '', error: '' };
 export const updateStatus = () => ({ ...status });
 
@@ -39,10 +40,21 @@ async function check() {
   running = true;
   try {
     const branch = (await git(ROOT, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    if (!(await gitOk(ROOT, ['fetch', '--quiet', 'origin', branch]))) { status.error = 'GitHub is not reachable.'; return; }
+    if (!(await gitOk(ROOT, ['fetch', '--quiet', 'origin', branch]))) {
+      if (status.error !== 'GitHub is not reachable.') log('update: GitHub is not reachable; trying again later');
+      status.error = 'GitHub is not reachable.';
+      return;
+    }
     status.checkedAt = Date.now();
     status.error = '';
     const head = (await git(ROOT, ['rev-parse', 'HEAD'])).trim();
+    // Someone pulled by hand while the app ran: the code on disk is newer than what runs.
+    startedAt ||= head;
+    if (head !== startedAt && !isBusy()) {
+      log(`update: the code on disk is ${head.slice(0, 7)}, this runs ${startedAt.slice(0, 7)}; restarting`);
+      setTimeout(() => process.exit(RESTART_CODE), 300);
+      return;
+    }
     const next = (await git(ROOT, ['rev-parse', `origin/${branch}`])).trim();
     if (head === next || !(await gitOk(ROOT, ['merge-base', '--is-ancestor', 'HEAD', `origin/${branch}`]))) { status.waiting = ''; waitingSince = 0; return; }
     let bad = '';
@@ -76,6 +88,7 @@ export function startSelfUpdate(cfg, { busy }) {
   const on = config.selfUpdate === true || (config.selfUpdate !== false && process.platform === 'win32' && !config.fake);
   if (!on || !fs.existsSync(path.join(ROOT, '.git'))) return;
   status.enabled = true;
+  git(ROOT, ['rev-parse', 'HEAD']).then((h) => { startedAt = h.trim(); }).catch(() => {});
   const every = Math.max(1, Number(config.selfUpdateMinutes) || 10) * 60_000;
   setTimeout(check, 30_000).unref?.();
   setInterval(check, every).unref?.();
