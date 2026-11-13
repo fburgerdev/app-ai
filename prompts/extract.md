@@ -4,7 +4,7 @@ You are in the app's clone of his vault, already brought up to GitHub's state. R
 
 ## What this run is
 
-The app has replaced the scheduled runs and the `For Claude/` folder. This run is Florian saying "update my brain" for everything that happened in the app since the last update. It is the workflow of that name in `CLAUDE.md`, so it writes into the Brain; it is not one of the scheduled runs, and the rule that scheduled runs never write the Brain does not apply to it.
+This run is Florian saying "update my brain" for everything that happened in the app since the last update. It is the brain update that `CLAUDE.md` and "The Workflow" in `Claude/Instructions.md` describe, so it writes into the Brain.
 
 Everything to file is in `{{transcriptsDir}}`:
 
@@ -37,7 +37,7 @@ If `Notes for Claude.md` is there, it holds lines Florian wrote for you: half-se
 
 ## Mail
 
-If `Mail.md` is there, it holds the mail that arrived and went out since the last update. Treat it as "Scheduled: the mail scan" in `Claude/Instructions.md` describes, with these differences: you do not draft replies and you do not touch Gmail.
+If `Mail.md` is there, it holds the mail that arrived and went out since the last update. Treat it as "Mail" in `Claude/Instructions.md` describes, with these differences: you do not draft replies and you do not touch Gmail.
 
 - Sent mail: file what the mail itself fixes, and the Waiting For row for the reply, unless a thread above already covered that mail.
 - Received mail: keep only what matters to the Brain, and file what is important in it, as "Name said DD-MM-YYYY (mail) that …". A reply that answers a Waiting For row deletes the row.
@@ -64,7 +64,6 @@ Each file in `Brain/People/` carries a `Status:` line under `Last contacted:`, w
 
 - Never write a line into the four action files that Florian has not confirmed, and never create a project file he has not agreed to. The vault's exceptions (the Waiting For row for something he sent, a Calendar row for a date fixed in a mail) still apply. Put everything else of this kind under Questions.
 - Where a date, a source or a meaning is unclear, do not guess. Put it under Questions.
-- Never touch `Scratchpad.md`, `.obsidian/`, `For Claude/` or `For Florian/`.
 - Do not commit, push or pull. The app commits and pushes once when you finish. To move or delete a vault file, use `git mv`, `git rm`, or plain file commands.
 
 ## How to finish

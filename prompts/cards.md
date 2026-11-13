@@ -16,7 +16,7 @@ Read `Brain/Waiting For.md`. For every row under "Waiting on a person" whose `Ch
 
 ## Opportunity cards
 
-Use what "Scheduled: the opportunities run" in `Claude/Instructions.md` says about scope and about what counts as an item: only his ethical projects and areas, something finished that serves a concrete current next step, never advice or follow-up spreads. Typical cards: a LinkedIn connection note to a specific person, a first mail to someone who can move a project, a message asking for an introduction. Find the real person with web search, and give the link to their profile. Favour projects that are stuck or have had no activity. Do not write to someone he is already in contact with about the same thing: check the Brain, and his mail if you have mail tools.
+Use what "Opportunities" in `Claude/Instructions.md` says about scope and about what counts as an item: only his ethical projects and areas, something finished that serves a concrete current next step, never advice or follow-up spreads. Typical cards: a LinkedIn connection note to a specific person, a first mail to someone who can move a project, a message asking for an introduction. Find the real person with web search, and give the link to their profile. Favour projects that are stuck or have had no activity. Do not write to someone he is already in contact with about the same thing: check the Brain, and his mail if you have mail tools.
 
 ## Proposal cards (at most two per run)
 

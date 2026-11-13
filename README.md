@@ -166,7 +166,7 @@ Settings → Queue.
 
 ## Scratchpad
 
-A page to write in, like the one in Obsidian, one click away in the top bar (Alt+P; again to go back). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
+A page to write in, one click away in the top bar (Alt+P; again to go back). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
 
 ## Talk: the host
 
@@ -310,7 +310,7 @@ The whole app works in the phone's browser under the same address as Talk. One c
 - **The current rules ride along.** `Claude/Instructions.md` and `Claude/Thinking With Me.md` are put into every thread's instructions fresh each turn.
 - **Only the brain update writes**, as described above. `For Claude/`, `For Florian/`, `Scratchpad.md` and `.obsidian/` are put back before the commit, whatever the run did.
 
-The vault itself is untouched by installing the app: Obsidian, Brain Sync and the vault's own instructions keep working as they are.
+Since 13-11-2026 the app is the only way into the vault: there is no Obsidian copy and no laptop sync any more, and the vault's `CLAUDE.md` describes the app's brain update as the way it changes.
 
 The prompts are in `prompts/`. They point at the vault's rules rather than repeating them.
 
@@ -340,7 +340,7 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `brainRepo`, `brainBranch` | the brain repo, `main` | What to clone. |
 | `dataRepo`, `dataSyncMinutes` | the data repo, `5` | Where and how often the app's state is saved. Empty repo: not saved. |
 | `preload` | Instructions, Thinking With Me | Vault files put into every thread's instructions. |
-| `protectedPaths` | Scratchpad, .obsidian, For Claude, For Florian | Never written by the app. |
+| `protectedPaths` | Scratchpad, .obsidian, For Claude, For Florian (all gone from the vault since 13-11-2026; harmless) | Never written by the app. |
 | `hiddenPaths` | Scratchpad, .obsidian, For Claude/processed | Never on the app's disk. |
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
