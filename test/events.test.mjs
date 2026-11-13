@@ -287,3 +287,14 @@ test('checking for updates by hand answers at once', async () => {
   const r = (await call('POST', '/api/update/check', {})).data;
   assert.equal(r.outcome, 'off', 'the stand-in does not update itself');
 });
+
+test('a preparation made before events existed does not stop its event', async () => {
+  // The old kind of entry in the card log, for the fair the stand-in calendar has.
+  const day = new Date(Date.now() + 2 * 3600_000).toISOString().slice(0, 10);
+  const all = (await state()).threads.filter((t) => t.kind === 'event');
+  for (const t of all) await call('DELETE', `/api/threads/${t.id}`);
+  fs.appendFileSync(path.join(data, 'cards', 'log.jsonl'), JSON.stringify({ ts: Date.now(), key: `prep:${day}:example-fair`, type: 'prep', channel: 'thread', title: 'Prepare: Example fair today', outcome: 'started', how: 'by itself, from the calendar' }) + '\n');
+  await call('POST', '/api/threads', { text: 'EVENT-SOON again' });
+  await call('POST', '/api/cards/make', {});
+  await until(async () => (await state()).threads.some((t) => t.kind === 'event' && t.title === 'Example fair'), 'the event is made after all');
+});

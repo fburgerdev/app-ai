@@ -43,6 +43,10 @@ export function initCards(cfg) {
   fs.mkdirSync(RUNS, { recursive: true });
 }
 
+// A preparation made before 12-11-2026 was a plain thread in the inbox, not an event.
+// Those do not count as made: the entry gets its event thread like any other.
+const oldPrep = (e) => e.type === 'prep' && !/as an event/.test(e.how || '');
+
 export function readCardLog() {
   try {
     return fs.readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -132,7 +136,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   try {
     await brain.refresh();
-    const made = [...readCardLog().map((e) => `- ${e.key} (${e.outcome}${e.reason ? `; he wrote: ${e.reason}` : ''}): ${e.title}`), ...openCards().map((t) => `- ${t.card.key} (waiting for him now): ${t.title}`)];
+    const made = [...readCardLog().filter((e) => !oldPrep(e)).map((e) => `- ${e.key} (${e.outcome}${e.reason ? `; he wrote: ${e.reason}` : ''}): ${e.title}`), ...openCards().map((t) => `- ${t.card.key} (waiting for him now): ${t.title}`)];
     const profile = (readPad('profile') || '').trim();
     const state = getState();
     const result = await runAgent({
@@ -159,7 +163,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
       mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer() } : undefined,
     });
     if (result.error) throw new Error(result.error);
-    const known = new Set([...readCardLog().map((e) => e.key), ...openCards().map((t) => t.card.key), ...store.listThreads().filter((t) => t.event?.key).map((t) => t.event.key)]);
+    const known = new Set([...readCardLog().filter((e) => !oldPrep(e)).map((e) => e.key), ...openCards().map((t) => t.card.key), ...store.listThreads().filter((t) => t.event?.key).map((t) => t.event.key)]);
     let count = 0;
     let preps = 0;
     for (const name of fs.readdirSync(outDir).filter((n) => n.endsWith('.json'))) {
@@ -172,7 +176,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
         // opens when it is time.
         if (preps >= 4) continue;
         const thread = createEvent(card);
-        if (!thread) continue;
+        if (!thread) { log(`cards: an event without a usable start time was left out: ${card.title} (${card.start})`); continue; }
         preps += 1;
         fs.appendFileSync(LOG, JSON.stringify({ ts: Date.now(), key: card.key, type: 'prep', channel: 'thread', title: thread.title, project: thread.project, to: '', outcome: 'started', how: 'by itself, from the calendar, as an event', edited: false, mood: getState().mood.trim(), proposed: card.text }) + '\n');
         continue;
