@@ -114,19 +114,25 @@ app.get('/api/status', async (req, res) => {
   const savedAll = !saved.enabled || (saved.files === 0 && saved.ahead === 0);
   // Changes waiting for the next timed save: saved now, so "saving" means saving.
   if (!savedAll && !saved.error && Date.now() - lastStatusSave > 15_000) { lastStatusSave = Date.now(); datasync.saveNow('state').catch(() => {}); }
+  // Four stages, Florian's words (13-11-2026): locked means the app starts nothing by
+  // itself, and anything he sends unlocks it again.
+  const locked = Boolean(l.finalizing) || l.active === 'remote';
+  const doing = busy || !savedAll || l.switching;
   res.json({
     show: laptopHere,
     link: l,
     busy: { threads, extracting, cards: carding },
     saved,
     unpushed,
-    safe: l.active === 'remote' ? !l.switching : !busy && savedAll && !l.switching,
+    locked,
+    stage: locked ? (doing ? 'getting-ready' : 'safe') : (doing ? 'busy' : 'idle'),
+    safe: locked && !doing,
   });
 });
 app.post('/api/status/save', async (req, res) => res.json(await datasync.saveNow('state')));
 // Getting ready to suspend: nothing new starts and everything is saved; the status line
 // says when it is safe. Works whether or not the Pi is there.
-app.post('/api/status/finalize', (req, res) => {
+app.post('/api/status/finalize', express.json(), (req, res) => {
   res.json({ finalizing: link.setFinalize(req.body?.on !== false) });
 });
 app.post('/api/sync/push', async (req, res) => {
@@ -365,7 +371,7 @@ app.post('/api/threads', (req, res) => {
   const thread = store.createThread({ title: runner.titleFrom(text || 'Attached files'), project: known });
   const pick = req.body.repo !== undefined ? repos.repoName(req.body.repo) : repos.repoName(projects.repoOf(known));
   if (pick || req.body.repo !== undefined) store.updateThread(thread.id, { repo: pick || '', repoSet: true });
-  runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true });
+  runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true, tier: String(req.body.tier || '') });
   cards.maybeMakeCards();
   res.json({ thread: store.getThread(thread.id) });
 });
@@ -393,7 +399,7 @@ app.post('/api/threads/:id/messages', (req, res) => {
   // "Send and done": the message is kept and the thread closes, with no answer.
   const done = req.body.done === true;
   queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
-  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done });
+  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || '') });
   cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
 });

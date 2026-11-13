@@ -228,3 +228,39 @@ test('getting ready to suspend holds back background work and says when it is sa
   assert.equal((await call('GET', '/api/status')).data.link.finalizing, false);
   await ready(t.id);
 });
+
+test('a tier chosen when sending counts for that message only', async () => {
+  await call('PUT', '/api/settings', { tier: 'ask' });
+  const t = (await call('POST', '/api/threads', { text: 'Work out the negotiation strategy', tier: 'cheap' })).data.thread;
+  await ready(t.id);
+  assert.equal((await thread(t.id)).thread.lastTier, 'cheap', 'his choice, not the picker\'s');
+  await call('POST', `/api/threads/${t.id}/messages`, { text: 'And again, please', tier: 'extra' });
+  await until(async () => (await thread(t.id)).messages.filter((m) => m.role === 'assistant').length >= 2, 'second answer');
+  assert.equal((await thread(t.id)).thread.lastTier, 'extra');
+  assert.equal((await thread(t.id)).thread.nextTier, '', 'forgotten afterwards');
+  await call('PUT', '/api/settings', { tier: 'auto' });
+});
+
+test('the status has four stages', async () => {
+  await call('POST', '/api/status/finalize', { on: false });
+  const idle = (await call('GET', '/api/status')).data;
+  assert.equal(idle.stage, 'idle');
+  assert.equal(idle.locked, false);
+  assert.equal(idle.safe, false, 'not locked: the app may start something');
+  await call('POST', '/api/status/finalize', { on: true });
+  const safe = (await call('GET', '/api/status')).data;
+  assert.equal(safe.stage, 'safe');
+  assert.equal(safe.safe, true);
+  // Something running while locked is the getting-ready stage.
+  const t = (await call('POST', '/api/threads', { text: 'Something slow SLOW-TEST' })).data.thread;
+  await call('POST', '/api/status/finalize', { on: true });
+  const during = await until(async () => { const x = (await call('GET', '/api/status')).data; return x.busy.threads.length ? x : null; }, 'busy', 6000);
+  assert.equal(during.stage, 'getting-ready');
+  assert.equal(during.safe, false);
+  await ready(t.id);
+  await call('POST', '/api/status/finalize', { on: false });
+  const busy = (await call('POST', '/api/threads', { text: 'Another one SLOW-TEST' })).data.thread;
+  const yellow = await until(async () => { const x = (await call('GET', '/api/status')).data; return x.busy.threads.length ? x : null; }, 'busy again', 6000);
+  assert.equal(yellow.stage, 'busy');
+  await ready(busy.id);
+});

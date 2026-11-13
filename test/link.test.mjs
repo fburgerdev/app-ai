@@ -87,7 +87,8 @@ test('handing over: everything moves to the Pi and the page is passed on', async
   assert.equal(l.step, '');
   assert.ok(l.handedOverAt > 0);
   const st = (await call(lap, 'GET', '/api/status')).data;
-  assert.equal(st.safe, true, 'safe to suspend once handed over');
+  assert.equal(st.stage, 'safe', 'handed over: the laptop can sleep');
+  assert.equal(st.locked, true);
   assert.equal((await thread(pi, first.id)).messages.length, 4, 'the Pi has the whole conversation');
   await call(lap, 'POST', `/api/threads/${first.id}/messages`, { text: 'Now through the Pi' });
   await answered(pi, first.id, 3);
@@ -158,10 +159,11 @@ test('the background work runs on one side only; the status says when the laptop
   const after = (await call(lap, 'GET', '/api/status')).data;
   assert.equal(after.saved.files, 0);
   assert.equal(after.saved.ahead, 0);
-  assert.equal(after.safe, true);
+  assert.equal(after.stage, 'idle', 'nothing running, but nothing locked either');
+  assert.equal(after.safe, false);
   // A turn running: not safe.
   const t = (await call(lap, 'POST', '/api/threads', { text: 'Something slow SLOW-TEST' })).data.thread;
   const during = await until(async () => { const x = (await call(lap, 'GET', '/api/status')).data; return x.busy.threads.length ? x : null; }, 'busy seen', 5000);
-  assert.equal(during.safe, false);
+  assert.equal(during.stage, 'busy');
   assert.equal(during.busy.threads[0].id, t.id);
 });

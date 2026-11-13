@@ -194,8 +194,8 @@ function queueLists() {
     h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
     ...(S.showDone ? closed.map(railItem) : []),
   ], toggle, 'done'));
-  parts.push(...sleepingSection());
   parts.push(...eventsSection());
+  parts.push(...sleepingSection());
   return parts;
 }
 
@@ -1032,6 +1032,27 @@ function renderComposer() {
   renderAttached();
 }
 
+// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for the last
+// one used, Escape to go back to writing. Nothing is sent until one is picked.
+let tierAsk = null;
+function askTier(done) {
+  closeTierAsk();
+  const names = S.settings.tierNames || [];
+  const last = localStorage.getItem('app-ai-tier') || 'default';
+  const pick = (n) => { localStorage.setItem('app-ai-tier', n); closeTierAsk(); send(done, n); };
+  const row = h('div', { class: 'tier-ask', role: 'group', 'aria-label': 'How much is this worth?' },
+    h('span', { class: 'tier-ask-label' }, 'How much?'),
+    ...names.map((n, i) => h('button', {
+      class: `tier-ask-btn${n === last ? ' is-last' : ''}`, type: 'button', title: S.settings.tiers?.[n]?.about || '',
+      onclick: () => pick(n),
+    }, h('kbd', {}, String(i + 1)), S.settings.tiers?.[n]?.label || n)),
+    h('button', { class: 'tier-ask-x', type: 'button', title: 'Back to writing (Esc)', onclick: closeTierAsk }, '×'));
+  els.composer.prepend(row);
+  tierAsk = { row, done, last, names, pick };
+  els.input.focus();
+}
+function closeTierAsk() { tierAsk?.row.remove(); tierAsk = null; }
+
 // One button for both: with text it sends and closes, with an empty box it just closes.
 let composerVerb = 'Send';
 function renderDoneButton() {
@@ -1337,22 +1358,25 @@ async function openPad() {
 }
 
 // `done` is "send and done": the message is kept, the thread closes, Claude does not answer.
-async function send(done = false) {
+async function send(done = false, tier = '') {
   const text = els.input.value.trim();
   if (S.pad) return;
   const files = filesToSend();
   // "Done" with an empty box closes the thread.
   if (done && files && !text && !files.length) return markDone();
   if (!files || (!text && !files.length)) return;
+  // Quick select: nothing goes until he has picked how much it is worth.
+  const t = S.current ? S.threads.get(S.current) : null;
+  if (!tier && !t?.tier && S.settings.tier === 'ask') return askTier(done);
   const from = S.current;
   els.send.disabled = true;
   els.sendDone.disabled = true;
   try {
     if (from) {
-      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done });
+      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, tier });
       S.threads.set(from, out.thread);
     } else {
-      const out = await api('POST', '/api/threads', { text, files, done, project: S.newProject });
+      const out = await api('POST', '/api/threads', { text, files, done, tier, project: S.newProject });
       S.threads.set(out.thread.id, out.thread);
       S.newProject = '';
     }
@@ -1885,11 +1909,15 @@ function fillKeys(body) {
 // after a while away, brings the screen back.
 
 const minutesOf = (hhmm) => { const [a, b] = hhmm.split(':').map(Number); return a * 60 + b; };
+// The last sleep hours are kept here, so the screen is up before anything is loaded and
+// the app is never seen for a moment first.
+const SLEEP_SAVED = 'app-ai-sleep';
 let sleepPassed = 0; // until when the screen was waved away
 let hiddenSince = 0;
 
 function sleepWindow(now = new Date()) {
-  const sl = S.settings?.sleep;
+  let sl = S.settings?.sleep;
+  if (!sl) { try { sl = JSON.parse(localStorage.getItem(SLEEP_SAVED) || 'null'); } catch { sl = null; } }
   if (!sl?.on) return null;
   const from = minutesOf(sl.from);
   const to = minutesOf(sl.to);
@@ -1904,12 +1932,25 @@ function sleepWindow(now = new Date()) {
 
 const sleepScreen = h('div', { class: 'sleep', hidden: true, role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Time to sleep' });
 document.body.append(sleepScreen);
+checkSleepEarly();
+
+// Before anything is loaded: the hours from the last visit decide whether the screen is
+// up straight away. Whatever the app then says replaces it.
+function checkSleepEarly() {
+  if (sleepWindow()) { checkSleep(); return; }
+  // Nothing remembered yet: wait for the app's own answer rather than show the queue
+  // and cover it a moment later.
+  if (localStorage.getItem(SLEEP_SAVED)) document.body.classList.remove('is-booting');
+  setTimeout(() => document.body.classList.remove('is-booting'), 3000);
+}
 
 function checkSleep() {
+  if (S.settings?.sleep) { try { localStorage.setItem(SLEEP_SAVED, JSON.stringify(S.settings.sleep)); } catch { /* fine */ } }
   const w = sleepWindow();
   const show = Boolean(w) && Date.now() >= sleepPassed;
   if (!show) {
     if (!sleepScreen.hidden) { sleepScreen.hidden = true; document.body.classList.remove('is-asleep'); }
+    document.body.classList.remove('is-booting');
     return;
   }
   const now = new Date();
@@ -1919,6 +1960,7 @@ function checkSleep() {
     h('p', { class: 'sleep-text' }, `It is ${clock(now.getTime())}. Everything here is still here at ${w.until}, and the queue keeps until then.`),
     h('button', { class: 'btn btn-quiet sleep-pass', type: 'button', onclick: () => { sleepPassed = w.end; checkSleep(); } }, 'Let me in anyway'),
   ));
+  document.body.classList.remove('is-booting');
   if (sleepScreen.hidden) {
     sleepScreen.hidden = false;
     document.body.classList.add('is-asleep');
@@ -1943,8 +1985,8 @@ document.addEventListener('visibilitychange', () => {
 // safe to suspend the laptop, and offers to hand everything over to the Pi (and back).
 
 let statusNow = null;
-// A little single-board computer, for the Pi. (Not the Raspberry Pi logo: that is theirs.)
-const BOARD = '<svg class="board" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M8 2.5v2.5M12 2.5v2.5M16 2.5v2.5M8 19v2.5M12 19v2.5M16 19v2.5M2.5 8H5M2.5 12H5M2.5 16H5M19 8h2.5M19 12h2.5M19 16h2.5"/></svg>';
+// The server, for the Pi. (Not the Raspberry Pi logo: that mark is the Foundation's.)
+const BOARD = '<svg class="board" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="6" rx="1.5"/><rect x="3.5" y="14" width="17" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M10 7h4M10 17h4"/></svg>';
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const quoted = (list, n = 2) => list.slice(0, n).map((t) => `“${clip(t.title, 30)}”`).join(', ') + (list.length > n ? ` and ${list.length - n} more` : '');
 
@@ -1954,7 +1996,7 @@ function renderStatus() {
   if (!st?.show) { bar.hidden = true; document.getElementById('talk-link').href = '/walk'; return; }
   bar.hidden = false;
   const l = st.link;
-  const pi = l.remoteName || 'Pi';
+  const pi = l.remoteName && l.remoteName !== 'Pi' ? l.remoteName : 'Server';
   const lap = l.localName || 'Laptop';
   const onPi = l.enabled && l.active === 'remote';
   // What still keeps the laptop from sleeping, or from handing over.
@@ -1963,49 +2005,51 @@ function renderStatus() {
   if (st.busy.extracting) running.push('the brain update is running');
   if (st.busy.cards) running.push('the app is looking for new cards');
   const unsaved = st.saved.enabled && (st.saved.files || st.saved.ahead);
-  let tone = 'ok';
+  // Four stages. Locked means the app starts nothing by itself; anything sent unlocks it.
+  const stage = st.stage || 'busy';
+  let tone = { safe: 'safe', 'getting-ready': 'ready', busy: 'busy', idle: 'idle' }[stage] || 'busy';
   let text;
   const buttons = [];
   const act = (label, choice, opts = {}) => h('button', { class: `btn ${opts.quiet ? 'btn-quiet' : ''} status-btn`, type: 'button', disabled: Boolean(opts.off), title: opts.title || '', onclick: async () => {
     try { statusNow = { ...st, link: await api('POST', '/api/link', { choice }) }; renderStatus(); setTimeout(checkStatus, 400); } catch (err) { toast(err.message); }
   } }, label);
-  // Getting ready to suspend: nothing new starts, everything is saved, and the line says when.
-  const ready = (on) => h('button', { class: `btn ${on ? '' : 'btn-quiet'} status-btn`, type: 'button', title: on ? 'Stop getting ready; the app works as usual again.' : 'Finish what is running, start nothing new, save everything to GitHub, and say when it is safe to suspend.', onclick: async () => {
+  const lockButton = (on) => h('button', { class: `btn ${on ? '' : 'btn-quiet'} status-btn`, type: 'button', title: on ? 'Work as usual again: the app may start work by itself.' : 'Finish what is running, start nothing new, save everything, and say when it is safe to suspend. Anything you send unlocks it again.', onclick: async () => {
     try { await api('POST', '/api/status/finalize', { on: !on }); checkStatus(); } catch (err) { toast(err.message); }
-  } }, on ? 'Never mind' : 'Get ready to suspend');
+  } }, on ? 'Unlock' : 'Get ready to suspend');
 
   if (l.enabled && l.step && l.choice === 'remote' && !onPi) {
-    tone = 'busy';
+    tone = 'ready';
     const finished = [
       ...(st.busy.threads.length ? [`Claude has finished ${quoted(st.busy.threads)}`] : []),
       ...(st.busy.extracting ? ['the brain update is through'] : []),
       ...(st.busy.cards ? ['the card run is through'] : []),
     ];
     text = l.step === 'Waiting for Claude to finish here'
-      ? `Handing over to the ${pi} as soon as ${finished.join(' and ') || 'Claude has finished here'}. Keep the ${lap} awake until then.`
-      : `Handing over to the ${pi}: ${l.step.toLowerCase()}… Keep the ${lap} awake.`;
+      ? `Handover as soon as ${finished.join(' and ') || 'Claude has finished here'}. Keep awake.`
+      : `Handover: ${l.step.toLowerCase()}… Keep awake.`;
     buttons.push(act('Cancel', 'local', { quiet: true }));
   } else if (l.enabled && l.step && onPi) {
-    tone = 'busy';
-    text = `Taking everything back from the ${pi}: ${l.step.toLowerCase()}…`;
+    tone = 'ready';
+    text = `Taking everything back: ${l.step.toLowerCase()}…`;
   } else if (onPi) {
-    tone = 'ok';
-    text = `Handed over: the ${pi} has everything and does the work. Safe to suspend the ${lap}; it takes everything back when it wakes.`;
+    tone = 'safe';
+    text = `Handed over. Safe to suspend the ${lap}.`;
     buttons.push(act(`Take back to the ${lap}`, 'local', { quiet: true }));
   } else {
-    const getting = l.finalizing;
-    if (running.length) { tone = 'busy'; text = `${getting ? 'Getting ready: ' : ''}${running.join(', ').replace(/^./, (c) => c.toUpperCase())}. Keep the ${lap} awake.`; }
-    else if (unsaved) { tone = 'busy'; text = st.saved.error ? `Not saved to GitHub: ${st.saved.error}` : 'Saving the latest changes to GitHub…'; }
-    else { tone = 'ok'; text = getting ? `Ready. Nothing is running, everything is saved: safe to suspend the ${lap}.` : `Everything is saved. Safe to suspend the ${lap}.`; }
+    if (stage === 'safe') text = 'Safe to suspend.';
+    else if (stage === 'getting-ready') text = running.length ? `Getting ready: ${running.join(', ')}.` : 'Getting ready: saving…';
+    else if (stage === 'idle') text = 'Nothing running. Not locked.';
+    else if (running.length) text = `${running.join(', ').replace(/^./, (c) => c.toUpperCase())}. Keep awake.`;
+    else text = st.saved.error ? `Not saved to GitHub: ${st.saved.error}` : 'Saving to GitHub…';
     if (l.note) text = `${text} ${l.note}`;
-    buttons.push(ready(Boolean(getting)));
+    buttons.push(lockButton(Boolean(l.finalizing)));
     if (l.enabled) {
       const missing = [...running, ...(unsaved ? [plural(st.saved.files + st.saved.ahead, 'change', 'changes') + ' not on GitHub yet'] : [])];
-      const title = !l.online ? `The ${pi} is not reachable.`
-        : missing.length ? `Still to transfer: ${missing.join('; ')}. The handover waits for that.` : `Ready: everything is saved, the ${pi} can take over now.`;
+      const title = !l.online ? `The ${pi.toLowerCase()} is not reachable.`
+        : missing.length ? `Still to transfer: ${missing.join('; ')}. The handover waits for that.` : `Ready: everything is saved, the ${pi.toLowerCase()} can take over now.`;
       buttons.push(h('span', { class: `status-ready ${l.online ? (missing.length ? 'is-wait' : 'is-go') : 'is-off'}`, title },
-        !l.online ? `${pi} is off` : missing.length ? `${pi}: waits for ${missing.length === 1 ? 'one thing' : `${missing.length} things`}` : `${pi} is ready`));
-      buttons.push(act(h('span', { class: 'pi-name' }, 'Hand over to the ', svg(BOARD), pi), 'remote', { off: !l.online, title: l.online ? `The ${lap} saves everything to GitHub, the ${pi} takes it in, and the ${pi} does the work until the ${lap} takes it back. The line here says when it is safe to suspend.` : `The ${pi} is not reachable.` }));
+        !l.online ? `${pi} off` : missing.length ? `waits for ${missing.length === 1 ? 'one thing' : `${missing.length} things`}` : 'ready'));
+      buttons.push(act(h('span', { class: 'pi-name' }, svg(BOARD), 'Handover'), 'remote', { off: !l.online, title: l.online ? `The ${lap} saves everything, the ${pi.toLowerCase()} takes it in and does the work until the ${lap} takes it back.` : `The ${pi.toLowerCase()} is not reachable.` }));
     }
   }
   const warn = st.unpushed.length
@@ -2014,7 +2058,8 @@ function renderStatus() {
     : null;
   bar.className = `statusbar is-${tone}`;
   bar.replaceChildren(...[
-    h('span', { class: 'status-side' }, h('span', { class: `status-dot is-${tone}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap),
+    h('span', { class: 'status-side', title: { safe: 'Nothing is running and the app starts nothing by itself.', ready: 'Getting ready to suspend: finishing what runs, starting nothing new.', busy: 'Something is running and the app may start more.', idle: 'Nothing is running, but the app may start something by itself.' }[tone] },
+      h('span', { class: `status-dot is-${tone}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap),
     h('span', { class: 'status-text', role: 'status' }, text),
     warn,
     h('span', { class: 'status-actions' }, buttons),
@@ -2185,6 +2230,11 @@ els.input.addEventListener('input', autosize);
 els.input.addEventListener('input', renderDoneButton);
 els.defer.addEventListener('click', deferThread);
 els.input.addEventListener('keydown', (e) => {
+  if (tierAsk) {
+    if (/^[1-5]$/.test(e.key) && tierAsk.names[Number(e.key) - 1]) { e.preventDefault(); tierAsk.pick(tierAsk.names[Number(e.key) - 1]); return; }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); tierAsk.pick(tierAsk.last); return; }
+    if (e.key === 'Escape') { e.preventDefault(); closeTierAsk(); return; }
+  }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     if (e.altKey) spinOff(); else send(e.ctrlKey);
@@ -2230,15 +2280,16 @@ function renderSettings() {
   const t = S.current ? S.threads.get(S.current) : null;
   const names = s.tierNames || [];
   const value = t?.tier || (t ? 'auto' : s.tier || 'auto');
-  const label = (n) => (n === 'auto' ? (t ? 'Auto' : 'Auto') : (s.tiers?.[n]?.label || n));
+  const label = (n) => (n === 'auto' ? 'Auto' : n === 'ask' ? 'Quick select' : (s.tiers?.[n]?.label || n));
   picker(els.tier, {
-    options: ['auto', ...names],
+    options: t ? ['auto', ...names] : ['auto', 'ask', ...names],
     value,
     name: label,
-    describe: (n) => (n === 'auto'
-      ? `Picked per message by a cheap model${t ? '' : ', so you never have to choose'}.`
-      : `${s.tiers?.[n]?.model || ''} ${s.tiers?.[n]?.effort || ''} — ${s.tiers?.[n]?.about || ''}`),
+    describe: (n) => (n === 'auto' ? 'Picked per message by a cheap model, so you never have to choose.'
+      : n === 'ask' ? 'Send asks first: five buttons over the box, 1 to 5 or Enter for the last one.'
+        : `${s.tiers?.[n]?.model || ''} ${s.tiers?.[n]?.effort || ''} — ${s.tiers?.[n]?.about || ''}`),
     onPick: (n) => {
+      closeTierAsk();
       if (t) {
         api('POST', `/api/threads/${t.id}/tier`, { tier: n === 'auto' ? '' : n })
           .then((out) => { S.threads.set(t.id, out.thread); renderSettings(); })

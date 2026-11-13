@@ -1269,14 +1269,17 @@ a.chip:hover { border-color: var(--muted); }
   background: rgba(255, 255, 255, 0.015);
 }
 .statusbar[hidden] { display: none; }
-.statusbar.is-ok { background: rgba(120, 220, 160, 0.05); }
+.statusbar.is-safe { background: rgba(120, 220, 160, 0.05); }
+.statusbar.is-ready { background: rgba(122, 168, 255, 0.07); }
 .statusbar.is-busy { background: rgba(240, 180, 90, 0.06); }
+.statusbar.is-idle { background: rgba(255, 255, 255, 0.015); }
 .status-side { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-weight: 600; flex: none; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
-.statusbar.is-busy .status-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+.statusbar.is-busy .status-dot, .statusbar.is-ready .status-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
 @keyframes pulse-dot { 50% { opacity: 0.35; } }
 .status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.statusbar.is-ok .status-text { color: var(--done); }
+.statusbar.is-safe .status-text { color: var(--done); }
+.statusbar.is-ready .status-text { color: var(--you); }
 .status-warn { flex: none; color: var(--work); cursor: help; border-bottom: 1px dotted currentColor; }
 .status-actions { display: inline-flex; align-items: center; gap: 10px; flex: none; }
 .status-ready { cursor: help; }
@@ -1347,8 +1350,10 @@ a.chip:hover { border-color: var(--muted); }
 .out-folded:hover .out-folded-head, .out-folded:focus-within .out-folded-head { color: var(--muted); }
 
 /* ---------- the status line ---------- */
-.status-dot.is-ok { background: var(--done); }
+.status-dot.is-safe { background: var(--done); }
+.status-dot.is-ready { background: var(--you); }
 .status-dot.is-busy { background: var(--work); }
+.status-dot.is-idle { background: var(--faint); }
 .pi-name { display: inline-flex; align-items: center; gap: 5px; }
 .board { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 
@@ -1362,3 +1367,24 @@ a.chip:hover { border-color: var(--muted); }
 .btn-tier { color: var(--faint); }
 .btn-tier:hover:not(:disabled) { color: var(--text); }
 .tier-up { margin-left: 4px; }
+
+/* ---------- quick select: how much is this message worth ---------- */
+.tier-ask {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 8px; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.tier-ask-label { color: var(--muted); font-size: 12.5px; }
+.tier-ask-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--raised); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.tier-ask-btn:hover { border-color: var(--you); color: var(--you); }
+.tier-ask-btn.is-last { border-color: var(--you); }
+.tier-ask-btn kbd { color: var(--faint); font: 11px var(--mono); }
+.tier-ask-x { margin-left: auto; border: 0; background: none; color: var(--faint); font-size: 17px; cursor: pointer; padding: 0 4px; }
+.tier-ask-x:hover { color: var(--text); }
+
+/* Nothing of the app is shown until it is clear whether the sleep screen belongs over it. */
+body.is-booting .shell { visibility: hidden; }

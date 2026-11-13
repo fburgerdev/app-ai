@@ -244,7 +244,8 @@ Claude in a thread) and the outline follows.
 Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium), **Default**
 (Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer
 starts on **Auto**: before each turn a cheap model reads the message and picks a tier, so there
-is nothing to choose. The tier it used is shown in the thread header; clicking it runs the same
+is nothing to choose. **Quick select** instead asks on sending: five buttons over the box,
+1 to 5 or a click, Enter for the one you used last, Escape back to writing. The tier it used is shown in the thread header; clicking it runs the same
 message again one tier up and pins that tier on the thread. Picking a tier while a thread is
 open pins it there; picking one with no thread open sets what everything gets.
 
@@ -261,11 +262,21 @@ A line in `Brain/Next Actions.md` and a thread in the inbox are two states of th
 - **Done** is the same button as "Send and done": with an empty box it closes the thread
   (also Alt+X), with text it keeps the message and closes without an answer.
 
-## Getting ready to suspend
+## The status line: four stages
 
-The status line's **Get ready to suspend** finishes what is running, starts nothing new (no
-cards, no events, no sorting), saves everything to GitHub, and turns green when it is safe to
-close the lid. It works whether or not the Pi is reachable. Anything you send ends it.
+The dot on the left says where the computer stands. **Locked** means the app starts nothing by
+itself; anything you send unlocks it again.
+
+| Dot | What it means |
+|---|---|
+| Green | Locked and nothing running: safe to suspend |
+| Blue | Locked, still finishing what was running |
+| Yellow | Something running, not locked |
+| Grey | Nothing running, but not locked: the app may start something by itself |
+
+**Get ready to suspend** locks it: what is running finishes, nothing new starts (no cards, no
+events, no sorting), everything is saved to GitHub, and the line turns green. It works whether
+or not the server is reachable. **Handover** gives everything to the server (see above).
 
 ## Usage
 

@@ -50,7 +50,7 @@ function promptFor(threadId, text, files) {
 // the message is kept and the thread closes, without a turn. He is closing it, so an
 // answer would only cost usage; the brain update reads the message like any other, and
 // if he reopens the thread, Claude gets it with his next message.
-export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false } = {}) {
+export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false, tier = '' } = {}) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
   const stored = { role: 'user', text };
@@ -58,6 +58,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   if (files.length) stored.files = files;
   if (doneAfter && !auto) stored.unanswered = true;
   const message = store.appendMessage(threadId, stored);
+  if (tier && TIER_NAMES.includes(tier)) store.updateThread(threadId, { nextTier: tier }, { quiet: true });
   const prompt = promptFor(threadId, text, files);
   if (doneAfter && !auto) {
     const unsent = [...(thread.unsent || []), prompt];
@@ -484,10 +485,17 @@ function tierOf(name) { return { name, ...TIERS[name] }; }
 
 export async function tierFor(threadId, prompt) {
   const thread = store.getThread(threadId);
+  // Chosen for this one message when sending (quick select), then forgotten.
+  // Read it before clearing it: the stored thread is the same object.
+  const once = thread?.nextTier || '';
+  if (TIER_NAMES.includes(once)) {
+    store.updateThread(threadId, { nextTier: '' }, { quiet: true });
+    return tierOf(once);
+  }
   const pinned = thread?.tier && TIER_NAMES.includes(thread.tier) ? thread.tier : '';
   if (pinned) return tierOf(pinned);
   const chosen = getState().tier;
-  if (chosen !== 'auto') return tierOf(TIER_NAMES.includes(chosen) ? chosen : 'default');
+  if (chosen !== 'auto' && chosen !== 'ask') return tierOf(TIER_NAMES.includes(chosen) ? chosen : 'default');
   const messages = store.readMessages(threadId);
   const earlier = messages.slice(-5, -1).map((m) => `${m.role === 'user' ? 'Florian' : 'Claude'}: ${messageText(m).slice(0, 400)}`).join('\n');
   let answer = '';

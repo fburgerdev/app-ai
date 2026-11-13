@@ -26,7 +26,7 @@ const DEFAULTS = {
   mood: '',
   model: 'opus',
   effort: 'high',
-  tier: 'auto', // auto: a cheap model picks the tier per message; otherwise a fixed tier
+  tier: 'auto', // auto: a cheap model picks per message | ask: choose on sending | a fixed tier
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
@@ -46,7 +46,7 @@ function load() {
   state = { ...DEFAULTS, ...stored };
   if (!MODELS.includes(state.model)) state.model = DEFAULTS.model;
   if (!EFFORTS.includes(state.effort)) state.effort = DEFAULTS.effort;
-  if (state.tier !== 'auto' && !TIER_NAMES.includes(state.tier)) state.tier = DEFAULTS.tier;
+  if (state.tier !== 'auto' && state.tier !== 'ask' && !TIER_NAMES.includes(state.tier)) state.tier = DEFAULTS.tier;
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   return state;
 }
@@ -63,7 +63,7 @@ export function setState(patch) {
   if (typeof patch.mood === 'string') next.mood = patch.mood.slice(0, 300);
   if (MODELS.includes(patch.model)) next.model = patch.model;
   if (EFFORTS.includes(patch.effort)) next.effort = patch.effort;
-  if (patch.tier === 'auto' || TIER_NAMES.includes(patch.tier)) next.tier = patch.tier;
+  if (patch.tier === 'auto' || patch.tier === 'ask' || TIER_NAMES.includes(patch.tier)) next.tier = patch.tier;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   if (patch.sleep && typeof patch.sleep === 'object') {
