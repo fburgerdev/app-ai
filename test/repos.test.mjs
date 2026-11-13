@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { repoName } from '../server/repos.js';
+import { cleanup, freePort } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,7 +27,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-repos-'));
 const hub = path.join(dir, 'hub');
 const vault = path.join(hub, 'fburgerdev', 'brain.git');
 const data = path.join(dir, 'data');
-const port = 5700 + Math.floor(Math.random() * 400);
+const port = await freePort();
 const base = `http://localhost:${port}`;
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +63,7 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], 
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_FAKE_GITHUB: '1' },
   stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), fs.openSync(path.join(dir, 'server.log'), 'a')],
 });
-test.after(() => { server.kill(); if (process.env.KEEP) console.log(fs.readFileSync(path.join(dir, 'server.log'), 'utf8')); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => { server.kill(); if (process.env.KEEP) console.log(fs.readFileSync(path.join(dir, 'server.log'), 'utf8')); return cleanup(dir, [server]); });
 
 const call = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });

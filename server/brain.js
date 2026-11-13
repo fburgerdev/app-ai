@@ -209,7 +209,7 @@ export function commitAndPush({ subject, body }) {
     await git(dir, ['add', '-A']);
     if (await gitOk(dir, ['diff', '--cached', '--quiet'])) return null;
 
-    const files = (await git(dir, ['diff', '--cached', '--name-status', '-z']))
+    const files = (await git(dir, ['diff', '--cached', '--name-status', '--no-renames', '-z']))
       .split('\0').filter(Boolean);
     const changes = [];
     for (let i = 0; i + 1 < files.length; i += 2) changes.push({ change: files[i], path: files[i + 1] });
@@ -257,7 +257,7 @@ export function readVaultFile(rel) {
   return { path: path.relative(config.brainDir, full).split(path.sep).join('/'), full };
 }
 
-let noteIndex = { head: null, byName: new Map() };
+let noteIndex = { head: null, byName: new Map(), at: 0 };
 
 function indexNotes() {
   const byName = new Map();
@@ -273,7 +273,7 @@ function indexNotes() {
     }
   };
   visit(config.brainDir);
-  noteIndex = { head: status.head, byName };
+  noteIndex = { head: status.head, byName, at: Date.now() };
 }
 
 // Resolves an Obsidian link target ("Next Actions" or a path)
@@ -291,7 +291,10 @@ export function resolveWikilink(target) {
   let full = noteIndex.byName.get(base);
   // The index is kept per commit, but files also move without one (a brain update that
   // is still writing renames a note): an entry whose file is gone means the index is old.
-  if (full && !fs.existsSync(full)) {
+  // The other half: the note's new name is not in the index yet. Only a brain update
+  // moves files without a commit, so only while one is writing is a miss looked at
+  // again, and not more often than every two seconds.
+  if ((full && !fs.existsSync(full)) || (!full && writer && Date.now() - noteIndex.at > 2000)) {
     indexNotes();
     full = noteIndex.byName.get(base);
   }

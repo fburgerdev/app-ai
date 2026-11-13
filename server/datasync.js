@@ -119,8 +119,20 @@ async function mergeRemote() {
   if (!(await hasCommits())) { await git(DATA_DIR, ['reset', '--quiet', '--hard', theirs]); return true; }
   const behind = Number((await git(DATA_DIR, ['rev-list', '--count', `HEAD..${theirs}`])).trim());
   if (!behind) return false;
+  const merge = () => git(DATA_DIR, ['merge', '--quiet', '--no-edit', '--allow-unrelated-histories', '-m', 'merge what the other computer saved', theirs]);
   try {
-    await git(DATA_DIR, ['merge', '--quiet', '--no-edit', '--allow-unrelated-histories', '-m', 'merge what the other computer saved', theirs]);
+    // The app keeps writing while this runs (a thread gets its name a moment after its
+    // turn ends), and git refuses to merge over a file changed since the last commit.
+    // So what changed is committed right before the merge, and once more if a write
+    // slipped in between the two.
+    for (let attempt = 0; ; attempt += 1) {
+      await commitLocal('state');
+      try { await merge(); break; } catch (err) {
+        const unmerged = (await git(DATA_DIR, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
+        if (unmerged.length || attempt >= 4) throw err;
+        await git(DATA_DIR, ['merge', '--abort']).catch(() => {});
+      }
+    }
   } catch (err) {
     // Changed on both sides. What is on GitHub wins, file by file.
     const unmerged = (await git(DATA_DIR, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
@@ -197,10 +209,11 @@ export function saveNow(reason = 'state') {
 // What is here but not on GitHub yet: changed files, and commits not pushed.
 export async function unsaved() {
   if (!status.enabled) return { enabled: false, files: 0, ahead: 0 };
-  const files = (await git(DATA_DIR, ['status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean).length;
+  const changed = (await git(DATA_DIR, ['status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean);
+  const files = changed.length;
   const branch = config.dataBranch;
   const ahead = (await gitOk(DATA_DIR, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]))
     ? Number((await git(DATA_DIR, ['rev-list', '--count', `origin/${branch}..HEAD`]).catch(() => '0')).trim())
     : (await hasCommits()) ? 1 : 0;
-  return { enabled: true, files, ahead, lastPush: status.lastPush, error: status.error };
+  return { enabled: true, files, ahead, names: changed.slice(0, 5).map((l) => l.slice(3)), lastPush: status.lastPush, error: status.error };
 }

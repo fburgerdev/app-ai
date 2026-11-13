@@ -16,7 +16,7 @@ import { logRead, logToolRead } from './reads.js';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState, TIERS, TIER_NAMES } from './state.js';
-import { projectContext, repoOf, projectChoices } from './projects.js';
+import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
 import * as repos from './repos.js';
 import * as repair from './repair.js';
 
@@ -275,6 +275,8 @@ async function runTurn(threadId, prompt) {
   try {
     activity('Getting the vault up to date');
     await brain.refresh();
+    // A project renamed in the vault keeps its threads, this one included.
+    try { followRenames(); } catch { /* the thread runs without it */ }
     // The project's repo, once: after that the thread's own choice counts.
     if (!thread.repoSet && thread.project) {
       const r = repos.repoName(repoOf(thread.project));

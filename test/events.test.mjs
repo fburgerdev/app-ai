@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { showAtFor } from '../server/events.js';
+import { cleanup, freePort } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -23,7 +24,7 @@ test('when an event thread opens', () => {
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-events-'));
 const vault = path.join(dir, 'vault.git');
 const data = path.join(dir, 'data');
-const port = 6900 + Math.floor(Math.random() * 300);
+const port = await freePort();
 const base = `http://localhost:${port}`;
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +51,7 @@ fs.mkdirSync(data, { recursive: true });
 fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', cards: { auto: false } }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data }, stdio: ['ignore', fs.openSync(path.join(dir, 'log'), 'w'), 'inherit'] });
 test.after(() => { if (process.env.KEEP) console.log(fs.readFileSync(path.join(dir, 'log'), 'utf8')); });
-test.after(() => { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => cleanup(dir, [server]));
 
 const call = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });

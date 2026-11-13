@@ -9,6 +9,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanup, freePort, until } from './helpers.mjs';
 import WebSocket from 'ws';
 import { HostSession, interpret, twilioSignature } from '../server/voice.js';
 import { parseDecision } from '../server/host.js';
@@ -208,7 +209,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-voice-'));
 const remote = path.join(dir, 'vault.git');
 const seed = path.join(dir, 'seed');
 const data = path.join(dir, 'data');
-const port = 4800 + Math.floor(Math.random() * 400);
+const port = await freePort();
 const base = `http://localhost:${port}`;
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -232,16 +233,8 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], 
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_DATA_REPO: '' },
   stdio: 'ignore',
 });
-test.after(() => { server.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => cleanup(dir, [server]));
 
-const until = async (fn, label) => {
-  for (let i = 0; i < 200; i += 1) {
-    const value = await fn().catch(() => null);
-    if (value) return value;
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for: ${label}`);
-};
 const twiml = (params, signature) => fetch(`${base}/voice/twiml`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': signature },
