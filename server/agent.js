@@ -254,7 +254,10 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
   const disallowedTools = [...NEVER];
   if (mode === 'extract') disallowedTools.push('WebSearch', 'WebFetch');
-  if (mode === 'thread' && !shell) disallowedTools.push('Bash', 'PowerShell');
+  // A thread that can open a repo keeps the shell tools: the policy allows them only once
+  // a repo is open (tests, builds, running the app). Taking them away
+  // here would leave repo threads able to change code but never run it.
+  if (mode === 'thread' && !shell && !repoTools) disallowedTools.push('Bash', 'PowerShell');
 
   // "plain" is Claude with no tools and no vault: text in, text out. "lookup" adds the web.
   const plain = mode === 'plain' || mode === 'lookup';

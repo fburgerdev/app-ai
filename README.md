@@ -392,7 +392,7 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `hiddenPaths` | Scratchpad, .obsidian, For Claude/processed | Never on the app's disk. |
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
-| `threadShell` | `false` | Whether Claude may run shell commands in threads. |
+| `threadShell` | `false` | Whether Claude may run shell commands in threads outside a repo. Once a thread has opened a repo, it can always run them (tests, builds); it is told to work only in that repo's folder, and push, branch switching and destructive git commands are refused. |
 | `maxParallel` | `6` | Turns that run at once. Your own messages go first; work the app started by itself leaves one slot free for you. Use 3 on a Pi with 2 GB. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |
 | `google` | empty | Client id and secret of your Google Cloud project. |
