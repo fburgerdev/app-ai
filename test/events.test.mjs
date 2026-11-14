@@ -358,3 +358,20 @@ test('what is typed and not sent is kept, the newer copy wins, and sending empti
   await call('DELETE', `/api/threads/${t.id}`, {});
   await until(async () => !fs.existsSync(path.join(data, 'drafts', `${t.id}.json`)), 'draft dropped');
 });
+
+test('only files Claude chose to show are shown; what a script leaves behind goes to the workbench', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'SCRIPT-TEST fill the form' })).data.thread;
+  const done = await ready(t.id);
+  // One file shown: the result the script handed over. Not the 40 library files.
+  assert.deepEqual(done.artifacts.map((a) => a.name), ['Formular ausgefüllt.pdf']);
+  const parts = done.messages.filter((m) => m.role === 'assistant').flatMap((m) => m.parts || []).filter((p) => p.type === 'artifact');
+  assert.deepEqual(parts.map((p) => p.name), ['Formular ausgefüllt.pdf']);
+  // The artifacts folder holds only that; the rest is on the workbench, which is not synced.
+  const art = path.join(data, 'threads', t.id, 'artifacts');
+  assert.deepEqual(fs.readdirSync(art), ['Formular ausgefüllt.pdf']);
+  assert.ok(fs.existsSync(path.join(data, 'threads', t.id, 'work', 'unshown', 'pylib', 'yaml', '__pycache__', 'm0.cpython-312.pyc')));
+  assert.ok(fs.existsSync(path.join(data, 'threads', t.id, 'work', 'fill.py')));
+  // A mail written with the file tool is shown as before.
+  const m = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office' })).data.thread;
+  assert.deepEqual((await ready(m.id)).artifacts.map((a) => a.name), ['Mail an das Büro.md']);
+});

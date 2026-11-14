@@ -164,6 +164,12 @@ async function tick() {
 }
 
 // Returns at once; the status says how the change goes.
+// Asks the other computer to save what it has to GitHub now. False when it is not there.
+export async function remoteSave() {
+  if (!enabled() || !online) return false;
+  try { await remoteCall('POST', '/api/sync/push', { timeout: 120_000 }); return true; } catch { return false; }
+}
+
 export function choose(next) {
   choice = next === 'remote' ? 'remote' : 'local';
   note = '';

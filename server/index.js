@@ -813,6 +813,29 @@ events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
 setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillSignatures().catch(() => {}); }, 20_000).unref?.();
+// Threads from before the workbench: what a script left among the shown files leaves
+// the list, once per thread (store.pruneArtifacts). A thread Claude works on now waits.
+setTimeout(() => {
+  if (!link.mayRunBackground()) return;
+  for (const t of store.listThreads()) {
+    if (t.artifactsPruned || t.state === 'working') continue;
+    try { store.pruneArtifacts(t.id); } catch (err) { log(`could not tidy the files of thread ${t.id}: ${err.message}`); }
+  }
+}, 8_000).unref?.();
+// What that cleanup took out is also taken out of the data repo's saved history, once,
+// at a quiet moment: the other computer saves first, and adopts the result by itself.
+const PURGE_LIST = path.join(DATA_DIR, 'purge-history.json');
+async function purgeWhenQuiet() {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(PURGE_LIST, 'utf8')); } catch { return; }
+  if (!list.length) { fs.rmSync(PURGE_LIST, { force: true }); return; }
+  if (!link.mayRunBackground() || store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running) { setTimeout(purgeWhenQuiet, 15 * 60_000).unref?.(); return; }
+  await link.remoteSave();
+  const r = await datasync.purgeHistory(list).catch((err) => ({ done: false, reason: err.message }));
+  if (r.done) fs.rmSync(PURGE_LIST, { force: true });
+  else { log(`app data: cleaning the saved history waits: ${r.reason}`); setTimeout(purgeWhenQuiet, 60 * 60_000).unref?.(); }
+}
+setTimeout(() => purgeWhenQuiet().catch((err) => log(`app data: cleaning the saved history failed: ${err.message}`)), 90_000).unref?.();
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {
