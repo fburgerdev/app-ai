@@ -103,11 +103,24 @@ export function startDataSync() {
   timer.unref?.();
 }
 
+// Git lets one process at a time write a repository's index and refuses the second
+// ("Unable to create .../index.lock ... Another git process seems to be running").
+// Something else can hold it for a moment (a status check, a shell in a thread's
+// folder), so a refused step waits briefly and runs again.
+export async function whenUnlocked(fn, { tries = 5, wait = 400 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await fn(); } catch (err) {
+      if (attempt >= tries || !/index\.lock|Another git process/i.test(`${err.stderr || ''} ${err.message || ''}`)) throw err;
+      await new Promise((r) => setTimeout(r, wait * attempt));
+    }
+  }
+}
+
 async function commitLocal(reason) {
-  await git(DATA_DIR, ['add', '-A']);
+  await whenUnlocked(() => git(DATA_DIR, ['add', '-A']));
   if (await gitOk(DATA_DIR, ['diff', '--cached', '--quiet'])) return false;
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  await git(DATA_DIR, ['commit', '--quiet', '-m', `${reason}: ${stamp}`]);
+  await whenUnlocked(() => git(DATA_DIR, ['commit', '--quiet', '-m', `${reason}: ${stamp}`]));
   return true;
 }
 
@@ -222,7 +235,8 @@ export function saveNow(reason = 'state') {
 // What is here but not on GitHub yet: changed files, and commits not pushed.
 export async function unsaved() {
   if (!status.enabled) return { enabled: false, files: 0, ahead: 0 };
-  const changed = (await git(DATA_DIR, ['status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean);
+  // Runs beside a save, not in line with it, so it must not take the index lock itself.
+  const changed = (await git(DATA_DIR, ['--no-optional-locks', 'status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean);
   const files = changed.length;
   const branch = config.dataBranch;
   const ahead = (await gitOk(DATA_DIR, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]))
