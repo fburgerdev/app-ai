@@ -316,6 +316,7 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
       try {
         mailThreads = await google.gmailSince(since);
         mailRead = true;
+        log(`brain update: read ${mailThreads.read ?? '?'} mail(s) since ${new Date(since).toISOString()}, skipped ${mailThreads.skipped ?? 0} automated`);
         if (mailThreads.length) {
           writeMail(dir, mailThreads, since);
           material.push('- `Mail.md`');
