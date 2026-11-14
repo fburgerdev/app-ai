@@ -165,6 +165,18 @@ export function pullNow() {
   });
 }
 
+// Pushes; when GitHub rejects it because the other computer pushed in between, takes
+// that in and pushes again. Both computers save on the same clock, so the second push
+// can lose the same race (GitHub then says "cannot lock ref"): a few tries, a moment apart.
+export async function pushTakingIn(push, takeIn, { tries = 4, wait = 1500 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await push(); } catch (err) {
+      if (attempt >= tries || !(await takeIn())) throw err;
+      if (attempt > 1) await new Promise((r) => setTimeout(r, wait * (attempt - 1)));
+    }
+  }
+}
+
 // Commits what changed and pushes. Safe to call at any time.
 export function saveNow(reason = 'state') {
   if (!status.enabled) return Promise.resolve(dataSyncStatus());
@@ -177,13 +189,14 @@ export function saveNow(reason = 'state') {
           ? Number((await git(DATA_DIR, ['rev-list', '--count', `origin/${branch}..HEAD`])).trim())
           : 1;
         if (ahead > 0) {
-          const push = () => git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`]);
-          try { await push(); } catch (err) {
-            // The other computer pushed in between: take that in, then push both.
-            if (!(await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', branch]))) throw err;
-            if (await mergeRemote()) reload();
-            await push();
-          }
+          await pushTakingIn(
+            () => git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`]),
+            async () => {
+              if (!(await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', branch]))) return false;
+              if (await mergeRemote()) reload();
+              return true;
+            },
+          );
           await git(DATA_DIR, ['fetch', '--quiet', 'origin', branch]).catch(() => {});
           status.lastPush = Date.now();
           for (const fn of pushed) { try { fn(); } catch { /* never in the way */ } }

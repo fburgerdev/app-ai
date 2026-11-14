@@ -4,6 +4,19 @@ import path from 'node:path';
 import { buildPolicy, describeTool, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
+import { pushTakingIn } from '../server/datasync.js';
+
+test('saving state: losing the race to the other computer twice still saves', async () => {
+  let sends = 0;
+  let takenIn = 0;
+  const send = async () => { sends += 1; if (sends < 3) throw new Error("cannot lock ref 'refs/heads/main'"); return 'ok'; };
+  assert.equal(await pushTakingIn(send, async () => { takenIn += 1; return true; }, { wait: 1 }), 'ok');
+  assert.equal(sends, 3);
+  assert.equal(takenIn, 2);
+  // It gives up after its tries, and at once when GitHub cannot be fetched from.
+  await assert.rejects(pushTakingIn(async () => { throw new Error('rejected'); }, async () => true, { tries: 3, wait: 1 }), /rejected/);
+  await assert.rejects(pushTakingIn(async () => { throw new Error('offline'); }, async () => false, { wait: 1 }), /offline/);
+});
 
 test('thread policy: writes only into the artifacts folder', async () => {
   const cwd = path.resolve('/vault');
