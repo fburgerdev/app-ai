@@ -922,9 +922,37 @@ function partsInto(container, threadId, parts, { live = false } = {}) {
   container.replaceChildren(...out);
 }
 
+// What a note in the thread says, in a few words. The note itself stays as it is
+// written, for Claude and the brain update; this is only how it is shown.
+function shortNote(text) {
+  const t = text.replace(/^\[|\]$/g, '').trim();
+  let m;
+  if ((m = /^Florian sent the mail "([^"]+)".*?To: (.+?)\. Subject: (.*)\.$/s.exec(t))) return { line: `Mail sent to ${m[2]}` };
+  if ((m = /^Florian merged the branch \S+ into (\S+) of (\S+)/.exec(t))) return { line: `Merged into ${m[1]} of ${m[2].split('/').pop()}` };
+  if ((m = /^Florian pushed the branch \S+ of (\S+)/.exec(t))) return { line: `Branch of ${m[1].split('/').pop()} pushed` };
+  if ((m = /^The app (ran the tests, they passed, and it|found no tests in this repo and) merged (?:the branch \S+|the fix) into (\S+) of (\S+)/.exec(t))) {
+    return { line: `Merged into ${m[2]} of ${m[3].split('/').pop()}${/passed/.test(m[1]) ? ', tests passed' : ', no tests'}${/updates itself/.test(t) ? ' · live within 10 min' : ''}` };
+  }
+  if (/^The app ran the tests on this fix, they passed, and it merged and pushed the fix/.test(t)) return { line: 'Fix merged, tests passed · live within 10 min' };
+  if (/^The app ran the tests on this fix and they did not pass/.test(t)) return { line: 'Fix not merged: tests failed', bad: true };
+  if ((m = /^The app ran the tests of (\S+) on this branch and they did not pass/.exec(t))) {
+    return { line: `Not merged: tests of ${m[1].split('/').pop()} failed`, more: t.split('The end of the test output:')[1]?.trim() || '', bad: true };
+  }
+  if ((m = /^The app could not merge this branch into main by itself: (.*?)(?: The branch is on GitHub|$)/s.exec(t))) return { line: `Not merged: ${m[1].replace(/\.$/, '')}`, bad: true };
+  if ((m = /^Claude renamed the GitHub repo (\S+) to (\S+?)\.? on/.exec(t))) return { line: `Repo renamed to ${m[2]}` };
+  if ((m = /^Claude created the GitHub repo (\S+)/.exec(t))) return { line: `Repo ${m[1]} created` };
+  const first = t.split(/(?<=[.!?])\s/)[0];
+  return { line: first.length > 110 ? `${first.slice(0, 109).trim()}…` : first };
+}
+
 function messageEl(threadId, m) {
   if (m.role === 'user' && m.event) {
-    return h('p', { class: 'msg msg-event' }, m.text.replace(/^\[|\]$/g, ''));
+    const n = shortNote(m.text);
+    const full = m.text.replace(/^\[|\]$/g, '');
+    const line = h('span', { class: 'event-line' }, n.line, m.ts ? h('span', { class: 'event-time' }, ` · ${stamp(m.ts)}`) : null);
+    return n.more
+      ? h('details', { class: `msg msg-event${n.bad ? ' is-bad' : ''}`, title: full }, h('summary', {}, line), h('pre', { class: 'event-more' }, n.more))
+      : h('p', { class: `msg msg-event${n.bad ? ' is-bad' : ''}`, title: full }, line);
   }
   if (m.role === 'user' && m.auto) {
     return h('details', { class: 'msg msg-auto' }, h('summary', {}, 'Started by the app'), h('div', { class: 'msg-body' }, renderMarkdown(m.text)));
@@ -941,9 +969,24 @@ function messageEl(threadId, m) {
   const body = h('div', { class: 'msg-body' });
   partsInto(body, threadId, m.parts || []);
   const el = h('article', { class: 'msg msg-claude' }, body);
+  const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
+  if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
   if (m.error) el.append(h('p', { class: 'msg-note is-error' }, m.error));
   return el;
+}
+
+// "High · Fable, medium": a tier as he reads it.
+function tierText(name) {
+  const t = name && S.settings.tiers?.[name];
+  if (!t) return '';
+  const model = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' }[t.model] || t.model;
+  return `${t.label} · ${model}, ${t.effort}`;
+}
+// Answers from before each one kept its tier: only the newest can be told, from the thread.
+function isLastAnswer(threadId, m) {
+  const msgs = S.current === threadId ? S.view?.messages : null;
+  return Boolean(msgs) && msgs.filter((x) => x.role === 'assistant').at(-1) === m;
 }
 
 // The water level: everything above this line is in the brain.
@@ -1034,7 +1077,7 @@ function renderHead() {
     status = h('span', { class: `status status-${t.state === 'ready' ? 'ready' : 'done'}` }, t.state === 'ready' ? kindLabel(t) : `${kindLabel(t)}, ${t.card?.outcome || 'decided'}`);
     if (t.state === 'ready') actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else if (t.state === 'working') {
-    status = h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working');
+    status = h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
@@ -1197,6 +1240,7 @@ async function deferThread() {
     const out = await api('POST', `/api/threads/${t.id}/defer`, { text: els.input.value.trim() });
     S.threads.set(t.id, out.thread);
     els.input.value = '';
+    autosize();
     forgetDraft(t.id);
     toast('Deferred. It sleeps under Next actions; the next brain update writes it into Next Actions.md.');
     advance(t.id);
@@ -1611,6 +1655,7 @@ async function send(done = false, tier = '') {
       S.newProject = '';
     }
     els.input.value = '';
+    autosize();
     forgetDraft(from || 'new');
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
@@ -1644,6 +1689,7 @@ async function spinOff(tier = '') {
     S.threads.set(out.thread.id, out.thread);
     S.threads.set(out.from.id, out.from);
     els.input.value = '';
+    autosize();
     forgetDraft(from);
     S.attach.delete(from);
     toast(`Spun off: “${clip(out.thread.title, 48)}”`);

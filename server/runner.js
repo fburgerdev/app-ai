@@ -323,7 +323,7 @@ async function runTurn(threadId, prompt) {
     // Claude Code puts an error into the reply as text too; it is shown once, as the error.
     const repeatsError = (p) => result.error && p.type === 'text' && result.error.includes(p.text.trim());
     const parts = run.parts.filter((p) => (p.type !== 'text' || p.text.trim()) && !repeatsError(p));
-    const message = { role: 'assistant', parts, durationMs: result.durationMs };
+    const message = { role: 'assistant', parts, durationMs: result.durationMs, tier: tier.name };
     if (result.aborted) message.stopped = true;
     if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
