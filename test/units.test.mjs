@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { buildPolicy, describeTool } from '../server/agent.js';
+import { buildPolicy, describeTool, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
 
@@ -22,6 +22,30 @@ test('thread policy: writes only into the artifacts folder', async () => {
 test('thread policy: shell only when switched on', async () => {
   const can = buildPolicy({ mode: 'thread', cwd: '/vault', artifactsDir: '/a', shell: true });
   assert.equal((await can('Bash', { command: 'ls' })).behavior, 'allow');
+});
+
+test('thread policy: without a repo, scripts run in the artifacts folder and nowhere else', async () => {
+  const cwd = path.resolve('/vault');
+  const artifactsDir = path.resolve('/data/threads/t1/artifacts');
+  const can = buildPolicy({ mode: 'thread', cwd, artifactsDir, shell: false, artifactsShell: true });
+  const run = async (command, tool = 'Bash') => (await can(tool, { command })).behavior;
+  assert.equal(await run(`cd "${artifactsDir}" && python fill.py`), 'allow');
+  assert.equal(await run(`cd '${artifactsDir}'; python fill.py`), 'allow');
+  assert.equal(await run(`Set-Location -LiteralPath "${artifactsDir}"; python fill.py`, 'PowerShell'), 'allow');
+  assert.equal(await run(`cd "${path.join(artifactsDir, 'work')}" && ls`), 'allow', 'a folder inside it');
+  assert.equal(await run('python fill.py'), 'deny', 'not without going there first');
+  assert.equal(await run(`cd "${cwd}" && python fill.py`), 'deny', 'not in the vault');
+  assert.equal(await run(`cd "${path.resolve('/data/threads/t2/artifacts')}" && ls`), 'deny', 'not in another thread');
+  assert.equal(await run(`cd "${artifactsDir}/../.." && ls`), 'deny');
+  assert.equal(await run(`cd "${artifactsDir}" && git status`), 'deny', 'no git without a repo');
+  assert.equal(await run(`cd "${artifactsDir}" && python digit.py`), 'allow', 'a word that only contains "git"');
+  assert.equal((await can('BashOutput', { bash_id: 'x' })).behavior, 'allow');
+  // Switched off in the config: as before.
+  const off = buildPolicy({ mode: 'thread', cwd, artifactsDir, shell: false, artifactsShell: false });
+  assert.equal((await off('Bash', { command: `cd "${artifactsDir}" && ls` })).behavior, 'deny');
+  // Writes stay where they were: only the artifacts folder.
+  assert.equal((await can('Write', { file_path: path.join(cwd, 'Brain', 'X.md') })).behavior, 'deny');
+  assert.equal(startsIn('  cd /d "C:\\x\\a" && dir', path.resolve('C:\\x\\a')), process.platform === 'win32');
 });
 
 test('brain update policy: vault only, protected paths never, no git history, no web', async () => {

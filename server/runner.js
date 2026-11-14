@@ -239,6 +239,7 @@ async function runTurn(threadId, prompt) {
       const before = store.getThread(threadId);
       if (before.repo && repos.holder(before.repo) === threadId && before.repo.toLowerCase() !== full.toLowerCase()) {
         await repos.saveWork(threadId);
+        await repos.autoPush(threadId);
         repos.release(before.repo, threadId);
       }
       const other = repos.holder(full);
@@ -299,6 +300,7 @@ async function runTurn(threadId, prompt) {
       readDirs: [store.uploadsDir(threadId)],
       protectedPaths: config.protectedPaths,
       shell: config.threadShell,
+      artifactsShell: config.artifactsShell !== false,
       signal: abort.signal,
       title: thread.title,
       fake: config.fake,
@@ -327,7 +329,9 @@ async function runTurn(threadId, prompt) {
 
     // The repo is saved and given back before the thread shows as ready, so nothing
     // Florian does next (another repo, merging) meets a turn still holding it.
+    // The branch goes to GitHub by itself, so the work is not on this computer only.
     await repos.saveWork(threadId).catch(() => {});
+    await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId);
     if (store.getThread(threadId)?.kind === 'repair') repair.afterTurn(threadId).catch(() => {});
     const fresh = store.getThread(threadId);
@@ -362,6 +366,7 @@ async function runTurn(threadId, prompt) {
   } finally {
     // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
     await repos.saveWork(threadId).catch(() => {});
+    await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId);
     running.delete(threadId);
     emitLive({ op: 'end' });

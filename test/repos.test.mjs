@@ -110,11 +110,12 @@ test('a thread on a project gets its repo, clones it when Claude opens it, and w
   assert.equal(st.ahead, 1, 'what Claude left uncommitted was committed onto the branch');
   assert.equal(st.uncommitted, false);
   assert.deepEqual(st.files, [{ name: 'CHANGED-BY-CLAUDE.md', status: 'A' }]);
-  assert.equal(st.pushed, false);
+  assert.equal(st.pushed, true, 'the branch went to GitHub by itself when the turn ended');
   assert.equal(st.holder, '', 'given back when the turn ended');
   const diff = (await call('GET', `/api/threads/${made.id}/repo/diff?file=CHANGED-BY-CLAUDE.md`)).data;
   assert.match(diff, /\+Changed in a turn/);
-  assert.equal(git(site.remote, 'branch', '--list', 'claude/*').trim(), '', 'nothing left the machine');
+  assert.match(git(site.remote, 'branch', '--list', 'claude/*'), /claude\/change-the-heading/, 'the branch is on GitHub');
+  assert.ok(!git(site.remote, 'ls-tree', '--name-only', 'main').includes('CHANGED-BY-CLAUDE.md'), 'main is untouched until he merges');
 
   // Push, then merge.
   const pushed = await call('POST', `/api/threads/${made.id}/repo/push`, {});
