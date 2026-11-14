@@ -30,10 +30,27 @@ about how it behaves, and about the one extra for renaming and creating repos.
   a repo can run scripts in its own artifacts folder, for PDF forms and Word files; see the
   README.)
 
-## What only you do: merging
+## Into main by itself
+
+When a turn that changed a repo ends, the app, in the background:
+
+1. takes the repo, so no other thread changes it meanwhile;
+2. runs the repo's tests on the branch, if it has any (`npm test` in `package.json`, after
+   `npm ci`); what the tests leave behind is thrown away, not merged;
+3. if they pass, or there are none, merges the branch into main, pushes main and deletes the
+   branch;
+4. notes in the thread what it did. If the tests failed, the note has the end of their output,
+   and the branch stays on GitHub; if main has moved on in a way that clashes, it says so.
+
+For the app's own repo, a merged change reaches the running app with its next self-update,
+within ten minutes. If the new version does not start, the self-update goes back.
+
+`"autoMerge": false` in `config.json` turns step 3 off, so merging is your button again.
+
+## The buttons
 
 The repo panel shows the branch, its commits, and every changed file with its diff. Its buttons
-are the only way anything reaches main:
+do by hand what the app otherwise does by itself:
 
 - **Push and open pull request** pushes the branch and opens GitHub's page for a pull request.
 - **Only push** pushes the branch, nothing more. Rarely needed now: the branch is pushed by

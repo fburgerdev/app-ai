@@ -25,7 +25,7 @@ const GIT_HISTORY = /\bgit\b[^|;&\n]*\b(commit|push|pull|fetch|reset|rebase|chec
 // In a repo, Claude commits on its own branch; pushing, switching branches and throwing
 // work away are the app's and Florian's.
 const REPO_FORBIDDEN = [
-  [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push yourself: the app pushes this thread\'s branch when the turn ends, and Florian merges with the button in the thread.'],
+  [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push yourself: when the turn ends the app pushes this thread\'s branch, tests it and merges it into main by itself.'],
   [/\bgit\b[^|;&\n]*\b(switch|worktree)\b|\bgit\b[^|;&\n]*\bcheckout\b(?![^|;&\n]*\s--\s)/, 'Stay on this thread\'s branch: the app manages branches. To undo changes to a file use "git restore <file>".'],
   [/\bgit\b[^|;&\n]*\b(reset\s+--hard|branch\s+-[dD]|remote|filter-branch|clean\s+-[a-z]*f)/, 'That git command can lose work or change the repo\'s setup; the app does not allow it.'],
   [/\bgh\b[^|;&\n]*\b(repo\s+(delete|rename|archive)|pr\s+(merge|create))/, 'Use the app\'s GitHub tools; deleting a repo is not possible at all.'],
@@ -159,7 +159,7 @@ async function buildAppServer({ spinOff, repoTools }) {
           async ({ repo }) => {
             try {
               const r = await repoTools.open(repo);
-              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push or switch branches yourself: when the turn ends the app commits whatever you left uncommitted and pushes this branch to GitHub by itself. Florian merges into main with the button in the thread.`);
+              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push, merge or switch branches yourself: when the turn ends the app commits whatever you left uncommitted, pushes this branch, runs the repo's tests and, if they pass, merges it into main by itself. End the turn only with work that may go live.`);
             } catch (err) { return fail(err); }
           }),
         tool('list_repos', 'List Florian\'s GitHub repos.', {}, async () => {

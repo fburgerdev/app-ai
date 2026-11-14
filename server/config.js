@@ -123,6 +123,10 @@ const DEFAULTS = {
   // work never sits on one computer only. Merging into main stays Florian's button.
   autoPush: true,
 
+  // Whether that branch is then merged into main by itself: after the repo's tests pass
+  // (npm test), or at once if it has none. Failing tests leave it with a note in the thread.
+  autoMerge: true,
+
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
 

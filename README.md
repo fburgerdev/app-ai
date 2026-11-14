@@ -152,9 +152,11 @@ The outline on the right is an overview of projects and areas, read from the vau
 Any thread can work in any of your GitHub repos: from the project's `repo:` line, by naming it
 in the thread, or by picking it in the repo panel (the repo button in the thread header). The
 repo is cloned the moment Claude opens it; one thread works in a repo at a time, the others
-wait; every thread gets a branch of its own. Claude commits but never pushes: the panel's
-**Push and open pull request**, **Only push** and **Merge into main** are yours. Claude can
-rename and create repos when you ask. Detail, and the token for renaming, in
+wait; every thread gets a branch of its own. Claude commits; when its turn ends the app pushes
+the branch, runs the repo's tests (`npm test`, if it has any) and, if they pass, merges it
+into main by itself, with a note in the thread. Failing tests or a clash with main leave the
+branch on GitHub, and the note says why. The panel's buttons are still there for doing it by
+hand. Claude can rename and create repos when you ask. Detail, and the token for renaming, in
 [docs/repos.md](docs/repos.md).
 
 ## Sleep time
@@ -326,11 +328,11 @@ turn off.
   by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
 - **Anything else fails** (a brain update, the card run, saving, updating, a crash): the app
   opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the
-  cause, and if it is a bug fixes it in the app's own repo. When that turn ends with commits
-  and `npm test` passes, the app merges and pushes the fix itself, and the self-update takes
-  it (and goes back if the new version does not start). If the tests fail, the thread waits in
-  the inbox with its Merge button. One repair thread per kind of error per day. Turn it off
-  with `"repair": { "auto": false }`, or only the merging with `"autoMerge": false`.
+  cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like
+  any thread's work, the thread closes, and the self-update takes it (and goes back if the new
+  version does not start). If the tests fail, the thread waits in the inbox. One repair thread
+  per kind of error per day. Turn it off with `"repair": { "auto": false }`, or only its
+  merging with `"repair": { "autoMerge": false }`.
 
 ## Usage
 
@@ -393,7 +395,8 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
 | `artifactsShell` | `true` | Whether a thread without a repo may run scripts in its own artifacts folder: filling a PDF form, reading or editing a Word or Excel file, converting a file. Every command has to start with `cd` into that folder, and git is refused. It is a rule the app checks, not a sandbox: a script can still reach other folders on the computer. |
-| `autoPush` | `true` | Whether a thread's branch in a repo is pushed to GitHub by itself when its turn ends. Merging into main stays your button. |
+| `autoPush` | `true` | Whether a thread's branch in a repo is pushed to GitHub by itself when its turn ends. |
+| `autoMerge` | `true` | Whether that branch is then merged into main by itself: once the repo's tests pass (`npm test`), or at once if it has none. For the app's own repo, the change reaches the running app with its next self-update. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads outside a repo. Once a thread has opened a repo, it can always run them (tests, builds); it is told to work only in that repo's folder, and push, branch switching and destructive git commands are refused. |
 | `maxParallel` | `6` | Turns that run at once. Your own messages go first; work the app started by itself leaves one slot free for you. Use 3 on a Pi with 2 GB. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |

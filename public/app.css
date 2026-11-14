@@ -749,7 +749,15 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .level::before, .level::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(122, 168, 255, 0.55)); }
 .level::after { transform: scaleX(-1); }
 
-.msg-event { margin: 0; color: var(--done); font-size: 13.5px; text-align: center; }
+.msg-event { margin: 0; color: var(--done); font-size: 13px; text-align: center; cursor: default; }
+.msg-event.is-bad { color: var(--bad); }
+.msg-event summary { cursor: pointer; list-style: none; }
+.msg-event summary::-webkit-details-marker { display: none; }
+.msg-event summary .event-line::after { content: ' ▸'; opacity: 0.7; }
+.msg-event[open] summary .event-line::after { content: ' ▾'; }
+.event-time { color: var(--faint); }
+.event-more { margin: 6px auto 0; max-width: 640px; padding: 8px 10px; text-align: left; white-space: pre-wrap; font: 12px/1.45 var(--mono); color: var(--muted); background: var(--sunken); border-radius: 8px; }
+.msg-tier { text-align: left; }
 .msg-auto { color: var(--faint); font-size: 13px; }
 .msg-auto summary { cursor: pointer; width: fit-content; }
 .msg-auto .md { font: 14px/1.5 var(--sans); color: var(--muted); margin-top: 8px; }
