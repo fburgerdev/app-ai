@@ -11,7 +11,7 @@ export class GitError extends Error {
 }
 
 // Runs git and returns stdout. Never prompts: a hidden prompt would hang the app.
-export function git(cwd, args, { timeout = 120_000 } = {}) {
+export function git(cwd, args, { timeout = 120_000, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
@@ -21,7 +21,7 @@ export function git(cwd, args, { timeout = 120_000 } = {}) {
         timeout,
         maxBuffer: 64 * 1024 * 1024,
         windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', ...env },
       },
       (err, stdout, stderr) => {
         if (err) reject(new GitError(args, stderr || err.message, err.code));

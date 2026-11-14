@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { git, gitOk } from './git.js';
+import { adoptRewritten, forgetOld, moveBranch, rewriteWithout, wasRewritten } from './purge.js';
 import { events } from './store.js';
 
 const IGNORE = [
@@ -35,6 +36,7 @@ const IGNORE = [
   '/uploads-pending/',
   '/repos/',
   '/threads/*/work/',
+  '/purge-history.json',
   '',
 ].join('\n');
 
@@ -50,6 +52,17 @@ export const onPushed = (fn) => pushed.push(fn);
 export const onReload = (fn) => reloaders.push(fn);
 const serial = (fn) => { const run = chain.then(fn, fn); chain = run.catch(() => {}); return run; };
 const status = { enabled: false, lastPush: 0, error: '', commit: '' };
+
+// What origin/<branch> pointed at before a fetch that found GitHub's history rewritten
+// (the other computer cleaned it): the next merge adopts it instead of merging.
+let rewrittenFrom = '';
+async function fetchOrigin() {
+  const branch = config.dataBranch;
+  const before = (await git(DATA_DIR, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).catch(() => '')).trim();
+  const ok = await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', branch]);
+  if (ok && before && !rewrittenFrom && await wasRewritten(DATA_DIR, branch, before)) rewrittenFrom = before;
+  return ok;
+}
 
 export const dataSyncStatus = () => ({ ...status, repo: config?.dataRepo || '' });
 
@@ -80,7 +93,7 @@ export async function initDataSync(cfg) {
     // A fresh data folder takes over what is already saved on GitHub.
     const threadsDir = path.join(DATA_DIR, 'threads');
     const fresh = !(await hasCommits()) && (!fs.existsSync(threadsDir) || fs.readdirSync(threadsDir).length === 0);
-    const remoteHas = await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', branch]);
+    const remoteHas = await fetchOrigin();
     if (fresh && remoteHas) {
       await git(DATA_DIR, ['reset', '--quiet', '--hard', `origin/${branch}`]);
       fs.writeFileSync(path.join(DATA_DIR, '.gitignore'), IGNORE);
@@ -117,6 +130,16 @@ async function mergeRemote() {
   const branch = config.dataBranch;
   const theirs = `origin/${branch}`;
   if (!(await gitOk(DATA_DIR, ['rev-parse', '--verify', '--quiet', theirs]))) return false;
+  // The other computer cleaned the history: take it, and keep what only this one changed.
+  if (rewrittenFrom && (await hasCommits())) {
+    const from = rewrittenFrom;
+    rewrittenFrom = '';
+    const kept = await adoptRewritten(DATA_DIR, branch, from);
+    fs.writeFileSync(path.join(DATA_DIR, '.gitignore'), IGNORE);
+    log(`app data: the other computer cleaned the saved history; took it over and kept ${kept.length} file(s) changed here`);
+    serial(() => forgetOld(DATA_DIR)).catch(() => {});
+    return true;
+  }
   if (!(await hasCommits())) { await git(DATA_DIR, ['reset', '--quiet', '--hard', theirs]); return true; }
   const behind = Number((await git(DATA_DIR, ['rev-list', '--count', `HEAD..${theirs}`])).trim());
   if (!behind) return false;
@@ -159,7 +182,7 @@ export function pullNow() {
   if (!status.enabled) return Promise.resolve(false);
   return serial(async () => {
     await commitLocal('state');
-    if (!(await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', config.dataBranch]))) throw new Error('GitHub is not reachable.');
+    if (!(await fetchOrigin())) throw new Error('GitHub is not reachable.');
     const changed = await mergeRemote();
     if (changed) reload();
     return changed;
@@ -181,11 +204,11 @@ export function saveNow(reason = 'state') {
           const push = () => git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`]);
           try { await push(); } catch (err) {
             // The other computer pushed in between: take that in, then push both.
-            if (!(await gitOk(DATA_DIR, ['fetch', '--quiet', 'origin', branch]))) throw err;
+            if (!(await fetchOrigin())) throw err;
             if (await mergeRemote()) reload();
             await push();
           }
-          await git(DATA_DIR, ['fetch', '--quiet', 'origin', branch]).catch(() => {});
+          await fetchOrigin().catch(() => {});
           status.lastPush = Date.now();
           for (const fn of pushed) { try { fn(); } catch { /* never in the way */ } }
         }
@@ -205,6 +228,38 @@ export function saveNow(reason = 'state') {
     }
     return dataSyncStatus();
   });
+}
+
+// Takes `paths` out of the whole saved history, here and on GitHub, once. Everything
+// is saved and taken in first, so GitHub and this computer agree; then the history is
+// rewritten without those files, pushed over GitHub's (only if GitHub has not moved in
+// the meantime), and the other computer adopts it on its next fetch (see mergeRemote).
+// Returns { done, changed, reason }.
+export function purgeHistory(paths) {
+  if (!status.enabled) return Promise.resolve({ done: false, reason: 'The app data is not saved to GitHub here.' });
+  return serial(async () => {
+    const branch = config.dataBranch;
+    await commitLocal('state');
+    if (!(await fetchOrigin())) return { done: false, reason: 'GitHub is not reachable.' };
+    if (await mergeRemote()) reload();
+    const ahead = Number((await git(DATA_DIR, ['rev-list', '--count', `origin/${branch}..HEAD`])).trim());
+    if (ahead) await git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`], { timeout: 600_000 });
+    await fetchOrigin();
+    const old = (await git(DATA_DIR, ['rev-parse', 'HEAD'])).trim();
+    if (old !== (await git(DATA_DIR, ['rev-parse', `origin/${branch}`])).trim()) return { done: false, reason: 'GitHub and this computer do not agree yet.' };
+    log(`app data: taking ${paths.length} file(s) out of the saved history`);
+    const { tip, changed } = await rewriteWithout(DATA_DIR, branch, paths);
+    if (!changed) return { done: true, changed: 0 };
+    // Only over the version just checked: if the other computer saved in between, nothing happens.
+    await git(DATA_DIR, ['push', '--quiet', `--force-with-lease=refs/heads/${branch}:${old}`, 'origin', `${tip}:refs/heads/${branch}`], { timeout: 600_000 });
+    await moveBranch(DATA_DIR, branch, tip, old);
+    await fetchOrigin();
+    status.commit = (await git(DATA_DIR, ['rev-parse', '--short', 'HEAD'])).trim();
+    status.lastPush = Date.now();
+    log(`app data: the saved history was rewritten without them (${changed} commit(s) changed)`);
+    for (const fn of pushed) { try { fn(); } catch { /* never in the way */ } }
+    return { done: true, changed };
+  }).then((r) => { if (r.changed) serial(() => forgetOld(DATA_DIR)).catch(() => {}); return r; });
 }
 
 // What is here but not on GitHub yet: changed files, and commits not pushed.

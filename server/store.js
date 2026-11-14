@@ -367,10 +367,17 @@ export function pruneArtifacts(id) {
   for (const name of Object.keys(index)) if (name.includes('/')) { const top = name.split('/')[0]; perFolder.set(top, (perFolder.get(top) || 0) + 1); }
   const drop = Object.keys(index).filter((name) => JUNK.test(name) || (name.includes('/') && perFolder.get(name.split('/')[0]) > 25));
   if (drop.length) {
+    const repoPaths = [];
+    const rel = (file) => path.relative(path.dirname(THREADS_DIR), file).split(path.sep).join('/');
     for (const name of drop) {
-      for (const ver of index[name].versions || []) fs.rmSync(versionFile(id, name, ver.v), { force: true });
+      repoPaths.push(rel(path.join(artifactsDir(id), ...name.split('/'))));
+      for (const ver of index[name].versions || []) { repoPaths.push(rel(versionFile(id, name, ver.v))); fs.rmSync(versionFile(id, name, ver.v), { force: true }); }
       delete index[name];
     }
+    // They are in the data repo's history too: listed here, taken out by datasync.purgeHistory.
+    const listFile = path.join(path.dirname(THREADS_DIR), 'purge-history.json');
+    const listed = readJson(listFile, []);
+    writeJson(listFile, [...new Set([...listed, ...repoPaths])]);
     writeJson(artifactIndexFile(id), index);
     tidyArtifacts(id);
     const gone = new Set(drop);

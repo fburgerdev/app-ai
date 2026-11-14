@@ -376,7 +376,9 @@ App data is in its own folder, outside the vault:
 
 That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, the mood line, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
 
-Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, logs.
+Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, logs, and each thread's workbench (`threads/<id>/work/`: scripts, installed libraries, files made on the way).
+
+Files that got into a thread's shown files by mistake (a script's library, before the workbench existed) are taken out once, by themselves: off the list when the app starts, and then out of the data repo's whole history, at a quiet moment, so the repo does not keep downloading them. The computer doing the work rewrites the history and pushes it over GitHub's, but only if GitHub has not changed since it checked; the other computer saves first, and on its next fetch takes the cleaned history and keeps whatever only it had changed. The log says `app data: the saved history was rewritten`. GitHub itself frees the space some time later.
 
 A computer that starts with an empty data folder takes over the saved state. Run the app in one place at a time.
 
