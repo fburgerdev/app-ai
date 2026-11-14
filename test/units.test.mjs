@@ -4,7 +4,7 @@ import path from 'node:path';
 import { buildPolicy, describeTool, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
-import { pushTakingIn } from '../server/datasync.js';
+import { pushTakingIn, whenUnlocked } from '../server/datasync.js';
 
 test('saving state: losing the race to the other computer twice still saves', async () => {
   let sends = 0;
@@ -164,4 +164,15 @@ test('a note renamed without a commit is found under its new name, and the old n
   await brain.ensureClone();
   assert.equal(renamedTo('Old Talk'), 'Newest');
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+});
+
+test('a git step refused because another git process holds the index runs again', async () => {
+  const locked = Object.assign(new Error('git commit failed: remove the file manually to continue.'), { stderr: "fatal: Unable to create 'C:/data/.git/index.lock': File exists. Another git process seems to be running in this repository" });
+  let calls = 0;
+  assert.equal(await whenUnlocked(async () => { calls += 1; if (calls < 3) throw locked; return 'ok'; }, { wait: 1 }), 'ok');
+  assert.equal(calls, 3);
+  await assert.rejects(whenUnlocked(async () => { throw locked; }, { tries: 2, wait: 1 }), /remove the file/);
+  calls = 0;
+  await assert.rejects(whenUnlocked(async () => { calls += 1; throw new Error('nothing to commit'); }, { wait: 1 }), /nothing to commit/);
+  assert.equal(calls, 1);
 });
