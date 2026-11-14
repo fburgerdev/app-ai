@@ -1288,17 +1288,38 @@ a.chip:hover { border-color: var(--muted); }
   background: rgba(255, 255, 255, 0.015);
 }
 .statusbar[hidden] { display: none; }
+/* The row only shows when it asks for something; then it is tinted, still without motion. */
 .statusbar.is-safe { background: rgba(120, 220, 160, 0.05); }
-.statusbar.is-ready { background: rgba(122, 168, 255, 0.07); }
-.statusbar.is-busy { background: rgba(240, 180, 90, 0.06); }
-.statusbar.is-idle { background: rgba(255, 255, 255, 0.015); }
+.statusbar.is-ready { background: rgba(122, 168, 255, 0.05); }
+.statusbar.is-warn { background: rgba(245, 183, 92, 0.06); }
 .status-side { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-weight: 600; flex: none; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; }
-.statusbar.is-busy .status-dot, .statusbar.is-ready .status-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
-@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--faint); opacity: 0.7; }
+.status-dot.is-safe { background: var(--done); opacity: 1; }
+.status-dot.is-ready { background: var(--work); opacity: 1; }
+.status-dot.is-warn { background: var(--you); opacity: 1; }
 .status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusbar.is-safe .status-text { color: var(--done); }
-.statusbar.is-ready .status-text { color: var(--you); }
+.statusbar.is-ready .status-text { color: var(--text); }
+.statusbar.is-warn .status-text { color: var(--you); }
+
+/* The quiet item in the top bar, and its panel. */
+.laptop-wrap { position: relative; flex: none; }
+.top-laptop { gap: 7px; }
+.top-laptop .top-sub { color: var(--faint); font-weight: 450; font-size: 12.5px; }
+.top-laptop.is-safe .top-sub { color: var(--done); }
+.top-laptop.is-warn .top-sub { color: var(--you); }
+.status-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  width: min(440px, 92vw); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(8, 9, 16, 0.45);
+  font-size: 13px; color: var(--muted);
+}
+.status-pop[hidden] { display: none; }
+.status-pop .status-text { white-space: normal; overflow: visible; color: var(--text); }
+.status-pop .status-actions { flex-wrap: wrap; }
+.status-pop .status-ready, .status-pop .status-warn { display: inline; }
 .status-warn { flex: none; color: var(--work); cursor: help; border-bottom: 1px dotted currentColor; }
 .status-actions { display: inline-flex; align-items: center; gap: 10px; flex: none; }
 .status-ready { cursor: help; }

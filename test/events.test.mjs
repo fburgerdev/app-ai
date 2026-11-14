@@ -82,6 +82,10 @@ test('people and Someday come with the outline', async () => {
   assert.match(anna.about, /^Open: turn her offer/);
   assert.deepEqual(tree.someday.map((x) => [x.short, x.parked]), [['Try to get the Kitas in Köln to go plant-based.', false], ['Look into investing.', false], ['Reschedule the outreach stall.', true]]);
   assert.ok(tree.someday[0].touched > 0, 'when the line last changed, from git');
+  // Each line gets a short label, made once in the background and kept by the line's text.
+  const labelled = await until(async () => { const s = (await call('GET', '/api/projects')).data.someday; return s.every((x) => x.label) ? s : null; }, 'labels made');
+  assert.deepEqual(labelled.map((x) => x.label), ['get the Kitas in', 'investing', 'Reschedule the outreach stall'], 'the stand-in: the first words');
+  assert.ok(fs.existsSync(path.join(data, 'someday-labels.json')));
   // Threads can be on a person, or on Someday.
   const t = (await call('POST', '/api/threads', { text: 'Draft a note to Anna', project: 'Anna Karle (PUYK)' })).data.thread;
   assert.equal(t.project, 'Anna Karle (PUYK)');

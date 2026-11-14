@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as brain from './brain.js';
 import * as store from './store.js';
+import { labelOf, labelMissing } from './labels.js';
 
 const INDEX = 'Brain/Projects/Projects Index.md';
 const link = (s) => /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/.exec(s)?.[1].trim() || '';
@@ -96,7 +97,10 @@ export function projectTree() {
   const ranked = groups.filter((g) => g.isArea && byLower.has(g.name.toLowerCase())).sort((a, b) => byLower.get(a.name.toLowerCase()).rank - byLower.get(b.name.toLowerCase()).rank);
   for (const g of groups) if (g.isArea) { g.rank = 0; g.goal = ''; }
   ranked.forEach((g, i) => { g.rank = i + 1; g.goal = byLower.get(g.name.toLowerCase()).goal; });
-  return { groups, people: peopleList(), someday: somedayList() };
+  // Someday, each line with its short label (made in the background the first time).
+  const someday = somedayList();
+  labelMissing(someday.map((x) => x.text));
+  return { groups, people: peopleList(), someday: someday.map((x) => ({ ...x, label: labelOf(x.text) })) };
 }
 
 // Every note in Brain/Areas is an area, whether or not the Projects Index has a heading

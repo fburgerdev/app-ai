@@ -23,6 +23,7 @@ import * as link from './link.js';
 import * as events from './events.js';
 import { initRepair, report } from './repair.js';
 import { initShip } from './ship.js';
+import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
@@ -50,7 +51,7 @@ await datasync.initDataSync(config);
 // Threads are loaded after the data repo had its chance to restore them.
 store.loadThreads();
 // When the other computer's state comes in later, everything kept in memory is read again.
-datasync.onReload(() => { store.reloadThreads(); reloadState(); queue.reloadQueue(); });
+datasync.onReload(() => { store.reloadThreads(); reloadState(); queue.reloadQueue(); reloadLabels(); });
 
 const app = express();
 app.disable('x-powered-by');
@@ -300,6 +301,7 @@ app.get('/api/events', (req, res) => {
     cards: send('cards'),
     artifacts: send('artifacts'),
     brain: send('brain'),
+    projects: send('projects'),
     connections: send('connections'),
   };
   for (const [name, fn] of Object.entries(handlers)) store.events.on(name, fn);
@@ -806,6 +808,7 @@ datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
 initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground });
 initShip(config);
+initLabels(config);
 brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatus()));
 process.on('unhandledRejection', (err) => { log(`unhandled: ${err?.stack || err}`); report('the app itself', String(err?.stack || err)); });
 cards.setMayRun(link.mayRunBackground);
