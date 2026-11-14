@@ -79,7 +79,7 @@ function createCard(card) {
     ? serializeMail({ to: card.to, subject: card.subject || '', body: card.text })
     : `${card.text.trim()}\n`;
   fs.writeFileSync(path.join(store.artifactsDir(thread.id), CARD_FILE), body);
-  store.scanArtifacts(thread.id, 'claude');
+  store.scanArtifacts(thread.id, 'claude', { serve: [CARD_FILE] });
   store.updateThread(thread.id, { gist: card.why, queuedAt: Date.now() });
   return thread;
 }

@@ -152,3 +152,15 @@ test('a note renamed without a commit is found under its new name, and the old n
   assert.equal(renamedTo('Old Talk'), 'Newest');
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
+
+test('policy: without a repo, scripts start on the workbench, and files may be written there', async () => {
+  const cwd = path.resolve('/vault');
+  const artifactsDir = path.resolve('/data/threads/t1/artifacts');
+  const workDir = path.resolve('/data/threads/t1/work');
+  const can = buildPolicy({ mode: 'thread', cwd, artifactsDir, workDir, shell: false, artifactsShell: true });
+  assert.equal((await can('Bash', { command: `cd "${workDir}" && python fill.py` })).behavior, 'allow');
+  assert.equal((await can('Bash', { command: `cd "${artifactsDir}" && pip install x` })).behavior, 'deny', 'not in the folder he sees');
+  assert.equal((await can('Write', { file_path: path.join(workDir, 'fill.py') })).behavior, 'allow');
+  assert.equal((await can('Read', { file_path: path.join(workDir, 'out.pdf') })).behavior, 'allow');
+  assert.equal((await can('mcp__app__show_file', { path: 'out.pdf' })).behavior, 'allow');
+});

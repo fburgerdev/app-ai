@@ -13,6 +13,7 @@ import * as store from './store.js';
 import { DATA_DIR, log } from './config.js';
 import * as google from './google.js';
 import { logRead, logToolRead } from './reads.js';
+import fs from 'node:fs';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState, TIERS, TIER_NAMES } from './state.js';
@@ -149,6 +150,7 @@ function threadInstructions(thread) {
     repo,
     today: todayLine(),
     artifactsDir: store.artifactsDir(thread.id),
+    workDir: store.workDir(thread.id),
     mail: g.connected ? readPrompt('mail-connected.md', { email: g.email || 'his Gmail account' }) : readPrompt('mail-offline.md').trim(),
     preload: [projectText, preloadText].filter(Boolean).join('\n\n'),
   });
@@ -178,8 +180,17 @@ async function runTurn(threadId, prompt) {
   const emitLive = (payload) => store.events.emit('live', { threadId, ...payload });
   const activity = (text) => store.updateThread(threadId, { activity: text }, { quiet: true });
 
+  // Which new files Claude means to show: those it writes into the artifacts folder with
+  // its file tools, and those it hands over with show_file. Anything else a script leaves
+  // there is not shown, and is moved to the workbench when the turn ends.
+  const artifactsDir = store.artifactsDir(threadId);
+  const served = new Set();
+  const serveName = (file) => {
+    const rel = path.relative(artifactsDir, path.resolve(artifactsDir, String(file || '')));
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) served.add(rel.split(path.sep).join('/'));
+  };
   const recordArtifacts = () => {
-    for (const { name, v } of store.scanArtifacts(threadId)) {
+    for (const { name, v } of store.scanArtifacts(threadId, 'claude', { serve: [...served] })) {
       const existing = run.parts.find((p) => p.type === 'artifact' && p.name === name);
       if (existing) existing.v = v;
       else run.parts.push({ type: 'artifact', name, v });
@@ -207,11 +218,27 @@ async function runTurn(threadId, prompt) {
       activity(ev.summary);
     } else if (ev.type === 'tool-input') {
       logToolRead({ vaultDir: brain.brainDir(), by: 'thread', threadId, tool: ev.name, input: ev.input });
+      if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(ev.name)) serveName(ev.input?.file_path || ev.input?.notebook_path);
     } else if (ev.type === 'tool-result') {
       recordArtifacts();
     } else if (ev.type === 'activity') {
       activity(ev.text);
     }
+  };
+
+  // show_file: a file a script made goes into the artifacts folder and is shown.
+  const workDir = store.workDir(threadId);
+  const showFile = async ({ path: given, name }) => {
+    const from = path.resolve(workDir, String(given || ''));
+    const inside = (root) => { const rel = path.relative(root, from); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+    if (!inside(workDir) && !inside(artifactsDir)) throw new Error(`Only files on the workbench (${workDir}) or in the artifacts folder can be shown.`);
+    if (!fs.existsSync(from) || !fs.statSync(from).isFile()) throw new Error(`There is no file at ${from}.`);
+    const shown = String(name || path.basename(from)).replace(/[\\/:*?"<>|]/g, '-').trim() || path.basename(from);
+    let target = inside(artifactsDir) && !name ? from : path.join(artifactsDir, shown);
+    if (target !== from) { fs.mkdirSync(artifactsDir, { recursive: true }); fs.copyFileSync(from, target); }
+    serveName(target);
+    recordArtifacts();
+    return `Shown to Florian as "${path.relative(artifactsDir, target).split(path.sep).join('/')}".`;
   };
 
   // Claude starts a spin-off when Florian asks for one in his message: a new thread that
@@ -297,7 +324,9 @@ async function runTurn(threadId, prompt) {
       model: tier.model,
       effort: tier.effort,
       mode: 'thread',
-      artifactsDir: store.artifactsDir(threadId),
+      artifactsDir,
+      workDir,
+      showFile,
       readDirs: [store.uploadsDir(threadId)],
       protectedPaths: config.protectedPaths,
       shell: config.threadShell,
@@ -320,6 +349,8 @@ async function runTurn(threadId, prompt) {
     }
 
     recordArtifacts();
+    // What was never shown leaves the artifacts folder for the workbench.
+    try { store.tidyArtifacts(threadId); } catch { /* next turn */ }
     // Claude Code puts an error into the reply as text too; it is shown once, as the error.
     const repeatsError = (p) => result.error && p.type === 'text' && result.error.includes(p.text.trim());
     const parts = run.parts.filter((p) => (p.type !== 'text' || p.text.trim()) && !repeatsError(p));

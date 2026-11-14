@@ -34,6 +34,7 @@ const IGNORE = [
   '/cards/runs/',
   '/uploads-pending/',
   '/repos/',
+  '/threads/*/work/',
   '',
 ].join('\n');
 

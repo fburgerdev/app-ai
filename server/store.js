@@ -3,7 +3,9 @@
 //
 //   threads/<id>/thread.json      state of the thread
 //   threads/<id>/messages.jsonl   one message per line
-//   threads/<id>/artifacts/       the files Claude made, as they are now
+//   threads/<id>/artifacts/       the files Claude chose to show Florian, as they are now
+//   threads/<id>/work/            Claude's workbench: scripts, installed libraries, pages
+//                                 rendered on the way. Never shown, never synced.
 //   threads/<id>/versions/        every earlier state of each artifact
 //   threads/<id>/artifacts.json   which versions exist
 
@@ -25,6 +27,7 @@ const messagesFile = (id) => path.join(threadDir(id), 'messages.jsonl');
 const artifactIndexFile = (id) => path.join(threadDir(id), 'artifacts.json');
 export const artifactsDir = (id) => path.join(threadDir(id), 'artifacts');
 export const uploadsDir = (id) => path.join(threadDir(id), 'uploads'); // files Florian attached
+export const workDir = (id) => path.join(threadDir(id), 'work'); // Claude's workbench, never shown
 const versionsDir = (id) => path.join(threadDir(id), 'versions');
 
 function writeJson(file, value) {
@@ -282,13 +285,18 @@ export function listArtifacts(id) {
     .sort((a, b) => b.versions.at(-1).ts - a.versions.at(-1).ts);
 }
 
-// Compares the artifacts folder with the last recorded versions and records a new
-// version for every file that is new or changed. Returns what changed.
-export function scanArtifacts(id, by = 'claude') {
+// Records a new version of every shown file that changed, and shows a new file only
+// when it is named in `serve`: a file Claude wrote with its file tools, or handed over
+// with show_file. Whatever else lands in the artifacts folder (a library a script
+// installed, pages rendered on the way) is not shown; tidyArtifacts moves it out.
+// Returns what changed.
+export function scanArtifacts(id, by = 'claude', { serve = [] } = {}) {
   const dir = artifactsDir(id);
   const index = readJson(artifactIndexFile(id), {});
+  const wanted = new Set(serve);
   const changed = [];
   for (const name of walk(dir)) {
+    if (!index[name] && !wanted.has(name)) continue;
     const file = path.join(dir, name);
     let data;
     try {
@@ -316,6 +324,68 @@ export function scanArtifacts(id, by = 'claude') {
 
 // The file holding one version of an artifact, or null. `name` comes from the browser,
 // so it is only ever used as a key into the index, never as a path.
+// After a turn: files in the artifacts folder that were never shown go to the
+// workbench (work/unshown/), so the folder holds what Florian sees and nothing else, and
+// none of it is saved to GitHub with the app's data.
+export function tidyArtifacts(id) {
+  const dir = artifactsDir(id);
+  const index = readJson(artifactIndexFile(id), {});
+  let moved = 0;
+  for (const name of walk(dir)) {
+    if (index[name]) continue;
+    const to = path.join(workDir(id), 'unshown', ...name.split('/'));
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.rmSync(to, { force: true });
+      fs.renameSync(path.join(dir, ...name.split('/')), to);
+      moved += 1;
+    } catch { /* in use: next time */ }
+  }
+  removeEmptyDirs(dir);
+  return moved;
+}
+
+function removeEmptyDirs(dir, root = dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) removeEmptyDirs(path.join(dir, entry.name), root);
+  }
+  if (dir !== root && !fs.readdirSync(dir).length) fs.rmdirSync(dir);
+}
+
+// Threads from before the workbench showed everything a script left in the artifacts
+// folder: a library with thousands of files, rendered pages. Once per thread, what was
+// clearly not meant for Florian leaves the list: anything in a cache or package folder,
+// and any folder holding more than 25 files. The files move to the workbench, their
+// saved versions go (the files themselves stay), and the answers stop listing them.
+const JUNK = /(^|\/)(__pycache__|node_modules|site-packages|dist-packages|\.git|\.venv|venv|[^/]+\.(dist|egg)-info)(\/|$)|\.py[co]$/i;
+export function pruneArtifacts(id) {
+  const meta = threads.get(id);
+  if (!meta || meta.artifactsPruned) return 0;
+  const index = readJson(artifactIndexFile(id), {});
+  const perFolder = new Map();
+  for (const name of Object.keys(index)) if (name.includes('/')) { const top = name.split('/')[0]; perFolder.set(top, (perFolder.get(top) || 0) + 1); }
+  const drop = Object.keys(index).filter((name) => JUNK.test(name) || (name.includes('/') && perFolder.get(name.split('/')[0]) > 25));
+  if (drop.length) {
+    for (const name of drop) {
+      for (const ver of index[name].versions || []) fs.rmSync(versionFile(id, name, ver.v), { force: true });
+      delete index[name];
+    }
+    writeJson(artifactIndexFile(id), index);
+    tidyArtifacts(id);
+    const gone = new Set(drop);
+    const kept = readMessages(id).map((m) => (m.parts ? { ...m, parts: m.parts.filter((p) => p.type !== 'artifact' || !gone.has(p.name)) } : m));
+    const tmp = `${messagesFile(id)}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, kept.map((m) => JSON.stringify(m)).join('\n') + (kept.length ? '\n' : ''));
+    fs.renameSync(tmp, messagesFile(id));
+    log(`thread ${id}: ${drop.length} files a script had left were taken out of the shown files`);
+    // Marked only when something was done: a thread with nothing to tidy is not
+    // written at all (looking again at the next start costs one small read).
+    updateThread(id, { artifactsPruned: Date.now() });
+  }
+  return drop.length;
+}
+
 export function artifactPath(id, name, v) {
   const index = readJson(artifactIndexFile(id), {});
   const entry = index[name];

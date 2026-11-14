@@ -813,6 +813,15 @@ events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
 setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillSignatures().catch(() => {}); }, 20_000).unref?.();
+// Threads from before the workbench: what a script left among the shown files leaves
+// the list, once per thread (store.pruneArtifacts). A thread Claude works on now waits.
+setTimeout(() => {
+  if (!link.mayRunBackground()) return;
+  for (const t of store.listThreads()) {
+    if (t.artifactsPruned || t.state === 'working') continue;
+    try { store.pruneArtifacts(t.id); } catch (err) { log(`could not tidy the files of thread ${t.id}: ${err.message}`); }
+  }
+}, 8_000).unref?.();
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {

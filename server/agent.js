@@ -3,9 +3,10 @@
 // lands in this one file.
 //
 // Permissions are decided here, in code, not by asking: nobody is sitting at a prompt.
-//   thread   reads the vault, searches the web, writes only into its artifacts folder and
-//            runs commands there (scripts that fill a PDF, edit a Word file); once it has
-//            opened a repo, also writes and runs commands in that repo
+//   thread   reads the vault, searches the web, writes only into its artifacts folder
+//            (what Florian sees) and its workbench, and runs commands on the workbench
+//            (scripts that fill a PDF, edit a Word file); once it has opened a repo, also
+//            writes and runs commands in that repo
 //   extract  the brain update: reads and writes the vault, no web, no git history
 //   plain    no tools at all (used to turn a reply into something to listen to)
 //   lookup   like plain, but it may search and read the web (the voice host's harder questions)
@@ -59,8 +60,8 @@ function deny(message) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '' }) {
-  const readable = [cwd, artifactsDir, ...readDirs, reposDir].filter(Boolean);
+export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '' }) {
+  const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
     return p ? path.resolve(cwd, String(p)) : null;
@@ -72,6 +73,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
       if (!file) return deny('No file path given.');
       if (mode === 'thread') {
         if (isInside(file, artifactsDir)) return allow(input);
+        if (workDir && isInside(file, workDir)) return allow(input);
         const repo = repoDir();
         if (repo && isInside(file, repo)) {
           if (isInside(file, path.join(repo, '.git'))) return deny('The .git folder is the app\'s to manage.');
@@ -112,12 +114,13 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
           return allow(input);
         }
         if (shell) return allow(input);
-        if (!artifactsShell || !artifactsDir) return deny('Shell commands work only in a repo: call open_repo first. Otherwise they are turned off for threads in this app.');
-        // Without a repo: scripts on the thread's own files, run from its artifacts folder.
+        const bench = workDir || artifactsDir;
+        if (!artifactsShell || !bench) return deny('Shell commands work only in a repo: call open_repo first. Otherwise they are turned off for threads in this app.');
+        // Without a repo: scripts on the thread's own files, run from its workbench.
         if (toolName !== 'Bash' && toolName !== 'PowerShell') return allow(input); // the output of a command already allowed, or stopping it
         const command = String(input.command || '');
         if (/(^|[\s;&|(])(git|gh)(\.exe)?\s/i.test(command)) return deny('No git here: the vault is the app\'s to manage, and code lives in repos. Call open_repo to work in one.');
-        if (!startsIn(command, artifactsDir)) return deny(`Without a repo, commands run in this thread's artifacts folder: start the command with cd "${artifactsDir}" and keep what you make there. Never write into the vault.`);
+        if (!startsIn(command, bench)) return deny(`Without a repo, commands run on this thread's workbench: start the command with cd "${bench}". Keep scripts, libraries and everything made on the way there; write only the finished file into the artifacts folder, or hand it over with show_file. Never write into the vault.`);
         return allow(input);
       }
       const command = String(input.command || '');
@@ -145,7 +148,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools }) {
+async function buildAppServer({ spinOff, repoTools, showFile }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -175,6 +178,9 @@ async function buildAppServer({ spinOff, repoTools }) {
           { repo: z.string(), description: z.string() },
           async (args) => { try { return ok(`Description of ${await repoTools.describe(args)} set.`); } catch (err) { return fail(err); } }),
       ] : []),
+      ...(showFile ? [tool('show_file', 'Show Florian a file a script made: it is copied into this thread\'s artifacts folder and appears in the thread. Files you write into the artifacts folder with Write or Edit are shown already; use this for the finished result of a script (a filled PDF, an edited Word file, a chart). Only for files he should see: never for libraries, scripts or intermediate files.',
+        { path: z.string().describe('The file, absolute or relative to the workbench'), name: z.string().optional().describe('The name he sees, if different from the file\'s; a name he would recognise') },
+        async (args) => { try { return ok(await showFile(args)); } catch (err) { return fail(err); } })] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -265,8 +271,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -303,8 +309,8 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir }),
-    additionalDirectories: [artifactsDir, ...(readDirs || [])].filter(Boolean),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir }),
+    additionalDirectories: [artifactsDir, workDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
   if (!plain && mcpServers) options.mcpServers = mcpServers;
@@ -384,7 +390,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, readDirs, signal, onEvent, spinOff, repoTools }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -554,6 +560,21 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   onEvent?.({ type: 'tool', name: 'WebSearch', summary: 'Searched the web for "example query"' });
   await sleep(400 * speed);
 
+  if (/SCRIPT-TEST/.test(prompt) && workDir && showFile) {
+    // A careless install into the artifacts folder, a script on the workbench, its result.
+    for (let i = 0; i < 40; i += 1) {
+      const f = path.join(artifactsDir, 'pylib', 'yaml', '__pycache__', `m${i}.cpython-312.pyc`);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, `compiled ${i}`);
+    }
+    fs.mkdirSync(workDir, { recursive: true });
+    fs.writeFileSync(path.join(workDir, 'fill.py'), 'print("filled")\n');
+    fs.writeFileSync(path.join(workDir, 'Formular ausgefüllt.pdf'), '%PDF-1.4 stand-in\n');
+    onEvent?.({ type: 'tool-result' });
+    await showFile({ path: 'Formular ausgefüllt.pdf' });
+    text += await say('The filled form is in **Formular ausgefüllt.pdf**.');
+  }
+
   if (/draft|entwurf|mail/i.test(prompt)) {
     fs.mkdirSync(artifactsDir, { recursive: true });
     const file = path.join(artifactsDir, 'Mail an das Büro.md');
@@ -561,8 +582,10 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     const body = round === 1
       ? '---\ntype: mail\nto: office@example.org\nsubject: Konzept, nächste Schritte\n---\nHallo Frau Beispiel,\n\nvielen Dank für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nIch schlage vor, dass wir die offenen Punkte in der kommenden Woche besprechen.\n\nViele Grüße\nFlorian\n'
       : '---\ntype: mail\nto: office@example.org\nsubject: Konzept, nächste Schritte\n---\nHallo Frau Beispiel,\n\ndanke für das Gespräch am Montag. Anbei der überarbeitete Entwurf des Konzepts.\n\nPasst Ihnen Donnerstag, 14 Uhr, um die offenen Punkte durchzugehen?\n\nViele Grüße\nFlorian\n';
+    onEvent?.({ type: 'tool-input', name: 'Write', input: { file_path: file, content: body } });
     fs.writeFileSync(file, body);
     onEvent?.({ type: 'tool', name: 'Write', summary: 'Wrote Mail an das Büro.md' });
+    onEvent?.({ type: 'tool-result' });
     await sleep(200 * speed);
     text += await say(round === 1
       ? 'The draft is in **Mail an das Büro.md**. One thing to decide: do you want to propose a date yourself, or leave it open?'
