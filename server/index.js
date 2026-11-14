@@ -22,6 +22,7 @@ import * as datasync from './datasync.js';
 import * as link from './link.js';
 import * as events from './events.js';
 import { initRepair, report } from './repair.js';
+import { initShip } from './ship.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
@@ -803,7 +804,8 @@ const server = app.listen(config.port, '127.0.0.1', () => {
 attachVoice(server, config, allowedHosts);
 datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
-initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground, mergeThread: repos.merge, repoDirOf: repos.dirOf });
+initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground });
+initShip(config);
 brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatus()));
 process.on('unhandledRejection', (err) => { log(`unhandled: ${err?.stack || err}`); report('the app itself', String(err?.stack || err)); });
 cards.setMayRun(link.mayRunBackground);

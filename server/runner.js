@@ -19,6 +19,7 @@ import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
 import * as repos from './repos.js';
 import * as repair from './repair.js';
+import * as ship from './ship.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -333,7 +334,8 @@ async function runTurn(threadId, prompt) {
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId);
-    if (store.getThread(threadId)?.kind === 'repair') repair.afterTurn(threadId).catch(() => {});
+    // Tested and merged into main by itself, in the background (ship.js).
+    ship.afterTurn(threadId).catch(() => {});
     const fresh = store.getThread(threadId);
     const pending = fresh.pending || [];
     running.delete(threadId);

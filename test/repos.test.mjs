@@ -58,7 +58,7 @@ const site = bare('site', { 'index.html': '<h1>Hello</h1>\n' });
 bare('tool', { 'README.md': '# tool\n' });
 
 fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false } }));
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false }, autoMerge: false }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_FAKE_GITHUB: '1' },
   stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), fs.openSync(path.join(dir, 'server.log'), 'a')],
