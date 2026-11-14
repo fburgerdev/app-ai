@@ -27,6 +27,7 @@ import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
+import * as drafts from './drafts.js';
 import { dateTimeDMY } from './util.js';
 import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
@@ -375,6 +376,7 @@ app.post('/api/threads', (req, res) => {
   const pick = req.body.repo !== undefined ? repos.repoName(req.body.repo) : repos.repoName(projects.repoOf(known));
   if (pick || req.body.repo !== undefined) store.updateThread(thread.id, { repo: pick || '', repoSet: true });
   runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: req.body.done === true, tier: String(req.body.tier || '') });
+  drafts.clearDraft('new');
   cards.maybeMakeCards();
   res.json({ thread: store.getThread(thread.id) });
 });
@@ -403,6 +405,7 @@ app.post('/api/threads/:id/messages', (req, res) => {
   const done = req.body.done === true;
   queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
   const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || '') });
+  drafts.clearDraft(thread.id);
   cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
 });
@@ -422,6 +425,7 @@ app.post('/api/threads/:id/spinoff', (req, res) => {
   store.updateThread(copy.id, { titleAuto: true });
   if (thread.state === 'ready') store.updateThread(thread.id, { requeuedAt: Date.now() });
   runner.sendMessage(copy.id, text, { files: store.attachFiles(copy.id, waitingFiles), tier: String(req.body.tier || '') });
+  drafts.clearDraft(thread.id);
   res.json({ thread: store.getThread(copy.id), from: store.getThread(thread.id) });
 });
 
@@ -441,6 +445,14 @@ app.post('/api/threads/:id/state', (req, res) => {
   res.json({ thread: store.getThread(thread.id) });
 });
 
+// What he has typed and not sent, per thread: kept on the device and here, so it
+// survives closing the page or the app and reaches his other devices.
+app.get('/api/drafts', (req, res) => res.json({ drafts: drafts.listDrafts() }));
+app.put('/api/drafts/:key', (req, res) => {
+  try { res.json(drafts.putDraft(req.params.key, req.body?.text, req.body?.at)); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+store.events.on('thread-deleted', ({ id }) => { try { drafts.dropDraft(id); } catch { /* nothing to drop */ } });
+
 // Defer: not now, but it is his. The thread sleeps; the next brain update turns it into
 // a line in Next Actions.md and deletes it. Text sent along is kept as where he left off.
 app.post('/api/threads/:id/defer', (req, res) => {
@@ -449,6 +461,7 @@ app.post('/api/threads/:id/defer', (req, res) => {
   try {
     queue.recordDecision('requeued', thread);
     res.json({ thread: nextActions.defer(thread.id, String(req.body?.text || '')) });
+    drafts.clearDraft(thread.id); // what was in the box went along as where he left off
     runner.sign(thread.id, { again: true }).catch(() => {});
   } catch (err) { res.status(409).json({ error: err.message }); }
 });
