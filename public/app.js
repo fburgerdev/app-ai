@@ -436,7 +436,7 @@ function somedayNodes(items) {
   if (!items.length) return [];
   const item = (x) => h('div', { class: `out${x.parked ? ' is-grey' : ''}` },
     h('button', { class: 'out-row', type: 'button', title: `${x.text}\n${x.parked ? 'Parked: an old action, never confirmed.\n' : ''}Click to read Someday`, onclick: () => openPanel({ kind: 'note', link: 'Someday' }) },
-      h('span', { class: 'out-name' }, x.short),
+      h('span', { class: `out-name${x.label ? '' : ' is-long'}` }, x.label || x.short),
       x.touched ? h('span', { class: 'out-when' }, ago(x.touched).replace(' ago', '')) : null),
     h('button', { class: 'out-plus', type: 'button', title: 'New thread on this: do it now, keep it, or fold it', 'aria-label': 'New thread on this Someday item', onclick: () => {
       openNew('Someday');
@@ -2277,8 +2277,7 @@ const quoted = (list, n = 2) => list.slice(0, n).map((t) => `“${clip(t.title, 
 function renderStatus() {
   const bar = document.getElementById('statusbar');
   const st = statusNow;
-  if (!st?.show) { bar.hidden = true; document.getElementById('talk-link').href = '/walk'; return; }
-  bar.hidden = false;
+  if (!st?.show) { bar.hidden = true; document.getElementById('laptop-status').hidden = true; document.getElementById('status-pop').hidden = true; document.getElementById('talk-link').href = '/walk'; return; }
   const l = st.link;
   const pi = l.remoteName && l.remoteName !== 'Pi' ? l.remoteName : 'Server';
   const lap = l.localName || 'Laptop';
@@ -2340,17 +2339,46 @@ function renderStatus() {
     ? h('span', { class: 'status-warn', title: `${st.unpushed.map((u) => `“${u.title}”: ${plural(u.commits, 'commit', 'commits')} in ${u.repo}`).join('\n')}\n\nThis repo work is only on the ${lap}. Push it in the thread's repo panel to have it on the ${pi}.` },
       `${plural(st.unpushed.length, 'repo branch', 'repo branches')} only on the ${lap}`)
     : null;
-  bar.className = `statusbar is-${tone}`;
-  bar.replaceChildren(...[
-    h('span', { class: 'status-side', title: { safe: 'Nothing is running and the app starts nothing by itself.', ready: 'Getting ready to suspend: finishing what runs, starting nothing new.', busy: 'Something is running and the app may start more.', idle: 'Nothing is running, but the app may start something by itself.' }[tone] },
-      h('span', { class: `status-dot is-${tone}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap),
-    h('span', { class: 'status-text', role: 'status' }, text),
-    warn,
-    h('span', { class: 'status-actions' }, buttons),
-  ].filter(Boolean));
+  // Quiet by default: a small item in the top bar, with this in a panel when clicked.
+  // The full row under the top bar only when it asks for something: while getting ready
+  // to suspend or handing over (until it is safe), when saving to GitHub fails, or when
+  // repo work is only on this computer. Colour only then, and nothing moves.
+  const failing = Boolean(st.saved.error);
+  const steps = Boolean(l.enabled && l.step);
+  const loud = Boolean(l.finalizing) || steps || failing || Boolean(warn);
+  const mark = failing || warn ? 'warn' : (stage === 'safe' && l.finalizing) || onPi ? 'safe' : steps || (l.finalizing && stage !== 'safe') ? 'ready' : 'calm';
+  const side = () => h('span', { class: 'status-side' }, h('span', { class: `status-dot is-${mark}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap);
+  const parts = () => [h('span', { class: 'status-text', role: 'status' }, text), warn, h('span', { class: 'status-actions' }, buttons)].filter(Boolean);
+  // The buttons are one set of elements: in the panel while it is open, else in the row.
+  const pop = document.getElementById('status-pop');
+  bar.hidden = !loud;
+  bar.className = `statusbar is-${mark}`;
+  if (loud) bar.replaceChildren(side(), ...(pop.hidden ? parts() : [h('span', { class: 'status-text', role: 'status' }, text)]));
+  const item = document.getElementById('laptop-status');
+  item.hidden = false;
+  item.className = `top-btn top-laptop is-${mark}`;
+  item.title = `${onPi ? pi : lap}: ${text}`;
+  const short = onPi ? 'handed over' : mark === 'safe' ? 'safe to suspend' : mark === 'ready' ? 'getting ready' : '';
+  item.replaceChildren(h('span', { class: `status-dot is-${mark}`, 'aria-hidden': 'true' }), h('span', { class: 'top-label' }, onPi ? pi : lap), ...(short ? [h('span', { class: 'top-sub' }, short)] : []));
+  if (!pop.hidden) pop.replaceChildren(h('div', { class: 'pop-head' }, side()), ...parts());
   // Talking goes to wherever the threads are.
   document.getElementById('talk-link').href = onPi ? `${l.remote}/walk` : '/walk';
 }
+
+// The panel under the laptop item: opened and closed by clicking it, closed by a click
+// elsewhere or Escape.
+function toggleStatusPop(open) {
+  const pop = document.getElementById('status-pop');
+  const item = document.getElementById('laptop-status');
+  pop.hidden = !(open ?? pop.hidden);
+  item.classList.toggle('is-on', !pop.hidden);
+  item.setAttribute('aria-expanded', String(!pop.hidden));
+  renderStatus(); // the buttons move between the panel and the row
+}
+document.getElementById('laptop-status').addEventListener('click', (e) => { e.stopPropagation(); toggleStatusPop(); });
+document.getElementById('status-pop').addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => { if (!document.getElementById('status-pop').hidden) toggleStatusPop(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('status-pop').hidden) toggleStatusPop(false); });
 
 async function checkStatus() {
   try {
@@ -2504,9 +2532,17 @@ function insertQuote() {
 
 // ---------- events from the page ----------
 
+// The box grows with what is typed. Its height includes its border (border-box), so the
+// border is added to the text's height: without it the box was two pixels short, and
+// every new line pushed the text up by that much. Below the limit nothing scrolls inside.
 function autosize() {
-  els.input.style.height = 'auto';
-  els.input.style.height = `${Math.min(els.input.scrollHeight, window.innerHeight * 0.4)}px`;
+  const area = els.input;
+  area.style.height = 'auto';
+  const border = area.offsetHeight - area.clientHeight;
+  const max = window.innerHeight * 0.4;
+  const want = area.scrollHeight + border;
+  area.style.height = `${Math.min(want, max)}px`;
+  if (want <= max) area.scrollTop = 0;
 }
 
 els.input.addEventListener('input', autosize);
@@ -2782,6 +2818,7 @@ function connect() {
   on('live', onLive);
   on('artifacts', onArtifacts);
   on('brain', setBrain);
+  on('projects', () => loadProjects()); // e.g. the Someday labels are ready
   on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); checkSleep(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
