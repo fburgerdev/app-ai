@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanup, freePort, until } from './helpers.mjs';
 import WebSocket from 'ws';
 import { parseMail, serializeMail } from '../server/mail.js';
 import { parseIndex } from '../server/projects.js';
@@ -49,7 +50,7 @@ const remote = path.join(dir, 'vault.git');
 const dataRemote = path.join(dir, 'app-data.git');
 const seed = path.join(dir, 'seed');
 const data = path.join(dir, 'data');
-const port = 5300 + Math.floor(Math.random() * 400);
+const port = await freePort();
 const base = `http://localhost:${port}`;
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -74,24 +75,11 @@ const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], 
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data },
   stdio: 'ignore',
 });
-// On Windows the killed server (or a git it started) can still hold a file for a moment:
-// wait for it to exit, and retry the cleanup instead of failing on EBUSY.
-test.after(async () => {
-  if (server.exitCode === null) await new Promise((r) => { server.once('exit', r); server.kill(); setTimeout(r, 5000); });
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-});
+test.after(() => cleanup(dir, [server]));
 
 const call = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => null) };
-};
-const until = async (fn, label) => {
-  for (let i = 0; i < 240; i += 1) {
-    const value = await fn().catch(() => null);
-    if (value) return value;
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for: ${label}`);
 };
 const state = async () => (await call('GET', '/api/state')).data;
 const thread = async (id) => (await call('GET', `/api/threads/${id}`)).data;

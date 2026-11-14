@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanup, freePort } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-link-'));
@@ -26,8 +27,8 @@ fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 git(seed, 'checkout', '-B', 'main'); git(seed, 'add', '-A'); git(seed, 'commit', '-m', 'seed'); git(seed, 'push', 'origin', 'main');
 
-const piPort = 6200 + Math.floor(Math.random() * 300);
-const lapPort = piPort + 400;
+const piPort = await freePort();
+const lapPort = await freePort();
 const pi = `http://127.0.0.1:${piPort}`;
 const lap = `http://127.0.0.1:${lapPort}`;
 const procs = {};
@@ -39,7 +40,7 @@ function start(name, port, extra = {}) {
   procs[name] = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data }, stdio: ['ignore', out, out] });
 }
 const stop = (name) => new Promise((r) => { procs[name].once('exit', r); procs[name].kill(); });
-test.after(() => { for (const p of Object.values(procs)) p.kill(); if (process.env.KEEP) for (const n of ['pi', 'laptop']) console.log(fs.readFileSync(path.join(dir, `${n}.log`), 'utf8')); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
+test.after(() => { if (process.env.KEEP) for (const n of ['pi', 'laptop']) console.log(fs.readFileSync(path.join(dir, `${n}.log`), 'utf8')); return cleanup(dir, Object.values(procs)); });
 
 const call = async (base, method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -155,9 +156,14 @@ test('the background work runs on one side only; the status says when the laptop
   const st = await until(async () => { const x = (await call(lap, 'GET', '/api/status')).data; return x.busy.threads.length === 0 && x.saved.files === 0 && x.saved.ahead === 0 ? x : null; }, 'all saved', 20000).catch(async () => (await call(lap, 'GET', '/api/status')).data);
   assert.equal(st.show, true);
   assert.equal(st.link.active, 'local');
-  await call(lap, 'POST', '/api/status/save', {});
-  const after = (await call(lap, 'GET', '/api/status')).data;
-  assert.equal(after.saved.files, 0);
+  // The app keeps writing small things by itself (a usage record once the queue has been
+  // ordered), so one save is not always the last word: save until nothing is left.
+  const after = await until(async () => {
+    await call(lap, 'POST', '/api/status/save', {});
+    const x = (await call(lap, 'GET', '/api/status')).data;
+    return x.saved.files === 0 && x.saved.ahead === 0 ? x : null;
+  }, 'everything saved', 20000).catch(async () => (await call(lap, 'GET', '/api/status')).data);
+  assert.equal(after.saved.files, 0, `still unsaved: ${(after.saved.names || []).join(", ")} ${after.saved.error || ""}`);
   assert.equal(after.saved.ahead, 0);
   assert.equal(after.stage, 'idle', 'nothing running, but nothing locked either');
   assert.equal(after.safe, false);

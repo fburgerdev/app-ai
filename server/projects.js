@@ -70,6 +70,7 @@ function noteChanged(name) {
 export function projectTree() {
   const file = brain.readVaultFile(INDEX);
   if (!file) return { groups: [], missing: true };
+  try { followRenames(); } catch { /* the outline shows what it can */ }
   const groups = withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')));
   const threads = store.listThreads().filter((t) => t.project && t.kind !== 'card');
   const stats = (name) => {
@@ -186,7 +187,10 @@ export function projectContext(name) {
   const out = [];
   const add = (note) => {
     const f = brain.resolveWikilink(note);
-    if (f && f.path.endsWith('.md') && !out.some((o) => o.path === f.path)) out.push({ path: f.path, text: fs.readFileSync(f.full, 'utf8') });
+    if (!f || !f.path.endsWith('.md') || out.some((o) => o.path === f.path)) return;
+    // A brain update may move the note between finding it and reading it: then the
+    // thread starts without it, rather than not at all.
+    try { out.push({ path: f.path, text: fs.readFileSync(f.full, 'utf8') }); } catch { /* gone this moment */ }
   };
   add(name);
   const file = brain.readVaultFile(INDEX);
@@ -195,6 +199,67 @@ export function projectContext(name) {
     if (area) add(area.name);
   }
   return out;
+}
+
+// ---------- a renamed project keeps its threads ----------
+//
+// A thread belongs to a project by the note's name. When the note is renamed in the
+// vault (a brain update, or Florian in a conversation), the name on the thread points
+// at nothing: the thread starts without its project note and drops out of its folder.
+// The rename is in the vault's history, so the thread follows it: a thread whose
+// project is no longer known is moved to what git says the note is called now. Only
+// a rename git recognises counts (the same note under a new name); a project that was
+// deleted or folded into another one stays as it is on the thread.
+
+let renameCache = { head: null, map: new Map() };
+const noteName = (p) => (/\.md$/i.test(p) ? p.split('/').pop().replace(/\.md$/i, '') : '');
+
+// Old note name -> the name it was renamed to, most recent rename of each name.
+function noteRenames() {
+  const head = brain.brainStatus().head;
+  if (renameCache.head === head && head) return renameCache.map;
+  const map = new Map();
+  try {
+    const out = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=R', '--name-status', '--format=', '--', 'Brain'],
+      { cwd: brain.brainDir(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+    for (const line of out.split('\n')) {
+      const m = /^R\d*\t([^\t]+)\t([^\t]+)$/.exec(line.trim());
+      if (!m) continue;
+      const [from, to] = [noteName(m[1]), noteName(m[2])];
+      if (from && to && from !== to && !map.has(from)) map.set(from, to); // newest first
+    }
+  } catch { /* no history to read: nothing follows */ }
+  renameCache = { head, map };
+  return map;
+}
+
+// What a project that is no longer in the vault is called now, or '' if git knows of no rename.
+export function renamedTo(name) {
+  const map = noteRenames();
+  let now = name;
+  for (let hop = 0; hop < 8 && map.has(now); hop += 1) {
+    now = map.get(now);
+    if (isKnownProject(now)) return now;
+  }
+  return '';
+}
+
+// Moves every thread filed under a renamed project to the project's new name. Cheap
+// when nothing changed: it looks at the history once per vault state.
+let followedAt = null;
+export function followRenames() {
+  const head = brain.brainStatus().head;
+  if (!head || followedAt === head) return 0;
+  followedAt = head;
+  let moved = 0;
+  for (const t of store.listThreads()) {
+    if (!t.project || t.kind === 'card' || isKnownProject(t.project)) continue;
+    const to = renamedTo(t.project);
+    if (!to) continue;
+    store.updateThread(t.id, { project: to });
+    moved += 1;
+  }
+  return moved;
 }
 
 // The GitHub repo a project or area note names on its optional `repo:` line, or ''.
