@@ -331,3 +331,30 @@ test('a preparation made before events existed does not stop its event', async (
   await call('POST', '/api/cards/make', {});
   await until(async () => (await state()).threads.some((t) => t.kind === 'event' && t.title === 'Example fair'), 'the event is made after all');
 });
+
+test('what is typed and not sent is kept, the newer copy wins, and sending empties it', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'A thread to write a reply in' })).data.thread;
+  await ready(t.id);
+  const at = Date.now();
+  assert.equal((await call('PUT', `/api/drafts/${t.id}`, { text: 'half a sentence', at })).data.text, 'half a sentence');
+  // Kept on disk, so it survives a restart and travels with the app's data.
+  assert.ok(fs.existsSync(path.join(data, 'drafts', `${t.id}.json`)));
+  assert.equal((await call('GET', '/api/drafts')).data.drafts[t.id].text, 'half a sentence');
+  // An older copy from another device does not overwrite it.
+  assert.equal((await call('PUT', `/api/drafts/${t.id}`, { text: 'stale', at: at - 60_000 })).data.text, 'half a sentence');
+  assert.equal((await call('PUT', '/api/drafts/../config', { text: 'x' })).status, 404, 'only draft names');
+  // Sent: emptied, and remembered as emptied, so an older copy cannot come back.
+  await call('POST', `/api/threads/${t.id}/messages`, { text: 'half a sentence, finished' });
+  const after = (await call('GET', '/api/drafts')).data.drafts[t.id];
+  assert.equal(after.text, '');
+  assert.equal((await call('PUT', `/api/drafts/${t.id}`, { text: 'half a sentence', at })).data.text, '');
+  // The box of a thread not started yet, emptied when the thread starts.
+  await call('PUT', '/api/drafts/new', { text: 'an idea for a new thread', at: Date.now() });
+  await call('POST', '/api/threads', { text: 'an idea for a new thread' });
+  assert.equal((await call('GET', '/api/drafts')).data.drafts.new.text, '');
+  // A deleted thread takes its draft with it.
+  await ready(t.id);
+  await call('PUT', `/api/drafts/${t.id}`, { text: 'never sent', at: Date.now() + 1000 });
+  await call('DELETE', `/api/threads/${t.id}`, {});
+  await until(async () => !fs.existsSync(path.join(data, 'drafts', `${t.id}.json`)), 'draft dropped');
+});

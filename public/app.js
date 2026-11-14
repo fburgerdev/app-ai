@@ -1193,10 +1193,11 @@ async function deferThread() {
   }
   disarmDefer();
   try {
+    draftPending.delete(t.id);
     const out = await api('POST', `/api/threads/${t.id}/defer`, { text: els.input.value.trim() });
     S.threads.set(t.id, out.thread);
     els.input.value = '';
-    S.drafts.delete(t.id);
+    forgetDraft(t.id);
     toast('Deferred. It sleeps under Next actions; the next brain update writes it into Next Actions.md.');
     advance(t.id);
   } catch (err) { toast(err.message); }
@@ -1259,14 +1260,109 @@ function renderEmpty() {
   ));
 }
 
-function saveDraft() {
-  if (!S.pad) S.drafts.set(S.current || 'new', els.input.value);
+// ---------- what is typed and not sent ----------
+//
+// Nothing typed in the reply box is lost: every keystroke is kept on this device at
+// once (localStorage, which survives closing the page or the browser), and sent to the
+// app a moment later, which keeps it on disk and passes it to the other devices with
+// the rest of its data. When the page starts, it takes whichever copy is newer.
+// Sending, spinning off or deferring empties the draft everywhere.
+
+const DRAFT_PREFIX = 'app-ai-draft:';
+const draftKey = () => S.current || 'new';
+const draftPending = new Map(); // key -> { text, at } not at the app yet
+let draftTimer = 0;
+
+function localDraft(key) {
+  try { const d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + key) || 'null'); return d && typeof d.text === 'string' ? d : null; } catch { return null; }
+}
+function keepLocal(key, d) {
+  try {
+    if (d.text) localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify(d));
+    else localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify({ text: '', at: d.at })); // remembered as emptied, so an older copy elsewhere cannot win
+  } catch { /* storage full or private mode: the app's copy still holds it */ }
+}
+
+// Sends what is waiting to the app. `leaving`: the page is going away, so the request
+// has to outlive it.
+function flushDrafts(leaving = false) {
+  clearTimeout(draftTimer);
+  for (const [key, d] of draftPending) {
+    draftPending.delete(key);
+    fetch(`/api/drafts/${encodeURIComponent(key)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d), keepalive: leaving })
+      .catch(() => { if (!draftPending.has(key)) draftPending.set(key, d); }); // tried again with the next change, or when the page loads
+  }
+}
+
+function setDraft(key, text, at = Date.now()) {
+  const d = { text, at };
+  if (text) S.drafts.set(key, text); else S.drafts.delete(key);
+  keepLocal(key, d);
+  draftPending.set(key, d);
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => flushDrafts(), 800);
+}
+
+// The message went out (the app has already emptied its copy): forget it here too,
+// including a change still waiting to be sent, which would otherwise bring it back.
+function forgetDraft(key) {
+  draftPending.delete(key);
+  S.drafts.delete(key);
+  keepLocal(key, { text: '', at: Date.now() });
+}
+
+// Which draft the box is showing. Saving goes there, never to whatever thread happens
+// to be current: while the page starts or switches threads the box can be empty
+// without anything having been deleted.
+let shownDraft = null;
+
+function saveDraft(typing = false) {
+  if (S.pad || els.composer.hidden) return;
+  if (typing) shownDraft = draftKey();
+  const key = shownDraft;
+  if (!key) return;
+  if ((S.drafts.get(key) || '') !== els.input.value) setDraft(key, els.input.value);
 }
 
 function restoreDraft() {
-  els.input.value = S.drafts.get(S.current || 'new') || '';
+  shownDraft = draftKey();
+  els.input.value = S.drafts.get(shownDraft) || '';
   autosize();
+  renderDoneButton();
 }
+
+// On start: the app's drafts and this device's, the newer of each. A copy of this
+// device's that the app has not seen yet is sent along.
+async function loadDrafts() {
+  let remote = {};
+  try { remote = (await api('GET', '/api/drafts')).drafts || {}; } catch { /* offline: this device's copies */ }
+  const keys = new Set(Object.keys(remote));
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const k = localStorage.key(i);
+    if (k?.startsWith(DRAFT_PREFIX)) keys.add(k.slice(DRAFT_PREFIX.length));
+  }
+  const month = 30 * 24 * 3600_000;
+  for (const key of keys) {
+    const here = localDraft(key);
+    const there = remote[key];
+    // A thread that no longer exists takes its draft with it.
+    if (key !== 'new' && !S.threads.has(key)) { try { localStorage.removeItem(DRAFT_PREFIX + key); } catch { /* fine */ } continue; }
+    if (here && !here.text && Date.now() - here.at > month) { try { localStorage.removeItem(DRAFT_PREFIX + key); } catch { /* fine */ } }
+    const newer = !there || (here && here.at > there.at) ? here : there;
+    if (!newer) continue;
+    if (newer === here && (!there || here.at > there.at)) { draftPending.set(key, here); }
+    else keepLocal(key, there);
+    if (newer.text) S.drafts.set(key, newer.text); else S.drafts.delete(key);
+  }
+  if (draftPending.size) flushDrafts();
+  // The box he is looking at: filled if it is empty; what he is typing right now wins.
+  if (!S.pad && !els.input.value) restoreDraft();
+}
+
+// Leaving the page, hiding it (the phone locks, the app is switched away) or closing it:
+// what is typed goes out now rather than in a moment.
+document.addEventListener('visibilitychange', () => { if (document.hidden) { saveDraft(); flushDrafts(true); } });
+window.addEventListener('pagehide', () => { saveDraft(); flushDrafts(true); });
 
 // ---------- an opportunity or chase card ----------
 
@@ -1504,6 +1600,7 @@ async function send(done = false, tier = '') {
   const from = S.current;
   els.send.disabled = true;
   els.sendDone.disabled = true;
+  draftPending.delete(from || 'new'); // the text is going out; a delayed save of it must not follow
   try {
     if (from) {
       const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, tier: done ? '' : tier });
@@ -1514,7 +1611,7 @@ async function send(done = false, tier = '') {
       S.newProject = '';
     }
     els.input.value = '';
-    S.drafts.delete(from || 'new');
+    forgetDraft(from || 'new');
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
     // An event's thread is a session: it stays open while Claude answers.
@@ -1541,12 +1638,13 @@ async function spinOff(tier = '') {
   if (!tier && asksTier()) return askTier((n) => spinOff(n));
   closeTierAsk();
   els.spin.disabled = true;
+  draftPending.delete(from);
   try {
     const out = await api('POST', `/api/threads/${from}/spinoff`, { text, files, tier });
     S.threads.set(out.thread.id, out.thread);
     S.threads.set(out.from.id, out.from);
     els.input.value = '';
-    S.drafts.delete(from);
+    forgetDraft(from);
     S.attach.delete(from);
     toast(`Spun off: “${clip(out.thread.title, 48)}”`);
     advance(from);
@@ -1560,6 +1658,8 @@ async function spinOff(tier = '') {
 function onThreadDeleted({ id }) {
   if (!S.threads.delete(id)) return;
   S.drafts.delete(id);
+  draftPending.delete(id);
+  try { localStorage.removeItem(DRAFT_PREFIX + id); } catch { /* fine */ }
   if (S.lastThread === id) S.lastThread = null;
   if (S.current === id) {
     if (S.panel) closePanel();
@@ -2365,6 +2465,7 @@ function autosize() {
 
 els.input.addEventListener('input', autosize);
 els.input.addEventListener('input', renderDoneButton);
+els.input.addEventListener('input', () => saveDraft(true)); // kept on every keystroke
 els.defer.addEventListener('click', deferThread);
 els.input.addEventListener('keydown', (e) => {
   if (tierAsk) {
@@ -2689,7 +2790,9 @@ async function load() {
   renderRail();
   renderTree();
   renderBrain();
+  if (!draftsLoaded) { draftsLoaded = true; await loadDrafts(); }
 }
+let draftsLoaded = false;
 
 function boot() {
   els.messages.replaceChildren(h('div', { class: 'empty' }, h('p', { class: 'empty-sub' }, 'Connecting to the app…')));
