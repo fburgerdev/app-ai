@@ -75,3 +75,48 @@ test('the tools can be built for a thread', async () => {
   const server = await google.buildGoogleServer();
   assert.equal(server.name, 'google');
 });
+
+test('the update reads all mail since the last one, page by page, and skips automated mail', async () => {
+  const since = Date.UTC(2026, 10, 14, 0, 0);
+  // 700 messages: more than one page. Every tenth is a no-reply notification, every
+  // seventh a newsletter; Florian's own mail from a list address still counts.
+  const all = Array.from({ length: 700 }, (_, i) => {
+    const headers = [{ name: 'From', value: i % 10 === 0 ? 'EAGxBerlin <noreply@swapcard.com>' : `Person ${i} <p${i}@example.org>` }];
+    if (i % 7 === 0) headers.push({ name: 'List-Unsubscribe', value: '<mailto:x@example.org>' }, { name: 'List-Id', value: 'news.example.org' });
+    return { id: `m${i}`, threadId: `t${i % 50}`, internalDate: String(since + (700 - i) * 60_000), labelIds: i === 70 ? ['SENT'] : ['INBOX'], payload: { headers: [...headers, { name: 'Subject', value: `S${i}` }], mimeType: 'text/plain', body: { data: Buffer.from(`text ${i}`).toString('base64url') } } };
+  });
+  const byId = new Map(all.map((m) => [m.id, m]));
+  let fullFetches = 0;
+  google.setHttp(async (url) => {
+    const u = new URL(String(url));
+    const json = (value) => ({ ok: true, status: 200, json: async () => value });
+    if (u.hostname === 'oauth2.googleapis.com') return json({ access_token: 'fresh', expires_in: 3600 });
+    if (u.pathname.endsWith('/messages')) {
+      assert.match(u.searchParams.get('q'), /after:\d+ -in:drafts -in:spam -in:trash/);
+      const start = Number(u.searchParams.get('pageToken') || 0);
+      const n = Number(u.searchParams.get('maxResults'));
+      const page = all.slice(start, start + n).map((m) => ({ id: m.id }));
+      return json({ messages: page, ...(start + n < all.length ? { nextPageToken: String(start + n) } : {}) });
+    }
+    const m = byId.get(u.pathname.split('/').pop());
+    if (u.searchParams.get('format') === 'full') fullFetches += 1;
+    return json(m);
+  });
+  const threads = await google.gmailSince(since);
+  const automated = all.filter((m, i) => i !== 70 && (i % 10 === 0 || i % 7 === 0)).length;
+  assert.equal(threads.skipped, automated);
+  assert.equal(threads.read, all.length - automated, 'nothing beyond the first page is lost');
+  assert.equal(fullFetches, threads.read, 'automated mail is judged from its headers only');
+  assert.ok(threads.flatMap((t) => t.messages).some((m) => m.sent && m.text === 'text 70'), 'his own mail is kept even from a list');
+});
+
+test('automated mail is told from the headers', () => {
+  const h = (pairs) => Object.entries(pairs).map(([name, value]) => ({ name, value }));
+  assert.equal(google.isAutomated(h({ From: 'PayPal <service@paypal.de>' })), false, 'a sender name alone is not enough');
+  assert.equal(google.isAutomated(h({ From: 'no-reply@mailing.bahn.de' })), true);
+  assert.equal(google.isAutomated(h({ From: 'Jörg <j@kstw.de>', 'Auto-Submitted': 'auto-replied' })), true, 'an out-of-office reply');
+  assert.equal(google.isAutomated(h({ From: 'Jörg <j@kstw.de>', 'Auto-Submitted': 'no' })), false);
+  assert.equal(google.isAutomated(h({ From: 'Green Office <green-office@uni-koeln.de>', 'List-Unsubscribe': '<x>', 'List-Id': 'go.uni-koeln.de' })), true);
+  assert.equal(google.isAutomated(h({ From: 'Anja <anja@uk-koeln.de>' })), false);
+  assert.equal(google.isAutomated(h({ From: 'noreply@x.org' }), ['SENT']), false);
+});

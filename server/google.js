@@ -259,17 +259,51 @@ export async function gmailSend({ draftId, replyToThreadId, from, to, cc, bcc, s
   return { messageId: sent.id, threadId: sent.threadId };
 }
 
+// Automated mail: no person wrote it and nobody answers it. Mail Florian sent is never
+// automated. Judged from the headers alone, so its text is never fetched.
+const AUTOMATED_FROM = /(^|[<\s"])(no-?reply|do-?not-?reply|donotreply|notifications?|notify|mailer-daemon|postmaster|bounces?)[^@\s]*@/i;
+export function isAutomated(headers, labels = []) {
+  if (labels.includes('SENT')) return false;
+  const get = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+  if (AUTOMATED_FROM.test(get('From'))) return true;
+  const auto = get('Auto-Submitted');
+  if (auto && !/^no$/i.test(auto.trim())) return true;
+  // Newsletters and mailing lists: sent in bulk, with a way to unsubscribe.
+  if (/^(bulk|list|junk)$/i.test(get('Precedence').trim())) return true;
+  if (get('List-Unsubscribe') && (get('List-Id') || /^(bulk|list)$/i.test(get('Precedence').trim()) || get('Feedback-ID'))) return true;
+  return false;
+}
+
 // Mail that arrived or went out after a moment, newest last, grouped by conversation.
-// This is what the brain update reads; drafts, spam and promotions are left out.
-export async function gmailSince(sinceMs, { max = 60 } = {}) {
+// This is what the brain update reads. All of it, however much there is: the list is
+// read page by page, because whatever is left out here is never read later (the update
+// counts everything up to its start as read). Left out on purpose: drafts, spam, trash,
+// Gmail's Promotions and Social tabs, and automated mail (judged from the headers, so
+// skipping it costs one small request each). Returns the threads and what was skipped.
+export async function gmailSince(sinceMs) {
   const q = `after:${Math.floor(sinceMs / 1000)} -in:drafts -in:spam -in:trash -category:promotions -category:social`;
-  const list = await api(`${GMAIL}/messages?${new URLSearchParams({ q, maxResults: String(max) })}`);
+  const ids = [];
+  let pageToken = '';
+  do {
+    const list = await api(`${GMAIL}/messages?${new URLSearchParams({ q, maxResults: '500', ...(pageToken ? { pageToken } : {}) })}`);
+    for (const m of list.messages || []) ids.push(m.id);
+    pageToken = list.nextPageToken || '';
+  } while (pageToken && ids.length < 5000);
   const threads = new Map();
-  for (const { id } of (list.messages || []).reverse()) {
+  let skipped = 0;
+  const kept = [];
+  for (const id of ids.reverse()) {
+    const meta = await api(`${GMAIL}/messages/${id}?${new URLSearchParams([['format', 'metadata'], ...['From', 'Auto-Submitted', 'Precedence', 'List-Unsubscribe', 'List-Id', 'Feedback-ID'].map((h) => ['metadataHeaders', h])])}`);
+    if (Number(meta.internalDate) <= sinceMs) continue;
+    if (isAutomated(meta.payload?.headers || [], meta.labelIds || [])) { skipped += 1; continue; }
+    kept.push(id);
+  }
+  // Long texts are cut; shorter still when there is a lot, so a long absence stays readable.
+  const limit = kept.length > 150 ? 2500 : 8000;
+  for (const id of kept) {
     const m = await api(`${GMAIL}/messages/${id}?format=full`);
-    if (Number(m.internalDate) <= sinceMs) continue;
     let text = bodyText(m.payload);
-    if (text.length > 8000) text = `${text.slice(0, 8000)}\n[cut: the message is longer]`;
+    if (text.length > limit) text = `${text.slice(0, limit)}\n[cut: the message is longer]`;
     const entry = threads.get(m.threadId) || { threadId: m.threadId, subject: header(m, 'Subject'), messages: [] };
     entry.messages.push({
       sent: (m.labelIds || []).includes('SENT'),
@@ -281,7 +315,7 @@ export async function gmailSince(sinceMs, { max = 60 } = {}) {
     });
     threads.set(m.threadId, entry);
   }
-  return [...threads.values()];
+  return Object.assign([...threads.values()], { read: kept.length, skipped });
 }
 
 // ---------- calendar ----------
