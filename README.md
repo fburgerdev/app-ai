@@ -392,6 +392,8 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `hiddenPaths` | Scratchpad, .obsidian, For Claude/processed | Never on the app's disk. |
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
+| `artifactsShell` | `true` | Whether a thread without a repo may run scripts in its own artifacts folder: filling a PDF form, reading or editing a Word or Excel file, converting a file. Every command has to start with `cd` into that folder, and git is refused. It is a rule the app checks, not a sandbox: a script can still reach other folders on the computer. |
+| `autoPush` | `true` | Whether a thread's branch in a repo is pushed to GitHub by itself when its turn ends. Merging into main stays your button. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads outside a repo. Once a thread has opened a repo, it can always run them (tests, builds); it is told to work only in that repo's folder, and push, branch switching and destructive git commands are refused. |
 | `maxParallel` | `6` | Turns that run at once. Your own messages go first; work the app started by itself leaves one slot free for you. Use 3 on a Pi with 2 GB. |
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |

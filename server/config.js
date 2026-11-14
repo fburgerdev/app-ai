@@ -115,6 +115,14 @@ const DEFAULTS = {
   // vault, search the web and write artifacts, nothing else.
   threadShell: false,
 
+  // Whether a thread without a repo may run commands in its own artifacts folder: scripts
+  // that fill a PDF form, read or edit a Word or Excel file, convert a file. On by default.
+  artifactsShell: true,
+
+  // Whether a thread's branch is pushed to GitHub by itself when its turn ends, so the
+  // work never sits on one computer only. Merging into main stays Florian's button.
+  autoPush: true,
+
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
 

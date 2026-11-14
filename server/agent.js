@@ -3,8 +3,9 @@
 // lands in this one file.
 //
 // Permissions are decided here, in code, not by asking: nobody is sitting at a prompt.
-//   thread   reads the vault, searches the web, writes only into its artifacts folder; once
-//            it has opened a repo, also writes and runs commands in that repo
+//   thread   reads the vault, searches the web, writes only into its artifacts folder and
+//            runs commands there (scripts that fill a PDF, edit a Word file); once it has
+//            opened a repo, also writes and runs commands in that repo
 //   extract  the brain update: reads and writes the vault, no web, no git history
 //   plain    no tools at all (used to turn a reply into something to listen to)
 //   lookup   like plain, but it may search and read the web (the voice host's harder questions)
@@ -24,7 +25,7 @@ const GIT_HISTORY = /\bgit\b[^|;&\n]*\b(commit|push|pull|fetch|reset|rebase|chec
 // In a repo, Claude commits on its own branch; pushing, switching branches and throwing
 // work away are the app's and Florian's.
 const REPO_FORBIDDEN = [
-  [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push: Florian pushes and merges with the buttons in the thread.'],
+  [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push yourself: the app pushes this thread\'s branch when the turn ends, and Florian merges with the button in the thread.'],
   [/\bgit\b[^|;&\n]*\b(switch|worktree)\b|\bgit\b[^|;&\n]*\bcheckout\b(?![^|;&\n]*\s--\s)/, 'Stay on this thread\'s branch: the app manages branches. To undo changes to a file use "git restore <file>".'],
   [/\bgit\b[^|;&\n]*\b(reset\s+--hard|branch\s+-[dD]|remote|filter-branch|clean\s+-[a-z]*f)/, 'That git command can lose work or change the repo\'s setup; the app does not allow it.'],
   [/\bgh\b[^|;&\n]*\b(repo\s+(delete|rename|archive)|pr\s+(merge|create))/, 'Use the app\'s GitHub tools; deleting a repo is not possible at all.'],
@@ -33,6 +34,20 @@ const REPO_FORBIDDEN = [
 function isInside(file, root) {
   const rel = path.relative(path.resolve(root), path.resolve(file));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+// Whether a shell command starts by going into `dir` (or a folder inside it):
+// `cd "<dir>"`, `Set-Location`, `pushd`. That is where a thread without a repo runs its
+// scripts. It is a rule Claude is held to, not a sandbox: a script can still reach
+// other folders, so the vault's own safety net (stray changes are thrown away) stays.
+export function startsIn(command, dir) {
+  const m = /^\s*(?:cd|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:\/d\s+)?(?:-(?:Literal)?Path\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/i.exec(String(command || ''));
+  if (!m) return false;
+  let p = m[1] || m[2] || m[3];
+  // Git Bash writes C:\Users as /c/Users.
+  const drive = /^\/([a-zA-Z])\/(.*)$/.exec(p);
+  if (drive && process.platform === 'win32') p = `${drive[1]}:/${drive[2]}`;
+  return isInside(path.resolve(p), dir);
 }
 
 function allow(input) {
@@ -44,7 +59,7 @@ function deny(message) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, google = false, repoDir = () => null, reposDir = '' }) {
+export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '' }) {
   const readable = [cwd, artifactsDir, ...readDirs, reposDir].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
@@ -96,7 +111,14 @@ export function buildPolicy({ mode, cwd, artifactsDir, readDirs = [], protectedP
           for (const [pattern, why] of REPO_FORBIDDEN) if (pattern.test(command)) return deny(why);
           return allow(input);
         }
-        return shell ? allow(input) : deny('Shell commands work only in a repo: call open_repo first. Otherwise they are turned off for threads in this app.');
+        if (shell) return allow(input);
+        if (!artifactsShell || !artifactsDir) return deny('Shell commands work only in a repo: call open_repo first. Otherwise they are turned off for threads in this app.');
+        // Without a repo: scripts on the thread's own files, run from its artifacts folder.
+        if (toolName !== 'Bash' && toolName !== 'PowerShell') return allow(input); // the output of a command already allowed, or stopping it
+        const command = String(input.command || '');
+        if (/(^|[\s;&|(])(git|gh)(\.exe)?\s/i.test(command)) return deny('No git here: the vault is the app\'s to manage, and code lives in repos. Call open_repo to work in one.');
+        if (!startsIn(command, artifactsDir)) return deny(`Without a repo, commands run in this thread's artifacts folder: start the command with cd "${artifactsDir}" and keep what you make there. Never write into the vault.`);
+        return allow(input);
       }
       const command = String(input.command || '');
       if (GIT_HISTORY.test(command)) {
@@ -137,7 +159,7 @@ async function buildAppServer({ spinOff, repoTools }) {
           async ({ repo }) => {
             try {
               const r = await repoTools.open(repo);
-              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push or switch branches: Florian pushes, opens a pull request or merges with buttons in the thread. Whatever you leave uncommitted is committed for you when the turn ends.`);
+              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push or switch branches yourself: when the turn ends the app commits whatever you left uncommitted and pushes this branch to GitHub by itself. Florian merges into main with the button in the thread.`);
             } catch (err) { return fail(err); }
           }),
         tool('list_repos', 'List Florian\'s GitHub repos.', {}, async () => {
@@ -243,7 +265,7 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
   const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
@@ -281,7 +303,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, google, repoDir, reposDir }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir }),
     additionalDirectories: [artifactsDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };

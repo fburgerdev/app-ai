@@ -21,18 +21,23 @@ about how it behaves, and about the one extra for renaming and creating repos.
   fburgerdev/app-ai: "Tidy the server code" is working in it"), for up to 20 minutes.
 - **Every thread gets a branch of its own**, `claude/<thread name>-<id>`, from the repo's main
   branch. Claude commits there; what it leaves uncommitted is committed for it when the turn
-  ends. Claude cannot push, switch branches, reset, delete branches or touch the remote: the
-  app blocks those commands.
-- Shell commands (tests, builds, git commits) are allowed only while a thread holds a repo, and
-  file writes only inside it. The vault stays read-only as always.
+  ends, and the app then pushes the branch to GitHub by itself, so the work is never on one
+  computer only (`"autoPush": false` in `config.json` turns that off). Claude itself cannot
+  push, switch branches, reset, delete branches or touch the remote: the app blocks those
+  commands.
+- Shell commands on code (tests, builds, git commits) are allowed only while a thread holds a
+  repo, and file writes only inside it. The vault stays read-only as always. (A thread without
+  a repo can run scripts in its own artifacts folder, for PDF forms and Word files; see the
+  README.)
 
-## What only you do: the buttons
+## What only you do: merging
 
 The repo panel shows the branch, its commits, and every changed file with its diff. Its buttons
-are the only way anything reaches GitHub:
+are the only way anything reaches main:
 
 - **Push and open pull request** pushes the branch and opens GitHub's page for a pull request.
-- **Only push** pushes the branch, nothing more.
+- **Only push** pushes the branch, nothing more. Rarely needed now: the branch is pushed by
+  itself when a turn ends. It is there for when that did not get through (offline).
 - **Merge into main** (click twice) merges the branch into main, pushes main and deletes the
   branch. If main has moved on in a way that conflicts, it refuses and tells you; ask Claude in
   the thread to bring the branch up to date.

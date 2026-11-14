@@ -7,8 +7,9 @@
 //
 // Each thread works on a branch of its own, made from the repo's main branch. When a turn
 // ends, whatever Claude left uncommitted is committed onto that branch, so the copy is
-// clean for the next thread. Nothing leaves the machine on its own: Florian pushes, opens
-// a pull request or merges into main with the buttons in the thread.
+// clean for the next thread, and the branch is pushed to GitHub (`autoPush`, on by
+// default), so the work never sits on one computer only. Merging into main is Florian's:
+// the button in the thread.
 //
 // Managing repos themselves (renaming, creating, describing) goes through GitHub's API
 // with the token the machine already uses for git, or `github.token` in config.json.
@@ -176,6 +177,28 @@ export async function saveWork(threadId) {
     if (await currentBranch(dir) !== branch) return;
     if (await commitLeftovers(dir, `Work in progress: ${title}`)) log(`repos: committed leftovers of "${title}" in ${full}`);
   }).catch((err) => log(`repos: could not save work in ${full}: ${err.message}`));
+}
+
+// At the end of a turn, after saveWork: the thread's branch goes to GitHub by itself.
+// Only when it has something main does not have and GitHub does not have it yet. Never
+// throws: offline, the branch stays here and goes out after the next turn, or with the
+// Push button. True when it pushed.
+export async function autoPush(threadId) {
+  if (config.autoPush === false) return false;
+  const { repo: full, repoBranch: branch, repoMain } = store.getThread(threadId) || {};
+  if (!full || !branch || holder(full) !== threadId) return false;
+  const dir = dirOf(full);
+  return serial(full, async () => {
+    const has = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then((o) => o.trim(), () => '');
+    if (!has) return false;
+    const remote = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).then((o) => o.trim(), () => '');
+    if (remote === has) return false;
+    const ahead = Number((await git(dir, ['rev-list', '--count', `origin/${repoMain || 'main'}..${branch}`]).catch(() => '0')).trim());
+    if (!ahead && !remote) return false; // a fresh branch with nothing on it yet
+    await git(dir, ['push', '--quiet', '-u', 'origin', branch], { timeout: 180_000 });
+    log(`repos: pushed ${branch} to ${full} by itself`);
+    return true;
+  }).catch((err) => { log(`repos: could not push ${branch} of ${full} by itself: ${err.message.split('\n')[0]}`); return false; });
 }
 
 // ---------- what Florian sees, and the buttons ----------
