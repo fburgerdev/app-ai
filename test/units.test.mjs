@@ -187,4 +187,9 @@ test('a git step refused because another git process holds the index runs again'
   calls = 0;
   await assert.rejects(whenUnlocked(async () => { calls += 1; throw new Error('nothing to commit'); }, { wait: 1 }), /nothing to commit/);
   assert.equal(calls, 1);
+  // A file the app was rewriting while git read it: the same, a moment later it is whole.
+  const midWrite = Object.assign(new Error('git add -A failed: fatal: updating files failed'), { stderr: "error: threads/t1/thread.json: failed to insert into database; error: unable to index file 'threads/t1/thread.json'; fatal: updating files failed" });
+  calls = 0;
+  assert.equal(await whenUnlocked(async () => { calls += 1; if (calls < 2) throw midWrite; return 'ok'; }, { wait: 1 }), 'ok');
+  assert.equal(calls, 2);
 });

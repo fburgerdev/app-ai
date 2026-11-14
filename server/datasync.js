@@ -120,11 +120,13 @@ export function startDataSync() {
 // Git lets one process at a time write a repository's index and refuses the second
 // ("Unable to create .../index.lock ... Another git process seems to be running").
 // Something else can hold it for a moment (a status check, a shell in a thread's
-// folder), so a refused step waits briefly and runs again.
+// folder), so a refused step waits briefly and runs again. The same holds for a file
+// the app is rewriting in the very moment git reads it ("unable to index file",
+// seen on Windows): a moment later the write is over.
 export async function whenUnlocked(fn, { tries = 5, wait = 400 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     try { return await fn(); } catch (err) {
-      if (attempt >= tries || !/index\.lock|Another git process/i.test(`${err.stderr || ''} ${err.message || ''}`)) throw err;
+      if (attempt >= tries || !/index\.lock|Another git process|unable to index file|failed to insert into database/i.test(`${err.stderr || ''} ${err.message || ''}`)) throw err;
       await new Promise((r) => setTimeout(r, wait * attempt));
     }
   }
