@@ -117,11 +117,24 @@ export function startDataSync() {
   timer.unref?.();
 }
 
+// Git lets one process at a time write a repository's index and refuses the second
+// ("Unable to create .../index.lock ... Another git process seems to be running").
+// Something else can hold it for a moment (a status check, a shell in a thread's
+// folder), so a refused step waits briefly and runs again.
+export async function whenUnlocked(fn, { tries = 5, wait = 400 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await fn(); } catch (err) {
+      if (attempt >= tries || !/index\.lock|Another git process/i.test(`${err.stderr || ''} ${err.message || ''}`)) throw err;
+      await new Promise((r) => setTimeout(r, wait * attempt));
+    }
+  }
+}
+
 async function commitLocal(reason) {
-  await git(DATA_DIR, ['add', '-A']);
+  await whenUnlocked(() => git(DATA_DIR, ['add', '-A']));
   if (await gitOk(DATA_DIR, ['diff', '--cached', '--quiet'])) return false;
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  await git(DATA_DIR, ['commit', '--quiet', '-m', `${reason}: ${stamp}`]);
+  await whenUnlocked(() => git(DATA_DIR, ['commit', '--quiet', '-m', `${reason}: ${stamp}`]));
   return true;
 }
 
@@ -189,6 +202,18 @@ export function pullNow() {
   });
 }
 
+// Pushes; when GitHub rejects it because the other computer pushed in between, takes
+// that in and pushes again. Both computers save on the same clock, so the second push
+// can lose the same race (GitHub then says "cannot lock ref"): a few tries, a moment apart.
+export async function pushTakingIn(push, takeIn, { tries = 4, wait = 1500 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await push(); } catch (err) {
+      if (attempt >= tries || !(await takeIn())) throw err;
+      if (attempt > 1) await new Promise((r) => setTimeout(r, wait * (attempt - 1)));
+    }
+  }
+}
+
 // Commits what changed and pushes. Safe to call at any time.
 export function saveNow(reason = 'state') {
   if (!status.enabled) return Promise.resolve(dataSyncStatus());
@@ -201,13 +226,14 @@ export function saveNow(reason = 'state') {
           ? Number((await git(DATA_DIR, ['rev-list', '--count', `origin/${branch}..HEAD`])).trim())
           : 1;
         if (ahead > 0) {
-          const push = () => git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`]);
-          try { await push(); } catch (err) {
-            // The other computer pushed in between: take that in, then push both.
-            if (!(await fetchOrigin())) throw err;
-            if (await mergeRemote()) reload();
-            await push();
-          }
+          await pushTakingIn(
+            () => git(DATA_DIR, ['push', '--quiet', 'origin', `HEAD:${branch}`]),
+            async () => {
+              if (!(await fetchOrigin())) return false;
+              if (await mergeRemote()) reload();
+              return true;
+            },
+          );
           await fetchOrigin().catch(() => {});
           status.lastPush = Date.now();
           for (const fn of pushed) { try { fn(); } catch { /* never in the way */ } }
@@ -265,7 +291,8 @@ export function purgeHistory(paths) {
 // What is here but not on GitHub yet: changed files, and commits not pushed.
 export async function unsaved() {
   if (!status.enabled) return { enabled: false, files: 0, ahead: 0 };
-  const changed = (await git(DATA_DIR, ['status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean);
+  // Runs beside a save, not in line with it, so it must not take the index lock itself.
+  const changed = (await git(DATA_DIR, ['--no-optional-locks', 'status', '--porcelain']).catch(() => '')).split('\n').filter(Boolean);
   const files = changed.length;
   const branch = config.dataBranch;
   const ahead = (await gitOk(DATA_DIR, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]))
