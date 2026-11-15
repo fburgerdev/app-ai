@@ -44,18 +44,32 @@ export function createEvent(card) {
   return thread;
 }
 
+function open(t, now = Date.now()) {
+  // An entry already over by the time the app saw it is not worth a briefing any more.
+  if (t.event.end < now) { store.updateThread(t.id, { event: { ...t.event, started: true }, hidden: false, archived: false, state: 'ready', queuedAt: now }); return; }
+  store.updateThread(t.id, { event: { ...t.event, started: true }, hidden: false, archived: false, state: 'ready', queuedAt: now });
+  runner.sendMessage(t.id, `${LEAD(t)}\n\n${t.event.brief}`, { auto: true });
+  log(`events: opened "${t.title}"`);
+}
+
 // Opens the events whose time has come.
 export function tick() {
   if (!mayRun()) return;
   const now = Date.now();
   for (const t of store.listThreads()) {
     if (t.kind !== 'event' || !t.event || t.event.started || t.event.showAt > now) continue;
-    // An entry already over by the time the app saw it is not worth a briefing any more.
-    if (t.event.end < now) { store.updateThread(t.id, { event: { ...t.event, started: true }, hidden: false, archived: false, state: 'ready', queuedAt: now }); continue; }
-    store.updateThread(t.id, { event: { ...t.event, started: true }, hidden: false, archived: false, state: 'ready', queuedAt: now });
-    runner.sendMessage(t.id, `${LEAD(t)}\n\n${t.event.brief}`, { auto: true });
-    log(`events: opened "${t.title}"`);
+    open(t, now);
   }
+}
+
+// Florian wants to prepare already: the event opens now, with its briefing, instead of
+// a day before or on the morning of the day.
+export function openNow(threadId) {
+  const t = store.getThread(threadId);
+  if (!t || t.kind !== 'event' || !t.event) throw new Error('No such event.');
+  if (t.event.started) return t;
+  open(t);
+  return store.getThread(threadId);
 }
 
 export function initEvents({ mayRunHere }) {

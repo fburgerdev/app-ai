@@ -502,6 +502,10 @@ app.post('/api/threads/:id/again', (req, res) => {
 });
 // Next Actions, as sleeping threads; waking one makes it a thread in the inbox.
 app.get('/api/next-actions', (req, res) => res.json(nextActions.list()));
+// An event that has not opened yet, opened now because he wants to prepare already.
+app.post('/api/events/:id/open', (req, res) => {
+  try { res.json({ thread: events.openNow(req.params.id) }); } catch (err) { res.status(404).json({ error: err.message }); }
+});
 app.post('/api/next-actions/wake', (req, res) => {
   try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
 });

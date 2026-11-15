@@ -379,3 +379,19 @@ test('only files Claude chose to show are shown; what a script leaves behind goe
   const m = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office' })).data.thread;
   assert.deepEqual((await ready(m.id)).artifacts.map((a) => a.name), ['Mail an das Büro.md']);
 });
+
+test('an event that is not open yet can be opened now, to prepare already', async () => {
+  // Close the thread that makes the stand-in's fair start soon: now it is tomorrow.
+  for (const t of (await state()).threads.filter((x) => /EVENT-SOON/.test(x.title) && x.state !== 'done')) {
+    await until(async () => (await call('POST', `/api/threads/${t.id}/state`, { state: 'done' })).status === 200, 'closed');
+  }
+  await call('POST', '/api/cards/make', {});
+  const coming = await until(async () => (await state()).threads.find((t) => t.kind === 'event' && t.title === 'Example fair' && t.hidden && !t.event.started), 'tomorrow\'s fair, not open yet');
+  assert.ok(coming.event.showAt > Date.now(), 'it would open by itself later');
+  const opened = (await call('POST', `/api/events/${coming.id}/open`, {})).data.thread;
+  assert.equal(opened.hidden, false);
+  assert.equal(opened.event.started, true);
+  const t = await ready(opened.id);
+  assert.match(t.messages[0].text, /^This is the thread for an entry in Florian's calendar: Example fair/, 'with its briefing, as if its time had come');
+  assert.equal((await call('POST', '/api/events/nope/open', {})).status, 404);
+});

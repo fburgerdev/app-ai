@@ -917,6 +917,7 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .out:hover > .out-row { background: var(--panel); }
 /* A long name runs onto a second line and is cut after that; the full name is in the tooltip. */
 .out-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.out-last { white-space: nowrap; }
 .out-mark { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--you); vertical-align: 2px; }
 .out-when { position: absolute; right: 7px; top: 8px; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .out-plus {
@@ -1401,7 +1402,17 @@ a.chip:hover { border-color: var(--muted); }
 /* ---------- events in the inbox drawer ---------- */
 .event-item { align-items: center; gap: 10px; }
 .event-item.is-coming .item-mark { background: var(--line); }
-.event-item.is-coming { opacity: 0.5; cursor: default; }
+.event-item.is-coming { opacity: 0.55; }
+.event-item.is-coming:hover { opacity: 0.85; }
+.event-item.is-coming.is-armed { opacity: 1; background: var(--raised); }
+.event-item.is-coming.is-armed .sleep-sub { color: var(--you); }
+/* Events not open yet: one quiet line, unfolding on hover, focus or a click. */
+.coming-head { display: block; width: 100%; margin: 2px 0 0; padding: 4px 8px 4px 21px; border: 0; background: none; text-align: left; color: var(--faint); font: 12px var(--sans); cursor: pointer; }
+.coming-next { opacity: 0.8; }
+.coming-list { max-height: 0; overflow: hidden; transition: max-height 180ms ease; }
+.coming:hover .coming-list, .coming:focus-within .coming-list, .coming.is-open .coming-list { max-height: 60vh; overflow: auto; }
+.coming:hover .coming-head, .coming.is-open .coming-head { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .coming-list { transition: none; } }
 .sleep-item.is-armed { opacity: 1; background: var(--raised); }
 .sleep-item.is-armed .sleep-sub { color: var(--you); }
 .pick-menu.is-wide { width: 300px; }
@@ -1423,7 +1434,9 @@ a.chip:hover { border-color: var(--muted); }
   background: var(--raised); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
 }
 .tier-ask-btn:hover { border-color: var(--you); color: var(--you); }
-.tier-ask-btn.is-last { border-color: var(--you); }
+/* Default (3) looks as if the pointer were on it: Enter takes it. Pointing at another moves the look there. */
+.tier-ask-btn.is-last { border-color: var(--you); color: var(--you); }
+.tier-ask:has(.tier-ask-btn:hover) .tier-ask-btn.is-last:not(:hover) { border-color: var(--line); color: var(--text); }
 .tier-ask-btn kbd { color: var(--faint); font: 11px var(--mono); }
 .tier-ask-x { margin-left: auto; border: 0; background: none; color: var(--faint); font-size: 17px; cursor: pointer; padding: 0 4px; }
 .tier-ask-x:hover { color: var(--text); }

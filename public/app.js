@@ -13,7 +13,7 @@ const els = {
   tier: $('tier'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
-  openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openScratch: $('open-scratch'), openSettings: $('open-settings'),
+  openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openSettings: $('open-settings'),
   settings: $('settings'), settingsBody: $('settings-body'), settingsClose: $('settings-close'),
 };
 
@@ -254,6 +254,27 @@ function sleepingSection() {
   return [];
 }
 
+// Events not open yet are folded under one quiet line; hovering or clicking it unfolds
+// them. Clicking one arms it, a second click opens it now to prepare already: started by
+// accident it would cost a briefing he did not want.
+let comingOpen = false;
+let armedEvent = '';
+async function openEventNow(t, button) {
+  if (armedEvent !== t.id) {
+    armedEvent = t.id;
+    renderRail();
+    setTimeout(() => { if (armedEvent === t.id) { armedEvent = ''; renderRail(); } }, 4000);
+    return;
+  }
+  armedEvent = '';
+  button.disabled = true;
+  try {
+    const out = await api('POST', `/api/events/${t.id}/open`, {});
+    S.threads.set(out.thread.id, out.thread);
+    openThread(out.thread.id);
+  } catch (err) { toast(err.message); button.disabled = false; }
+}
+
 // Pinned: on the very top of the inbox, and not part of the queue. Events from the
 // calendar are here from the start; any thread can be pinned (the button in its header,
 // or drag it here) and unpinned. Events come first, by date, with those not open yet
@@ -271,18 +292,21 @@ function pinnedSection() {
     return row;
   };
   const item = (t, soon) => (!t.event ? plain(t) : h('button', {
-    class: `item event-item${soon ? ' is-coming' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', disabled: soon, dataset: { id: t.id },
-    title: soon ? `${t.title}\n${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
-    onclick: () => openThread(t.id),
+    class: `item event-item${soon ? ' is-coming' : ''}${soon && armedEvent === t.id ? ' is-armed' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: soon ? {} : { id: t.id },
+    title: soon ? `${t.title}\n${eventWhen(t.event)} · opens by itself ${eventWhen({ start: t.event.showAt }).toLowerCase()}\nClick twice to open it now and prepare already.` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
+    onclick: soon ? (e) => openEventNow(t, e.currentTarget) : () => openThread(t.id),
   },
   h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
   h('span', { class: 'sleep-main' },
     h('span', { class: 'sleep-text' }, t.title),
-    h('span', { class: 'sleep-sub' }, `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ' · not open yet' : ''}`)),
+    h('span', { class: 'sleep-sub' }, soon && armedEvent === t.id ? 'Click again to prepare it now' : `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ` · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : ''}`)),
   soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event))));
   return [section('Pinned', events.length + mine.length, [
     ...events.map((t) => item(t, false)),
-    ...coming.map((t) => item(t, true)),
+    coming.length ? h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}` },
+      h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(comingOpen), title: 'Events from your calendar that open by themselves later. Hover or click to see them.', onclick: () => { comingOpen = !comingOpen; renderRail(); } },
+        `${coming.length} coming`, h('span', { class: 'coming-next' }, ` · next ${eventWhen(coming[0].event).toLowerCase()}`)),
+      h('div', { class: 'coming-list' }, ...coming.map((t) => item(t, true)))) : null,
     (events.length || coming.length) && mine.length ? h('div', { class: 'pin-divide', role: 'separator' }) : null,
     ...mine.map((t) => item(t, false)),
   ], null, 'pin')];
@@ -324,7 +348,9 @@ function outlineRow({ name, sub, project, about, touched, open, grey, isArea, he
     },
     // A ranked area carries its place in 30,000 ft as a quiet marker in front.
     rank ? h('span', { class: 'out-rank', 'aria-label': `Rank ${rank}` }, String(rank)) : null,
-    h('span', { class: 'out-name' }, name, open ? h('span', { class: 'out-mark', 'aria-label': 'has open threads' }) : null,
+    // The dot for open threads sticks to the last word, so a long name never leaves it
+    // alone on a line of its own.
+    h('span', { class: 'out-name' }, ...(open ? [String(name).replace(/\S+$/, ''), h('span', { class: 'out-last' }, /\S+$/.exec(String(name))?.[0] || '', h('span', { class: 'out-mark', 'aria-label': 'has open threads' }))] : [name]),
       sub ? h('span', { class: 'out-sub' }, sub) : null),
     touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null),
     h('button', { class: 'out-plus', type: 'button', title: `New thread ${isArea ? 'in' : 'on'} ${name}`, 'aria-label': `New thread on ${name}`, onclick: () => openNew(project) }, '+'));
@@ -1179,8 +1205,9 @@ function updateButton() {
   return h('div', { class: 'update-row' }, button, out);
 }
 
-// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for the last
-// one used, Escape to go back to writing. Nothing is sent until one is picked. It asks
+// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for Default
+// (always the middle one, 3, whatever was picked last), Escape to go back to writing.
+// Nothing is sent until one is picked. It asks
 // where a message starts new work (Send, Start, a spin-off). Never for "Done", which
 // Claude does not answer, nor for a message added while Claude is working, which runs on
 // the tier of the work it belongs to. `go` gets the tier and sends.
@@ -1188,9 +1215,8 @@ const asksTier = () => S.settings.tier === 'ask';
 function askTier(go) {
   closeTierAsk();
   const names = S.settings.tierNames || [];
-  const stored = localStorage.getItem('app-ai-tier');
-  const last = names.includes(stored) ? stored : 'default';
-  const pick = (n) => { localStorage.setItem('app-ai-tier', n); closeTierAsk(); go(n); };
+  const last = names.includes('default') ? 'default' : names[Math.floor(names.length / 2)];
+  const pick = (n) => { closeTierAsk(); go(n); };
   const row = h('div', { class: 'tier-ask', role: 'group', 'aria-label': 'How much is this worth?' },
     h('span', { class: 'tier-ask-label' }, 'How much?'),
     ...names.map((n, i) => h('button', {
@@ -1517,7 +1543,6 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
-  els.openScratch.classList.remove('is-on');
   if (!keepPanel && S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -1564,7 +1589,6 @@ function openNew(project = '') {
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
-  els.openScratch.classList.remove('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -1578,6 +1602,8 @@ function openNew(project = '') {
 }
 
 // The scratchpad: a plain page to write in. It saves as you type. Claude never reads it.
+// Switched off 15-11-2026 (Florian never used it: a thread closed with Done is a note
+// too, and sorts better): no button, no Alt P. The code and the file stay.
 function leavePad() {
   const back = S.lastThread && S.threads.has(S.lastThread) ? S.lastThread : inbox()[0]?.id;
   if (back) openThread(back, { byQueue: true });
@@ -1595,7 +1621,6 @@ async function openPad() {
   S.view = null;
   S.live = null;
   S.cardDecide = null;
-  els.openScratch.classList.add('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -2178,7 +2203,6 @@ function fillKeys(body) {
     ['Alt J / Alt K', 'Next / previous thread in the inbox'],
     ['Alt A', 'Show or hide the files Claude made in this thread'],
     ['Alt U', 'Update the brain'],
-    ['Alt P', 'Scratchpad, and back'],
     ['Esc', 'Close the side panel or this window'],
   ];
   body.append(h('h3', { class: 'window-head' }, 'Keys'),
@@ -2583,7 +2607,6 @@ stage.addEventListener('drop', (e) => {
   e.preventDefault();
   addFiles([...e.dataTransfer.files]);
 });
-els.openScratch.addEventListener('click', () => openPad());
 $('new-thread').addEventListener('click', () => openNew());
 els.tabQueue.addEventListener('click', () => setTab('queue'));
 els.tabProjects.addEventListener('click', () => setTab('projects'));
@@ -2607,7 +2630,7 @@ function renderSettings() {
     value: kept ? 'kept' : mode,
     name: (n) => (n === 'auto' ? 'Auto' : n === 'ask' ? 'Quick select' : `${s.tiers?.[kept]?.label || kept}, kept`),
     describe: (n) => (n === 'auto' ? 'Picked per message by a cheap model, so you never have to choose.'
-      : 'Send asks first: five buttons over the box, 1 to 5 or Enter for the last one.'),
+      : 'Send asks first: five buttons over the box, 1 to 5, or Enter for Default (3).'),
     onPick: (n) => {
       closeTierAsk();
       if (kept) {
@@ -2670,7 +2693,6 @@ window.addEventListener('keydown', (e) => {
     KeyU: () => updateBrain(),
     KeyA: toggleFiles,
     KeyL: () => setRail(!els.app.classList.contains('rail-open')),
-    KeyP: () => openPad(),
     KeyJ: () => step(1),
     KeyK: () => step(-1),
     ArrowDown: () => step(1),

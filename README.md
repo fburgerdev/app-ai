@@ -26,7 +26,7 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 ## The screen
 
-- **The top bar** is always there: the inbox button with the number waiting, the mood line, Talk, Scratchpad and Settings.
+- **The top bar** is always there: the inbox button with the number waiting, this computer's status, the cost of today, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **Projects and areas** on the right, most recently dealt with first (see below).
 - **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
@@ -74,7 +74,6 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 | Alt+U | Update the brain |
 | Alt+L | Show or hide the inbox |
 | Alt+M | Jump to the mood line |
-| Alt+P | Scratchpad, and back |
 | Esc | Close the side panel or the settings window |
 
 ### Model and effort
@@ -168,7 +167,7 @@ Settings → Queue.
 
 ## Scratchpad
 
-A page to write in, one click away in the top bar (Alt+P; again to go back). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
+Switched off since 15-11-2026: a thread closed with Done does the same job and sorts better. The code and `scratchpad.md` in the data folder are still there; the button in `public/index.html` and the Alt+P key in `public/app.js` would turn it on again.
 
 ## Talk: the host
 
@@ -247,7 +246,7 @@ Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium)
 (Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer
 is one switch, the same in every thread. **Auto**: before each turn a cheap model reads the
 message and picks a tier, so there is nothing to choose. **Quick select** instead asks on
-sending: five buttons over the box, 1 to 5 or a click, Enter for the one you used last, Escape
+sending: five buttons over the box, 1 to 5 or a click, Enter for Default (3), which is always marked, Escape
 back to writing. It asks where a message starts new work (Send, Start, a spin-off). It does
 not ask for Done, which Claude does not answer, nor for a message added while Claude is
 working, which runs on the tier of the work it belongs to. The tier a turn used is shown in the thread
