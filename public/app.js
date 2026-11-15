@@ -254,6 +254,27 @@ function sleepingSection() {
   return [];
 }
 
+// Events not open yet are folded under one quiet line; hovering or clicking it unfolds
+// them. Clicking one arms it, a second click opens it now to prepare already: started by
+// accident it would cost a briefing he did not want.
+let comingOpen = false;
+let armedEvent = '';
+async function openEventNow(t, button) {
+  if (armedEvent !== t.id) {
+    armedEvent = t.id;
+    renderRail();
+    setTimeout(() => { if (armedEvent === t.id) { armedEvent = ''; renderRail(); } }, 4000);
+    return;
+  }
+  armedEvent = '';
+  button.disabled = true;
+  try {
+    const out = await api('POST', `/api/events/${t.id}/open`, {});
+    S.threads.set(out.thread.id, out.thread);
+    openThread(out.thread.id);
+  } catch (err) { toast(err.message); button.disabled = false; }
+}
+
 // Pinned: on the very top of the inbox, and not part of the queue. Events from the
 // calendar are here from the start; any thread can be pinned (the button in its header,
 // or drag it here) and unpinned. Events come first, by date, with those not open yet
@@ -271,18 +292,21 @@ function pinnedSection() {
     return row;
   };
   const item = (t, soon) => (!t.event ? plain(t) : h('button', {
-    class: `item event-item${soon ? ' is-coming' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', disabled: soon, dataset: { id: t.id },
-    title: soon ? `${t.title}\n${eventWhen(t.event)} · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
-    onclick: () => openThread(t.id),
+    class: `item event-item${soon ? ' is-coming' : ''}${soon && armedEvent === t.id ? ' is-armed' : ''}${t.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: soon ? {} : { id: t.id },
+    title: soon ? `${t.title}\n${eventWhen(t.event)} · opens by itself ${eventWhen({ start: t.event.showAt }).toLowerCase()}\nClick twice to open it now and prepare already.` : `${t.title}\n${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`,
+    onclick: soon ? (e) => openEventNow(t, e.currentTarget) : () => openThread(t.id),
   },
   h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
   h('span', { class: 'sleep-main' },
     h('span', { class: 'sleep-text' }, t.title),
-    h('span', { class: 'sleep-sub' }, `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ' · not open yet' : ''}`)),
+    h('span', { class: 'sleep-sub' }, soon && armedEvent === t.id ? 'Click again to prepare it now' : `${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}${soon ? ` · opens ${eventWhen({ start: t.event.showAt }).toLowerCase()}` : ''}`)),
   soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event))));
   return [section('Pinned', events.length + mine.length, [
     ...events.map((t) => item(t, false)),
-    ...coming.map((t) => item(t, true)),
+    coming.length ? h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}` },
+      h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(comingOpen), title: 'Events from your calendar that open by themselves later. Hover or click to see them.', onclick: () => { comingOpen = !comingOpen; renderRail(); } },
+        `${coming.length} coming`, h('span', { class: 'coming-next' }, ` · next ${eventWhen(coming[0].event).toLowerCase()}`)),
+      h('div', { class: 'coming-list' }, ...coming.map((t) => item(t, true)))) : null,
     (events.length || coming.length) && mine.length ? h('div', { class: 'pin-divide', role: 'separator' }) : null,
     ...mine.map((t) => item(t, false)),
   ], null, 'pin')];

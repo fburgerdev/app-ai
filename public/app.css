@@ -1401,7 +1401,17 @@ a.chip:hover { border-color: var(--muted); }
 /* ---------- events in the inbox drawer ---------- */
 .event-item { align-items: center; gap: 10px; }
 .event-item.is-coming .item-mark { background: var(--line); }
-.event-item.is-coming { opacity: 0.5; cursor: default; }
+.event-item.is-coming { opacity: 0.55; }
+.event-item.is-coming:hover { opacity: 0.85; }
+.event-item.is-coming.is-armed { opacity: 1; background: var(--raised); }
+.event-item.is-coming.is-armed .sleep-sub { color: var(--you); }
+/* Events not open yet: one quiet line, unfolding on hover, focus or a click. */
+.coming-head { display: block; width: 100%; margin: 2px 0 0; padding: 4px 8px 4px 21px; border: 0; background: none; text-align: left; color: var(--faint); font: 12px var(--sans); cursor: pointer; }
+.coming-next { opacity: 0.8; }
+.coming-list { max-height: 0; overflow: hidden; transition: max-height 180ms ease; }
+.coming:hover .coming-list, .coming:focus-within .coming-list, .coming.is-open .coming-list { max-height: 60vh; overflow: auto; }
+.coming:hover .coming-head, .coming.is-open .coming-head { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .coming-list { transition: none; } }
 .sleep-item.is-armed { opacity: 1; background: var(--raised); }
 .sleep-item.is-armed .sleep-sub { color: var(--you); }
 .pick-menu.is-wide { width: 300px; }
