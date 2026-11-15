@@ -247,7 +247,7 @@ Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium)
 (Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer
 is one switch, the same in every thread. **Auto**: before each turn a cheap model reads the
 message and picks a tier, so there is nothing to choose. **Quick select** instead asks on
-sending: five buttons over the box, 1 to 5 or a click, Enter for the one you used last, Escape
+sending: five buttons over the box, 1 to 5 or a click, Enter for Default (3), which is always marked, Escape
 back to writing. It asks where a message starts new work (Send, Start, a spin-off). It does
 not ask for Done, which Claude does not answer, nor for a message added while Claude is
 working, which runs on the tier of the work it belongs to. The tier a turn used is shown in the thread

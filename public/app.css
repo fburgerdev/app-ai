@@ -917,6 +917,7 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .out:hover > .out-row { background: var(--panel); }
 /* A long name runs onto a second line and is cut after that; the full name is in the tooltip. */
 .out-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.out-last { white-space: nowrap; }
 .out-mark { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--you); vertical-align: 2px; }
 .out-when { position: absolute; right: 7px; top: 8px; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .out-plus {
@@ -1433,7 +1434,9 @@ a.chip:hover { border-color: var(--muted); }
   background: var(--raised); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
 }
 .tier-ask-btn:hover { border-color: var(--you); color: var(--you); }
-.tier-ask-btn.is-last { border-color: var(--you); }
+/* Default (3) looks as if the pointer were on it: Enter takes it. Pointing at another moves the look there. */
+.tier-ask-btn.is-last { border-color: var(--you); color: var(--you); }
+.tier-ask:has(.tier-ask-btn:hover) .tier-ask-btn.is-last:not(:hover) { border-color: var(--line); color: var(--text); }
 .tier-ask-btn kbd { color: var(--faint); font: 11px var(--mono); }
 .tier-ask-x { margin-left: auto; border: 0; background: none; color: var(--faint); font-size: 17px; cursor: pointer; padding: 0 4px; }
 .tier-ask-x:hover { color: var(--text); }

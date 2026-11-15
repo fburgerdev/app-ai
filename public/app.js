@@ -348,7 +348,9 @@ function outlineRow({ name, sub, project, about, touched, open, grey, isArea, he
     },
     // A ranked area carries its place in 30,000 ft as a quiet marker in front.
     rank ? h('span', { class: 'out-rank', 'aria-label': `Rank ${rank}` }, String(rank)) : null,
-    h('span', { class: 'out-name' }, name, open ? h('span', { class: 'out-mark', 'aria-label': 'has open threads' }) : null,
+    // The dot for open threads sticks to the last word, so a long name never leaves it
+    // alone on a line of its own.
+    h('span', { class: 'out-name' }, ...(open ? [String(name).replace(/\S+$/, ''), h('span', { class: 'out-last' }, /\S+$/.exec(String(name))?.[0] || '', h('span', { class: 'out-mark', 'aria-label': 'has open threads' }))] : [name]),
       sub ? h('span', { class: 'out-sub' }, sub) : null),
     touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null),
     h('button', { class: 'out-plus', type: 'button', title: `New thread ${isArea ? 'in' : 'on'} ${name}`, 'aria-label': `New thread on ${name}`, onclick: () => openNew(project) }, '+'));
@@ -1203,8 +1205,9 @@ function updateButton() {
   return h('div', { class: 'update-row' }, button, out);
 }
 
-// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for the last
-// one used, Escape to go back to writing. Nothing is sent until one is picked. It asks
+// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for Default
+// (always the middle one, 3, whatever was picked last), Escape to go back to writing.
+// Nothing is sent until one is picked. It asks
 // where a message starts new work (Send, Start, a spin-off). Never for "Done", which
 // Claude does not answer, nor for a message added while Claude is working, which runs on
 // the tier of the work it belongs to. `go` gets the tier and sends.
@@ -1212,9 +1215,8 @@ const asksTier = () => S.settings.tier === 'ask';
 function askTier(go) {
   closeTierAsk();
   const names = S.settings.tierNames || [];
-  const stored = localStorage.getItem('app-ai-tier');
-  const last = names.includes(stored) ? stored : 'default';
-  const pick = (n) => { localStorage.setItem('app-ai-tier', n); closeTierAsk(); go(n); };
+  const last = names.includes('default') ? 'default' : names[Math.floor(names.length / 2)];
+  const pick = (n) => { closeTierAsk(); go(n); };
   const row = h('div', { class: 'tier-ask', role: 'group', 'aria-label': 'How much is this worth?' },
     h('span', { class: 'tier-ask-label' }, 'How much?'),
     ...names.map((n, i) => h('button', {
@@ -2631,7 +2633,7 @@ function renderSettings() {
     value: kept ? 'kept' : mode,
     name: (n) => (n === 'auto' ? 'Auto' : n === 'ask' ? 'Quick select' : `${s.tiers?.[kept]?.label || kept}, kept`),
     describe: (n) => (n === 'auto' ? 'Picked per message by a cheap model, so you never have to choose.'
-      : 'Send asks first: five buttons over the box, 1 to 5 or Enter for the last one.'),
+      : 'Send asks first: five buttons over the box, 1 to 5, or Enter for Default (3).'),
     onPick: (n) => {
       closeTierAsk();
       if (kept) {
