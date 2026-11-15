@@ -138,8 +138,15 @@ const pinPlace = (t) => t.pinAt ?? t.event?.start ?? t.createdAt ?? 0;
 const pinnedEvents = () => all().filter((t) => isPinned(t) && t.event && t.state !== 'done').sort((a, b) => a.event.start - b.event.start);
 const pinnedThreads = () => all().filter((t) => isPinned(t) && !t.event && t.state !== 'done').sort((a, b) => pinPlace(a) - pinPlace(b));
 const pinned = () => [...pinnedEvents(), ...pinnedThreads()];
+// Focus: only his own threads in the queue. What the app started and he has not
+// answered (cards, proposals, the brain update's questions, mail to answer, check-ins,
+// repairs) waits under "waiting for later". The same rule as the server's.
+const APP_KINDS = new Set(['card', 'brain-update', 'mail-reply', 'checkin-active', 'checkin-paused', 'checkin-areas', 'repair', 'prep']);
+const isAppThread = (t) => APP_KINDS.has(t.kind) && !(t.lastUserAt > 0);
+const focusOn = () => Boolean(S.settings.focus?.on) && (!S.settings.focus.until || Date.now() < S.settings.focus.until);
+const later = () => (focusOn() ? all().filter((t) => t.state === 'ready' && !isPinned(t) && isAppThread(t)).sort((a, b) => a.queuedAt - b.queuedAt) : []);
 function inbox() {
-  const ready = all().filter((t) => t.state === 'ready' && !isPinned(t)).sort((a, b) => a.queuedAt - b.queuedAt);
+  const ready = all().filter((t) => t.state === 'ready' && !isPinned(t) && !(focusOn() && isAppThread(t))).sort((a, b) => a.queuedAt - b.queuedAt);
   const pos = new Map(S.queue.order.map((id, i) => [id, i]));
   return ready.sort((a, b) => (pos.get(a.id) ?? 1e6) - (pos.get(b.id) ?? 1e6));
 }
@@ -198,8 +205,15 @@ function queueLists() {
   const closed = done();
   const parts = [...pinnedSection()];
   const note = S.queue.ranking ? 'ordering…' : S.queue.why && ready.length > 1 ? `first because: ${S.queue.why}` : '';
+  // In focus: what the app made waits here, folded, until focus ends or he opens it.
+  const waits = later();
+  const laterLine = waits.length ? h('div', { class: `coming later${laterOpen ? ' is-open' : ''}` },
+    h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Started by the app: cards, proposals, questions, mail to answer, check-ins. They come back into the queue when focus ends.', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
+      `${waits.length} waiting for later`, h('span', { class: 'coming-next' }, ' · focus')),
+    h('div', { class: 'coming-list' }, ...waits.map(railItem))) : null;
   parts.push(section('Next up', ready.length, [
     note ? h('p', { class: 'group-note' }, note) : null,
+    laterLine,
     ...(ready.length ? ready.map(railItem) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
     h('p', { class: 'group-foot' }, S.cards.running
       ? h('span', { class: 'looking' }, h('span', { class: 'pulse' }), 'Looking for opportunities')
@@ -214,6 +228,32 @@ function queueLists() {
   parts.push(...sleepingSection());
   return parts;
 }
+
+let laterOpen = false;
+
+// The focus switch in the top bar. It ends by itself at his sleep time.
+function renderFocus() {
+  const b = document.getElementById('focus-toggle');
+  const on = focusOn();
+  b.classList.toggle('is-on', on);
+  b.setAttribute('aria-pressed', String(on));
+  const until = on && S.settings.focus.until ? clock(S.settings.focus.until) : '';
+  b.title = on
+    ? `Focus: only your own threads in the queue; what the app made waits, and no new cards are made. Ends by itself at ${until}. Click to see everything again.`
+    : 'Focus: work through your own threads only. Cards, proposals, questions, mail to answer and check-ins wait until it ends (at your sleep time, or when you click again).';
+  b.replaceChildren(svg('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>'),
+    h('span', { class: 'top-label' }, on ? 'Focus' : 'Everything'), ...(on && until ? [h('span', { class: 'top-sub' }, `until ${until}`)] : []));
+}
+document.getElementById('focus-toggle').addEventListener('click', async () => {
+  const on = !focusOn();
+  try {
+    S.settings = { ...S.settings, ...(await api('PUT', '/api/settings', { focus: on })) };
+    renderFocus(); renderRail(); renderComposer();
+    toast(on ? 'Focus: only your own threads until your sleep time.' : 'Everything again.');
+  } catch (err) { toast(err.message); }
+});
+// It ends by itself: checked every minute, like the event times.
+setInterval(() => { if (S.settings.focus?.on && !focusOn()) { S.settings = { ...S.settings, focus: { on: false, until: 0 } }; renderFocus(); renderRail(); } }, 60_000);
 
 // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
 // brain update writes their line. Waking one asks once more, in place: a next action
@@ -2841,7 +2881,7 @@ function connect() {
   on('artifacts', onArtifacts);
   on('brain', setBrain);
   on('projects', () => loadProjects()); // e.g. the Someday labels are ready
-  on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); checkSleep(); });
+  on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); renderFocus(); renderRail(); checkSleep(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
@@ -2892,6 +2932,7 @@ async function load() {
   S.cards = state.cards;
   S.brain = state.brain;
   renderSettings();
+  renderFocus();
   renderRail();
   renderTree();
   renderBrain();

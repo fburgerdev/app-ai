@@ -30,6 +30,7 @@ const DEFAULTS = {
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
+  focus: { on: false, until: 0 }, // only his own threads in the queue, until his sleep time
 };
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -49,14 +50,33 @@ function load() {
   // Until 13-11-2026 a fixed tier could be set here too. Such a state reads as Auto now.
   if (state.tier !== 'ask') state.tier = 'auto';
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
+  state.focus = { ...DEFAULTS.focus, ...(state.focus || {}) };
   return state;
+}
+
+// When focus ends by itself: his next sleep time, or the next midnight when the sleep
+// screen is off. So a day never starts in focus because it was forgotten the day before.
+export function focusEnd(now = Date.now(), sleep = load().sleep) {
+  const [h, m] = (sleep?.on && /^\d\d:\d\d$/.test(sleep.from || '') ? sleep.from : '00:00').split(':').map(Number);
+  const at = new Date(now);
+  at.setHours(h, m, 0, 0);
+  if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+
+// Whether focus is on right now (it ends by itself at `until`).
+export function inFocus(now = Date.now()) {
+  const f = load().focus;
+  return Boolean(f?.on) && (!f.until || now < f.until);
 }
 
 // The file changed on disk (the other computer's state came in).
 export function reloadState() { state = null; }
 
 export function getState() {
-  return { ...load() };
+  const s = { ...load() };
+  if (s.focus?.on && !inFocus()) s.focus = { on: false, until: 0 };
+  return s;
 }
 
 export function setState(patch) {
@@ -67,6 +87,7 @@ export function setState(patch) {
   if (patch.tier === 'auto' || patch.tier === 'ask') next.tier = patch.tier;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
+  if (typeof patch.focus === 'boolean') next.focus = patch.focus ? { on: true, until: focusEnd(Date.now(), next.sleep) } : { on: false, until: 0 };
   if (patch.sleep && typeof patch.sleep === 'object') {
     const sl = { ...DEFAULTS.sleep, ...next.sleep };
     if (typeof patch.sleep.on === 'boolean') sl.on = patch.sleep.on;

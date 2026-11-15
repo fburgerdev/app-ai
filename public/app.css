@@ -1303,6 +1303,12 @@ a.chip:hover { border-color: var(--muted); }
 .statusbar.is-ready .status-text { color: var(--text); }
 .statusbar.is-warn .status-text { color: var(--you); }
 
+/* Focus: a switch in the top bar. Quiet when off; when on, plainly on. */
+.top-focus .top-sub { color: var(--faint); font-weight: 450; font-size: 12.5px; }
+.top-focus.is-on { color: var(--text); border-color: var(--line); background: var(--panel); }
+.top-focus.is-on svg { color: var(--quote); }
+.later { margin: 0 0 4px; }
+
 /* The quiet item in the top bar, and its panel. */
 .laptop-wrap { position: relative; flex: none; }
 .top-laptop { gap: 7px; }

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { runAgent } from './agent.js';
 import * as store from './store.js';
-import { getState, readPad, writePad } from './state.js';
+import { getState, inFocus, readPad, writePad } from './state.js';
 import { readPrompt } from './util.js';
 
 const DIR = path.join(DATA_DIR, 'queue');
@@ -56,7 +56,8 @@ export function reloadQueue() {
 }
 
 // Pinned threads (events, and what he pinned himself) are not part of the queue.
-const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t)).sort((a, b) => a.queuedAt - b.queuedAt);
+// In focus, what the app started waits outside the queue (store.isAppThread).
+const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t) && !(inFocus() && store.isAppThread(t))).sort((a, b) => a.queuedAt - b.queuedAt);
 
 const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
 
@@ -125,7 +126,7 @@ async function rank() {
   if (ranking) { again = true; return; }
   const ready = waiting();
   const mood = getState().mood.trim();
-  const key = crypto.createHash('sha1').update(JSON.stringify([ready.map((t) => [t.id, t.requeuedAt]), mood])).digest('hex');
+  const key = crypto.createHash('sha1').update(JSON.stringify([ready.map((t) => [t.id, t.requeuedAt]), mood, inFocus()])).digest('hex');
   if (key === lastKey) return;
   if (ready.length < 2) {
     order = ready.map((t) => t.id);

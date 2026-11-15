@@ -21,7 +21,7 @@ import * as runner from './runner.js';
 import { createEvent } from './events.js';
 import { isNetworkError, report } from './repair.js';
 import { isKnownProject } from './projects.js';
-import { getState, readPad } from './state.js';
+import { getState, inFocus, readPad } from './state.js';
 import { parseMail, serializeMail } from './mail.js';
 import { recordDecision } from './queue.js';
 import { readPrompt, todayLine } from './util.js';
@@ -108,7 +108,8 @@ export function maybeMakeCards() {
   if (!config.cards.auto || running || !brain.brainStatus().ready || !mayRun()) return false;
   // After a run that found nothing, wait much longer before looking again.
   const pause = (lastMade === 0 ? 6 * 60 : Number(config.cards.pauseMinutes) || 45) * 60_000;
-  const wantCards = !enoughCards() && Date.now() - lastRun >= pause;
+  // While he focuses no new cards are made; the calendar is still looked at (events).
+  const wantCards = !inFocus() && !enoughCards() && Date.now() - lastRun >= pause;
   const wantCalendar = calendarOn() && Date.now() - lastLook >= (Number(config.cards.calendarHours) || 3) * 3600_000;
   if (!wantCards && !wantCalendar) return false;
   makeCards({ cards: wantCards }).catch(() => {});
