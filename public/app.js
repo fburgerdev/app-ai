@@ -13,7 +13,7 @@ const els = {
   tier: $('tier'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
-  openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openScratch: $('open-scratch'), openSettings: $('open-settings'),
+  openInbox: $('open-inbox'), inboxCount: $('inbox-count'), openSettings: $('open-settings'),
   settings: $('settings'), settingsBody: $('settings-body'), settingsClose: $('settings-close'),
 };
 
@@ -1543,7 +1543,6 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
-  els.openScratch.classList.remove('is-on');
   if (!keepPanel && S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -1590,7 +1589,6 @@ function openNew(project = '') {
   S.live = null;
   S.cardDecide = null;
   liveEl = null;
-  els.openScratch.classList.remove('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -1604,6 +1602,8 @@ function openNew(project = '') {
 }
 
 // The scratchpad: a plain page to write in. It saves as you type. Claude never reads it.
+// Switched off 15-11-2026 (Florian never used it: a thread closed with Done is a note
+// too, and sorts better): no button, no Alt P. The code and the file stay.
 function leavePad() {
   const back = S.lastThread && S.threads.has(S.lastThread) ? S.lastThread : inbox()[0]?.id;
   if (back) openThread(back, { byQueue: true });
@@ -1621,7 +1621,6 @@ async function openPad() {
   S.view = null;
   S.live = null;
   S.cardDecide = null;
-  els.openScratch.classList.add('is-on');
   if (S.panel && S.panel.kind === 'artifact') closePanel();
   renderRail();
   renderTree();
@@ -2204,7 +2203,6 @@ function fillKeys(body) {
     ['Alt J / Alt K', 'Next / previous thread in the inbox'],
     ['Alt A', 'Show or hide the files Claude made in this thread'],
     ['Alt U', 'Update the brain'],
-    ['Alt P', 'Scratchpad, and back'],
     ['Esc', 'Close the side panel or this window'],
   ];
   body.append(h('h3', { class: 'window-head' }, 'Keys'),
@@ -2609,7 +2607,6 @@ stage.addEventListener('drop', (e) => {
   e.preventDefault();
   addFiles([...e.dataTransfer.files]);
 });
-els.openScratch.addEventListener('click', () => openPad());
 $('new-thread').addEventListener('click', () => openNew());
 els.tabQueue.addEventListener('click', () => setTab('queue'));
 els.tabProjects.addEventListener('click', () => setTab('projects'));
@@ -2696,7 +2693,6 @@ window.addEventListener('keydown', (e) => {
     KeyU: () => updateBrain(),
     KeyA: toggleFiles,
     KeyL: () => setRail(!els.app.classList.contains('rail-open')),
-    KeyP: () => openPad(),
     KeyJ: () => step(1),
     KeyK: () => step(-1),
     ArrowDown: () => step(1),

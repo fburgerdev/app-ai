@@ -26,7 +26,7 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 ## The screen
 
-- **The top bar** is always there: the inbox button with the number waiting, the mood line, Talk, Scratchpad and Settings.
+- **The top bar** is always there: the inbox button with the number waiting, this computer's status, the cost of today, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **Projects and areas** on the right, most recently dealt with first (see below).
 - **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
@@ -74,7 +74,6 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 | Alt+U | Update the brain |
 | Alt+L | Show or hide the inbox |
 | Alt+M | Jump to the mood line |
-| Alt+P | Scratchpad, and back |
 | Esc | Close the side panel or the settings window |
 
 ### Model and effort
@@ -168,7 +167,7 @@ Settings → Queue.
 
 ## Scratchpad
 
-A page to write in, one click away in the top bar (Alt+P; again to go back). It saves as you type. Claude never reads it: it is not in the vault and is never handed to any run.
+Switched off since 15-11-2026: a thread closed with Done does the same job and sorts better. The code and `scratchpad.md` in the data folder are still there; the button in `public/index.html` and the Alt+P key in `public/app.js` would turn it on again.
 
 ## Talk: the host
 
