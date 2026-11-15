@@ -206,6 +206,14 @@ export function deleteThread(id) {
   return true;
 }
 
+// What the app started by itself and he has not answered yet: cards, proposals, the
+// brain update's questions, mail to answer, check-ins, repairs, preparations. While he
+// focuses these wait outside the queue. Once he has written in one, it is his.
+const APP_KINDS = new Set(['card', 'brain-update', 'mail-reply', 'checkin-active', 'checkin-paused', 'checkin-areas', 'repair', 'prep']);
+export function isAppThread(thread) {
+  return Boolean(thread) && APP_KINDS.has(thread.kind) && !(thread.lastUserAt > 0);
+}
+
 // Pinned threads sit on top of the inbox and are not part of the queue. An event is
 // pinned unless Florian unpinned it; any other thread only once he pinned it. Threads
 // from before pins existed have no `pinned` field and fall under the same rule.

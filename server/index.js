@@ -209,8 +209,8 @@ app.get('/api/state', (req, res) => {
 
 // The mood line, the model, the effort and the sleep time. Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, tier, sleep } = req.body || {};
-  res.json(setState({ mood, model, effort, tier, sleep }));
+  const { mood, model, effort, tier, sleep, focus } = req.body || {};
+  res.json(setState({ mood, model, effort, tier, sleep, focus }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.

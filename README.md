@@ -253,6 +253,16 @@ working, which runs on the tier of the work it belongs to. The tier a turn used 
 header; clicking it runs the same message again one tier up and keeps that tier for the
 thread, until you pick Auto or Quick select there again.
 
+## Focus
+
+The switch in the top bar ("Everything" / "Focus") is for working through your own threads
+only. In Focus, what the app started by itself and you have not answered yet waits under one
+folded line in the inbox ("3 waiting for later"): opportunity and chase cards, proposals, the
+brain update's questions, mail to answer, check-ins, repairs. The card run makes no new cards;
+"Look for opportunities" still works when you click it. Events stay pinned, and your own
+threads, next actions you woke and spin-offs stay in the queue. Focus ends by itself at your
+sleep time (midnight if the sleep screen is off), so a day never starts in it by accident.
+
 ## Pinned threads
 
 The top of the inbox is **Pinned**. Events from the calendar are there from the start; any

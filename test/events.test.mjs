@@ -395,3 +395,29 @@ test('an event that is not open yet can be opened now, to prepare already', asyn
   assert.match(t.messages[0].text, /^This is the thread for an entry in Florian's calendar: Example fair/, 'with its briefing, as if its time had come');
   assert.equal((await call('POST', '/api/events/nope/open', {})).status, 404);
 });
+
+test('focus: only his own threads in the queue, no new cards, and it ends by itself', async () => {
+  const mine = (await call('POST', '/api/threads', { text: 'Something of my own' })).data.thread;
+  await ready(mine.id);
+  await call('POST', '/api/cards/make', {});
+  const card = await until(async () => (await state()).threads.find((t) => t.kind === 'card' && t.state === 'ready'), 'a card waiting');
+  await until(async () => (await state()).queue.order.includes(card.id), 'the card in the queue');
+  const on = (await call('PUT', '/api/settings', { focus: true })).data;
+  assert.equal(on.focus.on, true);
+  assert.ok(on.focus.until > Date.now() && on.focus.until <= Date.now() + 24 * 3600_000, 'until the next sleep time, within a day');
+  const q = await until(async () => { const s = await state(); return !s.queue.order.includes(card.id) ? s.queue.order : null; }, 'the card out of the queue');
+  assert.ok(q.includes(mine.id), 'his own thread stays');
+  // (The card run started by itself makes no cards while he focuses; "Look for
+  // opportunities", which he clicks himself, still does.)
+  const off = (await call('PUT', '/api/settings', { focus: false })).data;
+  assert.equal(off.focus.on, false);
+  await until(async () => (await state()).queue.order.includes(card.id), 'back in the queue after focus');
+});
+
+test('focus ends at the next sleep time, or midnight without one', async () => {
+  const { focusEnd } = await import('../server/state.js');
+  const at = new Date(2026, 10, 15, 22, 30).getTime();
+  assert.equal(focusEnd(at, { on: true, from: '23:00' }), new Date(2026, 10, 15, 23, 0).getTime());
+  assert.equal(focusEnd(at, { on: true, from: '00:30' }), new Date(2026, 10, 16, 0, 30).getTime());
+  assert.equal(focusEnd(at, { on: false, from: '23:00' }), new Date(2026, 10, 16, 0, 0).getTime());
+});
