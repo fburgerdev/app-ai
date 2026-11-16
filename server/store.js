@@ -11,6 +11,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { THREADS_DIR, log } from './config.js';
@@ -48,15 +49,23 @@ export function newId() {
   return `${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
 }
 
-// Loads every thread from disk. A thread that was mid-turn when the app closed cannot
-// still be running, so it goes back to the inbox with a note.
+// Which computer this is. A thread that is working says which computer runs the turn
+// (`workingOn`); only that computer can tell that the turn is gone. The other one only
+// ever sees the saved copy of a turn that is still running there, and must leave it be:
+// marking it "ended on an error" was wrong, and its copy then won over the real answer.
+const HOST = os.hostname();
+const mine = (meta) => !meta.workingOn || meta.workingOn === HOST;
+
+// Loads every thread from disk. A turn this computer was running when the app closed
+// cannot still be running, so its thread goes back to the inbox with a note. A turn the
+// other computer runs is left as it is.
 export function loadThreads() {
   threads.clear();
   if (!fs.existsSync(THREADS_DIR)) return;
   for (const id of fs.readdirSync(THREADS_DIR)) {
     const meta = readJson(metaFile(id), null);
     if (!meta || meta.id !== id) continue;
-    if (meta.state === 'working') {
+    if (meta.state === 'working' && mine(meta)) {
       meta.state = 'ready';
       meta.queuedAt = Date.now();
       meta.error = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
@@ -83,14 +92,8 @@ export function reloadThreads() {
       if (!meta || meta.id !== id) continue;
       seen.add(id);
       if (threads.get(id)?.state === 'working') continue;
-      if (meta.state === 'working') {
-        meta.state = 'ready';
-        meta.queuedAt = Date.now();
-        meta.error = 'Claude was working on this on the other computer when this one took over. Send a message to pick it up again.';
-        meta.activity = '';
-        meta.pending = [];
-        writeJson(metaFile(id), meta);
-      }
+      // A turn running on the other computer: shown as working, never written here.
+      // settleOrphans() deals with it if that computer goes away.
       threads.set(id, meta);
       // A conversation continued on both computers has more lines than either counted.
       const count = readMessages(id).length;
@@ -103,6 +106,38 @@ export function reloadThreads() {
   }
   for (const [id, t] of threads) if (!seen.has(id) && t.state !== 'working') threads.delete(id);
   log(`reloaded ${threads.size} threads`);
+}
+
+// Turns that will never finish: they say this computer runs them but nothing here does
+// (`isRunning` says what runs here), or the other computer that ran them is gone and this
+// one does the work now (`otherGone`). Each goes back to the inbox with a note.
+export function settleOrphans({ isRunning, otherGone = false, olderThanMs = 10 * 60_000 }) {
+  const now = Date.now();
+  let settled = 0;
+  for (const t of threads.values()) {
+    if (t.state !== 'working' || isRunning(t.id)) continue;
+    const here = mine(t);
+    if (!here && !(otherGone && now - (t.updatedAt || 0) > olderThanMs)) continue;
+    updateThread(t.id, {
+      state: 'ready', queuedAt: now, activity: '', pending: [], workingOn: '',
+      error: here ? 'The app was closed while Claude was working on this. Send a message to pick it up again.'
+        : 'Claude was working on this on the other computer, which went away before it finished. Send a message to pick it up again.',
+    });
+    settled += 1;
+  }
+  return settled;
+}
+
+// Threads marked "ended on an error" by the bug fixed above, although their turn finished
+// fine: the last message is Claude's complete answer. The note goes; once per thread.
+export function clearFalseErrors() {
+  let cleared = 0;
+  for (const t of threads.values()) {
+    if (t.state !== 'ready' || !/^Claude was working on this on the other computer when this one took over/.test(t.error || '')) continue;
+    const last = readMessages(t.id).at(-1);
+    if (last?.role === 'assistant' && !last.error && !last.stopped && (last.parts || []).length) { updateThread(t.id, { error: '' }); cleared += 1; }
+  }
+  return cleared;
 }
 
 export function listThreads() {
