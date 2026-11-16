@@ -496,7 +496,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     fs.writeFileSync(path.join(artifactsDir, 'two.json'), JSON.stringify({
       type: 'chase', channel: 'mail', key: `chase:example-office:${stamp}`,
       title: 'Chase the example office', why: 'Waiting since 02-11 for their answer; chase date reached.',
-      project: '', to: 'office@example.org', subject: 'Kurze Nachfrage',
+      project: '', to: 'office@example.org', subject: 'Re: Kurze Nachfrage', replyTo: '18c2f0a1b2c3d4e5',
       text: 'Hallo Frau Beispiel,\n\nich wollte kurz nachfragen, ob es schon Neuigkeiten gibt.\n\nViele Grüße\nFlorian',
     }));
     fs.writeFileSync(path.join(artifactsDir, 'three.json'), JSON.stringify({

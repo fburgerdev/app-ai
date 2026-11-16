@@ -14,6 +14,8 @@ A card is something Florian can decide in a few seconds by accepting or declinin
 
 Read `Brain/Waiting For.md`. For every row under "Waiting on a person" whose `Chase by` date is today or earlier, and that is not in the list of cards already made below, draft the follow-up: short, friendly, referring to what was asked and when. Skip rows that say not to chase. Use mail when the Brain or his mail shows the address and that the earlier contact was by mail; otherwise a message he can paste into the channel the row names.
 
+A chase by mail is a reply in the conversation it follows up on, never a new one. If you have mail tools, search his mail for that conversation (his last mail to the person about it), put its Gmail thread id into `replyTo`, and make the subject "Re: " plus that conversation's subject. Without mail tools, or if you cannot find the conversation, leave `replyTo` empty and give the mail a subject of its own without "Re:". The same holds for an opportunity card that answers or revives an existing mail conversation.
+
 ## Opportunity cards
 
 Use what "Opportunities" in `Claude/Instructions.md` says about scope and about what counts as an item: only his ethical projects and areas, something finished that serves a concrete current next step, never advice or follow-up spreads. Typical cards: a LinkedIn connection note to a specific person, a first mail to someone who can move a project, a message asking for an introduction. Find the real person with web search, and give the link to their profile. Favour projects that are stuck or have had no activity. Do not write to someone he is already in contact with about the same thing: check the Brain, and his mail if you have mail tools.
@@ -62,6 +64,7 @@ Write each card as one JSON file into `{{outDir}}` (any file name ending in `.js
   "project": "the exact name of the project or area note it serves, or empty",
   "to": "mail address for mail; the person's name otherwise",
   "subject": "for mail only",
+  "replyTo": "for mail only: the Gmail thread id of the conversation this mail continues, or empty",
   "link": "profile or page to open, if any",
   "text": "the message itself, ready to send, in the language and voice Claude/Writing Mails.md describes. Plain text. For a proposal or a prep: the brief for the thread."
 }

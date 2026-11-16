@@ -75,8 +75,10 @@ function createCard(card) {
     project: isKnownProject(card.project) ? card.project : '',
     card: { type: card.type, channel: card.channel, key: card.key, why: card.why, to: card.to, link: card.link || '' },
   });
+  // A follow-up goes into the Gmail conversation it follows up on, not into a new one.
+  const replyTo = typeof card.replyTo === 'string' && /^[0-9a-f]{6,32}$/i.test(card.replyTo.trim()) ? card.replyTo.trim() : '';
   const body = card.channel === 'mail'
-    ? serializeMail({ to: card.to, subject: card.subject || '', body: card.text })
+    ? serializeMail({ to: card.to, subject: card.subject || '', replyToThreadId: replyTo, body: card.text })
     : `${card.text.trim()}\n`;
   fs.writeFileSync(path.join(store.artifactsDir(thread.id), CARD_FILE), body);
   store.scanArtifacts(thread.id, 'claude', { serve: [CARD_FILE] });

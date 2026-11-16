@@ -882,16 +882,30 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
   const saveSoon = debounce(save, 700);
   function changed() { dirty = true; status.textContent = ''; saveSoon(); }
 
+  // One click, one request: until Gmail has answered, the buttons are off, so a second
+  // click or Enter on the focused button cannot send the mail again.
+  let acting = false;
   const act = async (path, okText) => {
-    await save();
-    await saving;
+    if (acting) return;
+    acting = true;
+    for (const b of actions.querySelectorAll('button')) b.disabled = true;
+    status.textContent = path === 'send' ? 'Sending…' : 'Putting it in Gmail…';
+    if (!status.isConnected) actions.append(status);
+    let ok = false;
     try {
+      await save();
+      await saving;
       await api('POST', `/api/threads/${threadId}/mail/${path}`, { name, reason: reason ? reason() : '' });
+      ok = true;
       toast(okText);
       document.activeElement?.blur();
       if (onDecided) onDecided();
       else { await onArtifacts({ threadId }); }
-    } catch (err) { toast(err.message); }
+    } catch (err) { toast(err.message); } finally {
+      acting = false;
+      // After a failure the card is as it was, so he can try again.
+      if (!ok && el.isConnected) { status.textContent = ''; drawActions(); }
+    }
   };
 
   function drawActions(confirming = false) {

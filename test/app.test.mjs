@@ -242,8 +242,12 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   // The chase card is a mail: sending it accepts it.
   const chaseMail = parseMail(await artifactText(chase.id, 'Message.md'));
   assert.equal(chaseMail.to, 'office@example.org');
-  await call('POST', `/api/threads/${chase.id}/mail/send`, { name: 'Message.md' });
+  assert.equal(chaseMail.replyToThreadId, '18c2f0a1b2c3d4e5', 'a chase goes into the conversation it follows up on');
+  // Two requests at once (a double click): only one gets through to Gmail.
+  const both = await Promise.all([1, 2].map(() => call('POST', `/api/threads/${chase.id}/mail/send`, { name: 'Message.md' })));
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 409], 'a mail goes out once, however often it is asked for');
   assert.equal((await thread(chase.id)).thread.card.how, 'sent');
+  assert.equal((await call('POST', `/api/threads/${chase.id}/mail/send`, { name: 'Message.md' })).status, 409);
 
   // A proposal is work Claude offers to do: accepting it starts the thread, with his edits.
   const proposal = s.threads.find((t) => t.card?.type === 'proposal');

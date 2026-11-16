@@ -235,8 +235,12 @@ export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, b
   let inReplyTo = '';
   let references = '';
   if (replyToThreadId) {
-    const thread = await api(`${GMAIL}/threads/${encodeURIComponent(replyToThreadId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`);
-    const last = (thread.messages || []).filter((m) => !(m.labelIds || []).includes('DRAFT')).at(-1);
+    // A conversation that is not there (a wrong id from a card run, a deleted mail) must
+    // not keep the mail from going out: it then goes as a mail of its own.
+    const thread = await api(`${GMAIL}/threads/${encodeURIComponent(replyToThreadId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`)
+      .catch((err) => { if (/answered 40[04]\b/.test(err.message)) return null; throw err; });
+    if (!thread) replyToThreadId = '';
+    const last = (thread?.messages || []).filter((m) => !(m.labelIds || []).includes('DRAFT')).at(-1);
     if (last) {
       inReplyTo = header(last, 'Message-ID');
       references = `${header(last, 'References')} ${inReplyTo}`.trim();

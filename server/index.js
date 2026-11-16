@@ -695,36 +695,50 @@ app.post('/api/threads/:id/artifact/save', (req, res) => {
 //
 // These are the only places in the app that put anything into Gmail, and both run only
 // on Florian's click. Claude has no tool that reaches them.
+//
+// A mail counts as sent only once Gmail has answered, which takes a second or two. So a
+// second request in that time (a double click, Enter on the focused button) is refused
+// here; without this both would get through and the mail would go out twice.
+const mailBusy = new Set();
+const fakeGmail = () => new Promise((resolve) => { setTimeout(resolve, 25); });
+
 function mailFor(req, res) {
   const thread = need(req, res);
   if (!thread) return null;
   const name = String(req.body.name || '');
+  const key = `${thread.id}\n${name}`;
+  if (mailBusy.has(key)) { res.status(409).json({ error: 'This mail is already on its way to Gmail.' }); return null; }
   const info = store.listArtifacts(thread.id).find((a) => a.name === name);
   const mail = info ? parseMail(store.readArtifactText(thread.id, name)) : null;
   if (!mail) { res.status(404).json({ error: 'That file is not a mail.' }); return null; }
   if (info.mail?.sentAt) { res.status(409).json({ error: 'This mail has already been sent.' }); return null; }
   if (!config.fake && !google.googleConnected()) { res.status(409).json({ error: 'Gmail is not connected. Connect it under Connections.' }); return null; }
-  return { thread, name, info, mail, version: info.versions.at(-1).v };
+  mailBusy.add(key);
+  return { thread, name, info, mail, version: info.versions.at(-1).v, release: () => mailBusy.delete(key) };
 }
 
 app.post('/api/threads/:id/mail/draft', async (req, res) => {
   const m = mailFor(req, res);
   if (!m) return;
   try {
+    if (config.fake) await fakeGmail();
     const out = config.fake ? { draftId: m.info.mail?.draftId || 'stand-in-draft' } : await google.gmailSaveDraft({ draftId: m.info.mail?.draftId, ...m.mail });
     store.setMailInfo(m.thread.id, m.name, { draftId: out.draftId, draftVersion: m.version, draftAt: Date.now() });
     if (m.thread.kind === 'card' && m.thread.state === 'ready') cards.decideCard(m.thread, 'accepted', 'put in Gmail as a draft', req.body.reason);
     res.json({ ok: true, thread: store.getThread(m.thread.id) });
   } catch (err) {
     res.status(502).json({ error: err.message });
+  } finally {
+    m.release();
   }
 });
 
 app.post('/api/threads/:id/mail/send', async (req, res) => {
   const m = mailFor(req, res);
   if (!m) return;
-  if (!m.mail.to.trim()) return res.status(400).json({ error: 'The mail has no recipient.' });
+  if (!m.mail.to.trim()) { m.release(); return res.status(400).json({ error: 'The mail has no recipient.' }); }
   try {
+    if (config.fake) await fakeGmail();
     const out = config.fake ? { messageId: 'stand-in-message' } : await google.gmailSend({ draftId: m.info.mail?.draftId, ...m.mail });
     const sentAt = Date.now();
     store.setMailInfo(m.thread.id, m.name, { sentAt, sentVersion: m.version, messageId: out.messageId, draftId: null });
@@ -741,6 +755,8 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
     res.json({ ok: true, thread: store.getThread(m.thread.id) });
   } catch (err) {
     res.status(502).json({ error: err.message });
+  } finally {
+    m.release();
   }
 });
 
