@@ -14,6 +14,7 @@ import { DATA_DIR, log } from './config.js';
 import * as google from './google.js';
 import { logRead, logToolRead } from './reads.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState, TIERS, TIER_NAMES } from './state.js';
@@ -30,6 +31,9 @@ const waiting = []; // threadIds waiting for a free slot
 export function initRunner(cfg) {
   config = cfg;
 }
+
+// Whether a turn of this thread runs in this process right now.
+export const isRunning = (threadId) => running.has(threadId) || waiting.some((w) => w.threadId === threadId);
 
 export function liveParts(threadId) {
   return running.get(threadId)?.parts || null;
@@ -93,7 +97,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
 const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);
 
 function startTurn(threadId, prompt, background = false) {
-  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting' });
+  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname() });
   if (!slotFree(background)) {
     waiting.push({ threadId, prompt, background });
     store.updateThread(threadId, { activity: background ? 'Waiting its turn (your own messages go first)' : 'Waiting for a free slot' }, { quiet: true });

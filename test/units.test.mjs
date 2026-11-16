@@ -203,3 +203,30 @@ test('pi_shell: what could break the Pi or cut off the way in needs his OK first
     assert.equal(needsConsent(cmd), '', `runs at once: ${cmd}`);
   }
 });
+
+test('only the computer that runs a turn can call it lost; the other leaves it be', async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-orphans-'));
+  const threadsDir = path.join(dir, 'threads');
+  const write = (id, meta) => { fs.mkdirSync(path.join(threadsDir, id), { recursive: true }); fs.writeFileSync(path.join(threadsDir, id, 'thread.json'), JSON.stringify({ id, title: id, state: 'working', updatedAt: Date.now(), ...meta })); };
+  write('here', { workingOn: os.hostname() });
+  write('there', { workingOn: 'the-other-computer' });
+  write('thereold', { workingOn: 'the-other-computer', updatedAt: Date.now() - 60 * 60_000 });
+  const { execFileSync } = await import('node:child_process');
+  const script = `
+    const store = await import(${JSON.stringify(new URL('../server/store.js', import.meta.url).href)});
+    store.loadThreads();
+    const s = (id) => store.getThread(id).state;
+    const out = { afterLoad: [s('here'), s('there'), s('thereold')] };
+    store.settleOrphans({ isRunning: () => false, otherGone: false });
+    out.otherAway = [s('there'), s('thereold')];
+    store.settleOrphans({ isRunning: () => false, otherGone: true });
+    out.otherGone = [s('there'), s('thereold')];
+    console.log(JSON.stringify(out));`;
+  const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, APP_AI_DATA: dir }, encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual(out.afterLoad, ['ready', 'working', 'working'], 'its own lost turn goes back; the other computer\'s is left');
+  assert.deepEqual(out.otherAway, ['working', 'working'], 'while the other computer is there, nothing is touched');
+  assert.deepEqual(out.otherGone, ['working', 'ready'], 'once it is gone: only what has not moved for a while');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
