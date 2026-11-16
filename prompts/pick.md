@@ -8,5 +8,7 @@ Below are the things waiting for him right now, numbered. Put them in the order 
 
 A thread he requeued a moment ago does not come first again.
 
+Things marked "deep work" (thinking sessions, building in a repo, documents, long threads) are put before everything else by the app anyway, so that they keep running while he does the small things in between. Order the deep ones among themselves and the rest among themselves.
+
 Reply with JSON only, nothing else:
 {"order": [numbers, all of them, best first], "why": "at most twelve words on why the first one is first"}

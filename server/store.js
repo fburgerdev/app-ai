@@ -214,6 +214,18 @@ export function isAppThread(thread) {
   return Boolean(thread) && APP_KINDS.has(thread.kind) && !(thread.lastUserAt > 0);
 }
 
+// Deep work: the threads he is invested in and that take Claude long, a thinking session,
+// building in a repo, a document. They come first in the queue, so that whenever one is
+// waiting for him he answers it and it goes back to work; small things (cards, mail,
+// questions, quick lookups) fill the time while the deep ones run.
+const DEEP_TYPES = new Set(['thinking', 'build', 'document']);
+const DEEP_TIERS = new Set(['high', 'extra']);
+export function isDeep(thread) {
+  if (!thread || thread.kind === 'card' || isAppThread(thread)) return false;
+  return DEEP_TYPES.has(thread.type) || Boolean(thread.repo) || (thread.messageCount || 0) >= 8
+    || DEEP_TIERS.has(thread.lastTier) || DEEP_TIERS.has(thread.keepTier);
+}
+
 // Pinned threads sit on top of the inbox and are not part of the queue. An event is
 // pinned unless Florian unpinned it; any other thread only once he pinned it. Threads
 // from before pins existed have no `pinned` field and fall under the same rule.
