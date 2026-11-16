@@ -21,6 +21,7 @@ import { projectContext, repoOf, projectChoices, followRenames } from './project
 import * as repos from './repos.js';
 import * as repair from './repair.js';
 import * as ship from './ship.js';
+import { piShell } from './pi.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -331,6 +332,7 @@ async function runTurn(threadId, prompt) {
       protectedPaths: config.protectedPaths,
       shell: config.threadShell,
       artifactsShell: config.artifactsShell !== false,
+      piShell: config.pi?.enabled === false ? undefined : piShell,
       signal: abort.signal,
       title: thread.title,
       fake: config.fake,

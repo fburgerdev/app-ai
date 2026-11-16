@@ -148,7 +148,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -178,6 +178,9 @@ async function buildAppServer({ spinOff, repoTools, showFile }) {
           { repo: z.string(), description: z.string() },
           async (args) => { try { return ok(`Description of ${await repoTools.describe(args)} set.`); } catch (err) { return fail(err); } }),
       ] : []),
+      ...(piShell ? [tool('pi_shell', 'Run a shell command on Florian\'s Raspberry Pi, which is yours to administer: install and update software, read logs, manage the app\'s services (systemctl --user ... app-ai), check disk and memory. Runs as the user florian with passwordless sudo, in bash, from the home folder. Commands that would wipe a disk, delete a system or home folder, reboot it, or cut off SSH or Tailscale are refused until Florian has agreed in the thread; then call again with confirmed: true. Returns the exit code and the output.',
+        { command: z.string().describe('The bash command'), confirmed: z.boolean().optional().describe('Only after Florian agreed to a command that was refused'), timeout_minutes: z.number().optional().describe('Up to 60; default 10') },
+        async (args) => { try { return ok(await piShell(args)); } catch (err) { return fail(err); } })] : []),
       ...(showFile ? [tool('show_file', 'Show Florian a file a script made: it is copied into this thread\'s artifacts folder and appears in the thread. Files you write into the artifacts folder with Write or Edit are shown already; use this for the finished result of a script (a filled PDF, an edited Word file, a chart). Only for files he should see: never for libraries, scripts or intermediate files.',
         { path: z.string().describe('The file, absolute or relative to the workbench'), name: z.string().optional().describe('The name he sees, if different from the file\'s; a name he would recognise') },
         async (args) => { try { return ok(await showFile(args)); } catch (err) { return fail(err); } })] : []),
@@ -271,8 +274,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
