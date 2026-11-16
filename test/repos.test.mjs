@@ -56,6 +56,9 @@ bare('brain', {
 });
 const site = bare('site', { 'index.html': '<h1>Hello</h1>\n' });
 bare('tool', { 'README.md': '# tool\n' });
+// A repo made on GitHub without a first commit.
+const emptyRemote = path.join(hub, 'fburgerdev', 'blank.git');
+git(dir, 'init', '--bare', '-b', 'main', emptyRemote);
 
 fs.mkdirSync(data, { recursive: true });
 fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false }, autoMerge: false }));
@@ -191,4 +194,15 @@ test('without a repo, shell commands stay off; the vault stays read-only', async
   assert.equal((await policy('Write', { file_path: path.join(repo, 'a.txt') })).behavior, 'allow');
   assert.equal((await policy('Write', { file_path: path.join(repo, '.git', 'config') })).behavior, 'deny');
   assert.equal((await policy('Write', { file_path: path.join(dir, 'vault', 'Brain', 'x.md') })).behavior, 'deny');
+});
+
+test('an empty repo gets a first commit, and the thread works in it like in any other', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'Start the new video project' })).data.thread;
+  await ready(t.id);
+  const done = await turn(t.id, 'REPO-TEST=blank set it up');
+  assert.match(done.thread.repoBranch || '', /^claude\//, 'it got a branch of its own');
+  assert.equal(git(emptyRemote, 'log', '--format=%s', 'main').trim(), 'Start', 'main has its first commit on GitHub');
+  const st = await repoStatus(t.id);
+  assert.equal(st.main, 'main');
+  assert.deepEqual(st.files, [{ name: 'CHANGED-BY-CLAUDE.md', status: 'A' }]);
 });

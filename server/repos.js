@@ -80,8 +80,29 @@ export function ensure(full) {
     } else {
       await git(dir, ['fetch', '--quiet', '--prune', 'origin']).catch((err) => log(`repos: fetch ${full} failed: ${err.message}`));
     }
+    await startEmpty(dir, full);
     return { dir, base: await defaultBranch(dir) };
   });
+}
+
+// A repo made on GitHub without a first commit has no branch to start from: nothing can
+// be branched off it, pushed to it or merged into it. The app gives it one, an empty
+// commit on main, and pushes it, so the repo works like any other from then on. Only when
+// GitHub really has no branch at all; a repo with history is never touched.
+async function startEmpty(dir, full) {
+  const remoteBranches = (await git(dir, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/remotes/origin/']).catch(() => '')).trim();
+  if (remoteBranches) return;
+  const onGithub = (await git(dir, ['ls-remote', '--heads', 'origin'], { timeout: 60_000 }).catch(() => null));
+  if (onGithub === null || onGithub.trim()) return; // offline, or branches appeared meanwhile
+  const hasLocal = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(() => true, () => false);
+  if (!hasLocal) {
+    await git(dir, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    await git(dir, [...(await identity(dir)), 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Start']);
+  }
+  const branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+  await git(dir, ['push', '--quiet', '-u', 'origin', `${branch}:refs/heads/${branch}`], { timeout: 180_000 });
+  await git(dir, ['remote', 'set-head', 'origin', branch]).catch(() => {});
+  log(`repos: ${full} was empty; gave it a first commit on ${branch}`);
 }
 
 // ---------- one thread at a time ----------
