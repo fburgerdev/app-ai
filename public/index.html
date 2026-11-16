@@ -13,6 +13,14 @@
   <link rel="stylesheet" href="/vendor/fonts/instrument-sans/wght.css">
   <link rel="stylesheet" href="/vendor/fonts/jetbrains-mono/wght.css">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
+  <script>
+    // Light or dark, per device: "light", "dark", or nothing to follow the system.
+    (function () {
+      var pick = ''; try { pick = localStorage.getItem('app-ai-look') || ''; } catch (e) {}
+      var light = pick ? pick === 'light' : window.matchMedia('(prefers-color-scheme: light)').matches;
+      document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    })();
+  </script>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body class="is-booting">
@@ -91,7 +99,7 @@
     <div class="window-side">
       <h2 class="window-title">Settings</h2>
       <button class="window-tab" type="button" data-tab="connections">Connections</button>
-      <button class="window-tab" type="button" data-tab="queue">Queue</button>
+      <button class="window-tab" type="button" data-tab="queue">General</button>
       <button class="window-tab" type="button" data-tab="keys">Keys</button>
     </div>
     <div class="window-main">
