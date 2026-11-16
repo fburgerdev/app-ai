@@ -2146,6 +2146,7 @@ function openSettings(tab = S.settingsTab) {
   els.settingsBody.scrollTop = 0;
   if (tab === 'queue') return fillQueue(els.settingsBody, token);
   if (tab === 'keys') return fillKeys(els.settingsBody);
+  if (tab === 'stats') return fillStats(els.settingsBody, token);
   return fillConnections(els.settingsBody, token);
 }
 
@@ -2153,6 +2154,26 @@ for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener
 els.settingsClose.addEventListener('click', () => els.settings.close());
 els.settings.addEventListener('click', (e) => { if (e.target === els.settings) els.settings.close(); });
 els.openSettings.addEventListener('click', () => openSettings());
+
+// Stats: what happened, by week. Counted from what the app and the vault already keep.
+async function fillStats(body, token) {
+  body.append(h('h3', { class: 'window-head' }, 'Stats'));
+  let s;
+  try { s = await api('GET', '/api/stats'); } catch (err) { body.append(h('p', { class: 'panel-note is-error' }, err.message)); return; }
+  if (token !== settingsToken) return;
+  const groups = [...new Set(s.rows.map((r) => r.group))];
+  const cell = (v) => h('td', { class: v ? '' : 'is-zero' }, String(v));
+  body.append(
+    h('table', { class: 'stats' },
+      h('thead', {}, h('tr', {}, h('th', {}, ''), ...s.periods.map((p) => h('th', {}, p.label)))),
+      ...groups.map((g) => h('tbody', {},
+        h('tr', { class: 'stats-group' }, h('th', { colspan: String(s.periods.length + 1) }, g)),
+        ...s.rows.filter((r) => r.group === g).map((r) => h('tr', {}, h('td', { class: 'stats-label' }, r.label), ...s.periods.map((p) => cell(r.values[p.key])))))),
+      h('tbody', {},
+        h('tr', { class: 'stats-group' }, h('th', { colspan: String(s.periods.length + 1) }, 'Claude')),
+        h('tr', {}, h('td', { class: 'stats-label' }, 'Cost (API prices)'), ...s.periods.map((p) => h('td', {}, `$${s.cost[p.key].toFixed(2)}`))))),
+    h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
+}
 
 async function fillConnections(body, token) {
   body.append(h('h3', { class: 'window-head' }, 'Connections'));
@@ -2209,6 +2230,27 @@ async function fillConnections(body, token) {
       : `You are reaching it at ${location.host}.`)));
 }
 
+// Light or dark, chosen per device (a phone at night, a laptop in daylight).
+function applyLook(pick) {
+  try { if (pick) localStorage.setItem('app-ai-look', pick); else localStorage.removeItem('app-ai-look'); } catch { /* private mode */ }
+  const light = pick ? pick === 'light' : window.matchMedia('(prefers-color-scheme: light)').matches;
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#f3ebdc' : '#1b1d2a');
+}
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { let pick = ''; try { pick = localStorage.getItem('app-ai-look') || ''; } catch { /* fine */ } if (!pick) applyLook(''); });
+applyLook((() => { try { return localStorage.getItem('app-ai-look') || ''; } catch { return ''; } })());
+
+function lookFields() {
+  let now = '';
+  try { now = localStorage.getItem('app-ai-look') || ''; } catch { /* fine */ }
+  const option = (value, label) => h('label', { class: 'check' }, h('input', { type: 'radio', name: 'look', checked: now === value, onchange: () => applyLook(value) }), ` ${label}`);
+  return [
+    h('h3', { class: 'window-head' }, 'Look'),
+    h('p', { class: 'panel-note' }, 'Dark, or light on beige paper. Chosen on each device by itself.'),
+    h('div', { class: 'sleep-fields' }, option('dark', 'Dark'), option('light', 'Light'), option('', 'Like this device')),
+  ];
+}
+
 function sleepFields() {
   const sl = S.settings.sleep || { on: true, from: '00:00', to: '08:00' };
   const save = (patch) => {
@@ -2226,7 +2268,7 @@ function sleepFields() {
 }
 
 async function fillQueue(body, token) {
-  body.append(...sleepFields());
+  body.append(...lookFields(), ...sleepFields());
   const state = h('span', { class: 'status' });
   body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
     h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));

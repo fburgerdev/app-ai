@@ -16,7 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { DATA_DIR, log } from './config.js';
 import { git } from './git.js';
 import * as store from './store.js';
@@ -80,8 +80,29 @@ export function ensure(full) {
     } else {
       await git(dir, ['fetch', '--quiet', '--prune', 'origin']).catch((err) => log(`repos: fetch ${full} failed: ${err.message}`));
     }
+    await startEmpty(dir, full);
     return { dir, base: await defaultBranch(dir) };
   });
+}
+
+// A repo made on GitHub without a first commit has no branch to start from: nothing can
+// be branched off it, pushed to it or merged into it. The app gives it one, an empty
+// commit on main, and pushes it, so the repo works like any other from then on. Only when
+// GitHub really has no branch at all; a repo with history is never touched.
+async function startEmpty(dir, full) {
+  const remoteBranches = (await git(dir, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/remotes/origin/']).catch(() => '')).trim();
+  if (remoteBranches) return;
+  const onGithub = (await git(dir, ['ls-remote', '--heads', 'origin'], { timeout: 60_000 }).catch(() => null));
+  if (onGithub === null || onGithub.trim()) return; // offline, or branches appeared meanwhile
+  const hasLocal = await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(() => true, () => false);
+  if (!hasLocal) {
+    await git(dir, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    await git(dir, [...(await identity(dir)), 'commit', '--quiet', '--allow-empty', '--no-verify', '-m', 'Start']);
+  }
+  const branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+  await git(dir, ['push', '--quiet', '-u', 'origin', `${branch}:refs/heads/${branch}`], { timeout: 180_000 });
+  await git(dir, ['remote', 'set-head', 'origin', branch]).catch(() => {});
+  log(`repos: ${full} was empty; gave it a first commit on ${branch}`);
 }
 
 // ---------- one thread at a time ----------
@@ -415,6 +436,12 @@ function fakeGithub(method, url, body) {
     return { full_name: `${m[1]}/${body.name}` };
   }
   if (method === 'PATCH' && m) return { full_name: `${m[1]}/${m[2]}` };
+  if (method === 'POST' && url === '/user/repos') {
+    const o = owner();
+    fs.mkdirSync(path.join(baseDir, o), { recursive: true });
+    execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', path.join(baseDir, o, `${body.name}.git`)], { windowsHide: true, stdio: 'ignore' });
+    return { full_name: `${o}/${body.name}` };
+  }
   if (method === 'GET' && url.startsWith('/user/repos')) {
     const o = owner();
     return fs.readdirSync(path.join(baseDir, o)).filter((n) => n.endsWith('.git')).map((n) => ({ full_name: `${o}/${n.slice(0, -4)}` }));

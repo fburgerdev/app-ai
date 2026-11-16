@@ -39,6 +39,60 @@
   color-scheme: dark;
 }
 
+/* Light: a beige paper desk. The same meanings, darker inks so they read on paper. */
+:root[data-theme="light"] {
+  --ground: #f3ebdc;
+  --rail: #ebe1cd;
+  --panel: #e4d8c1;
+  --raised: #dacdb2;
+  --line: #cbbb9c;
+  --sunken: #f9f4e9;
+
+  --text: #2f2a22;
+  --read: #2a251d;
+  --muted: #6d6351;
+  --faint: #978b74;
+
+  --you: #b06d0c;
+  --you-ink: #fff9ee;
+  --work: #2d5fb3;
+  --done: #2e7a4e;
+  --quote: #7045b5;
+  --head: #6a4310;
+  --bright: #1c1812;
+  --code: #1d6a50;
+  --link: #2a5daf;
+  --bad: #b5302d;
+
+  --s-ready: #3a8a5a;
+  --s-working: #c07a10;
+  --s-done: #3e6ec0;
+  --s-event: #7a52c4;
+  --s-sleep: #a39883;
+  --soft-quote: #7860a6;
+
+  color-scheme: light;
+}
+:root[data-theme="light"] * { scrollbar-color: #c4b392 transparent; }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c4b392; }
+:root[data-theme="light"] ::selection { background: rgba(112, 69, 181, 0.2); }
+:root[data-theme="light"] .top-count.has-ready { color: #fff; }
+:root[data-theme="light"] .is-offline .stage::before { background: #f2d6cf; color: #7a1f1a; }
+:root[data-theme="light"] .btn-send:hover { background: #c98420; }
+:root[data-theme="light"] ins { color: #1e5c38; background: rgba(46, 122, 78, 0.16); }
+:root[data-theme="light"] del { color: #9a2b2b; background: rgba(181, 48, 45, 0.12); }
+:root[data-theme="light"] .quote-btn { color: #fff; }
+:root[data-theme="light"] .md em { color: var(--read); }
+:root[data-theme="light"] .md blockquote { color: #4b3480; }
+:root[data-theme="light"] .md .code-block code { color: var(--text); }
+:root[data-theme="light"] .md tbody tr:nth-child(even) td { background: rgba(80, 60, 20, 0.04); }
+:root[data-theme="light"] .mail-body:focus, :root[data-theme="light"] .card-text:focus { background: rgba(255, 255, 255, 0.5); }
+:root[data-theme="light"] .out-list { --guide: #c4b393; }
+:root[data-theme="light"] .brain-go { --mark-ground: var(--sunken); }
+:root[data-theme="light"] .window::backdrop, :root[data-theme="light"] .rail-backdrop { background: rgba(70, 55, 30, 0.3); }
+:root[data-theme="light"] #defer.is-armed { color: #fff; }
+:root[data-theme="light"] .statusbar { background: rgba(80, 60, 20, 0.03); }
+
 * { box-sizing: border-box; }
 
 /* Scrollbars in the app's own colours: thin, no track, a thumb that shows on the dark ground. */
@@ -1302,6 +1356,14 @@ a.chip:hover { border-color: var(--muted); }
 .statusbar.is-safe .status-text { color: var(--done); }
 .statusbar.is-ready .status-text { color: var(--text); }
 .statusbar.is-warn .status-text { color: var(--you); }
+
+/* Stats: a plain table, figures right-aligned, zeros faint. */
+.stats { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 4px 0 10px; }
+.stats th, .stats td { padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.stats thead th { color: var(--faint); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--line); }
+.stats .stats-label { text-align: left; color: var(--text); }
+.stats .stats-group th { text-align: left; padding-top: 12px; color: var(--muted); font: 650 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
+.stats td.is-zero { color: var(--faint); opacity: 0.6; }
 
 /* Focus: a switch in the top bar. Quiet when off; when on, plainly on. */
 .top-focus .top-sub { color: var(--faint); font-weight: 450; font-size: 12.5px; }
