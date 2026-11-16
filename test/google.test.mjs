@@ -59,6 +59,19 @@ test('saving a reply draft refreshes the token and threads the mail', async () =
   assert.ok(!calls.some((c) => /\/send\b/.test(c.url)), 'nothing is ever sent');
 });
 
+test('a reply to a conversation that is not there goes out as a mail of its own', async () => {
+  let posted;
+  google.setHttp(async (url, init = {}) => {
+    if (String(url).includes('/threads/GONE')) return { ok: false, status: 404, json: async () => ({ error: { message: 'Requested entity was not found.' } }) };
+    if (String(url).endsWith('/drafts')) posted = JSON.parse(init.body);
+    return { ok: true, status: 200, json: async () => ({ id: 'D2', access_token: 'fresh', expires_in: 3600 }) };
+  });
+  const out = await google.gmailSaveDraft({ replyToThreadId: 'GONE', to: 'a@example.org', subject: 'Re: Termin', body: 'Passt.' });
+  assert.equal(out.draftId, 'D2');
+  assert.equal(posted.message.threadId, undefined);
+  assert.doesNotMatch(decode(posted.message.raw), /^In-Reply-To:/m);
+});
+
 test('a calendar entry goes into the own calendar without guests', async () => {
   let body;
   google.setHttp(async (url, init = {}) => {
