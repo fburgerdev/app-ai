@@ -929,7 +929,8 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
   border-left: 1px solid var(--line);
   padding: 4px 8px 24px;
 }
-.tree-head { display: flex; align-items: center; gap: 4px; margin: 14px 4px 6px 8px; }
+.tree-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0 2px; margin: 14px 4px 6px 8px; }
+.tree-head .out-start { padding: 3px 5px; }
 .tree-label { flex: 1; font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
 .tree-note { margin: 2px 8px; color: var(--faint); font-size: 12.5px; }
 .out-start {
@@ -1426,7 +1427,7 @@ a.chip:hover { border-color: var(--muted); }
 .slide-tab.is-on { color: var(--text); background: var(--panel); }
 .slides { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .slides::-webkit-scrollbar { display: none; }
-.slide { flex: 0 0 100%; min-width: 0; overflow-y: auto; scroll-snap-align: start; padding: 0 8px 24px; }
+.slide { flex: 0 0 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-snap-align: start; padding: 0 8px 24px; }
 .tree-n { color: var(--faint); font-size: 11.5px; margin-right: 6px; }
 .rail .tree { overflow: visible; padding: 4px 8px 24px; }
 
@@ -1538,12 +1539,17 @@ a.chip:hover { border-color: var(--muted); }
 /* Projects under their areas: the area is a quiet caption, its projects on a rail below. */
 .area-group { margin-top: 6px; }
 .area-group:first-of-type { margin-top: 0; }
-.out-list.is-area .out-row { min-height: 24px; padding-top: 3px; padding-bottom: 3px; color: var(--muted); font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; }
+/* The area is a quiet caption: small, faint, not bold. Its projects hang below it on a
+   rail that starts under the caption and runs down to the last of them. */
+.out-list.is-area .out-row { min-height: 22px; padding-top: 2px; padding-bottom: 2px; color: var(--faint); font-size: 12px; font-weight: 500; letter-spacing: 0.02em; }
+.out-list.is-area .out-rank { opacity: 0.6; }
+.area-group > .out-list:not(.is-area) { margin-left: 26px; }
+.area-group > .out-list:not(.is-area) > .out:first-child::before { top: -5px; height: 20px; }
 .out-list.is-area .out.is-here > .out-row { color: var(--you); }
 /* The area row shows no time: its projects below carry theirs. */
 .out-list.is-area .out-when { display: none; }
 .out-list.is-area .out-plus { top: 1px; }
-.area-none { margin: 0 8px 0 31px; padding: 3px 0; color: var(--faint); font-size: 12.5px; font-weight: 600; }
+.area-none { margin: 0 8px 0 31px; padding: 2px 0; color: var(--faint); font-size: 12px; font-weight: 500; letter-spacing: 0.02em; }
 .out-divide { height: 1px; margin: 6px 10px 6px 31px; background: var(--line); opacity: 0.55; }
 
 /* Nothing of the app is shown until it is clear whether the sleep screen belongs over it. */
