@@ -1531,6 +1531,15 @@ a.chip:hover { border-color: var(--muted); }
 .out-list.is-flat .out::before, .out-list.is-flat .out::after { display: none; }
 .out-rank { flex: none; width: 12px; margin-left: -20px; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; opacity: 0.8; }
 .out.is-here .out-rank { color: var(--you); opacity: 1; }
+/* Projects under their areas: the area is a quiet caption, its projects on a rail below. */
+.area-group { margin-top: 6px; }
+.area-group:first-of-type { margin-top: 0; }
+.out-list.is-area .out-row { min-height: 24px; padding-top: 3px; padding-bottom: 3px; color: var(--muted); font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em; }
+.out-list.is-area .out.is-here > .out-row { color: var(--you); }
+/* The area row shows no time: its projects below carry theirs. */
+.out-list.is-area .out-when { display: none; }
+.out-list.is-area .out-plus { top: 1px; }
+.area-none { margin: 0 8px 0 31px; padding: 3px 0; color: var(--faint); font-size: 12.5px; font-weight: 600; }
 .out-divide { height: 1px; margin: 6px 10px 6px 31px; background: var(--line); opacity: 0.55; }
 
 /* Nothing of the app is shown until it is clear whether the sleep screen belongs over it. */

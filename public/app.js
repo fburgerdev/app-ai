@@ -448,25 +448,36 @@ function treeNodes() {
   };
   const rankedAreas = areas.filter((a) => rankOf.has(a.name)).sort((a, b) => rankOf.get(a.name).rank - rankOf.get(b.name).rank);
   const unrankedAreas = areas.filter((a) => !rankOf.has(a.name)).sort((a, b) => a.name.localeCompare(b.name));
+  // Projects hang under their area: the area is a quiet caption row (its rank in front),
+  // its active projects on a rail below it, most recently dealt with first. Areas come in
+  // the order of 30,000 ft, so the projects of the highest area are on top. An area
+  // without an active project is just its row.
+  const areaOf = new Map(t.groups.flatMap((g) => g.projects.map((p) => [p.name, g.isArea ? g.name : ''])));
+  const group = (a) => {
+    const mine = active.filter((p) => areaOf.get(p.name) === a.name);
+    return h('div', { class: 'area-group' },
+      h('div', { class: 'out-list is-flat is-area' }, areaRow(a)),
+      mine.length ? h('div', { class: 'out-list' }, ...mine.map((p) => row(p, false))) : null);
+  };
+  const loose = active.filter((p) => !areaOf.get(p.name));
   const first = [
     h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Projects'),
       bulkButton('active', '+ active', active.length, `Start a check-in thread on every active project. ${each}.`),
-      bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`)),
-    h('div', { class: 'out-list' }, ...active.map((p) => row(p, false))),
-    !projects.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
+      bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`),
+      bulkButton('areas', '+ ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
+    h('button', { class: 'tree-sub', type: 'button', title: 'The order of the areas and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
+      rankedAreas.length ? `By area, in the order of 30,000 ft` : 'By area · no order in 30,000 ft yet'),
+    ...rankedAreas.map(group),
+    rankedAreas.length && unrankedAreas.length ? h('div', { class: 'out-divide', role: 'separator', 'aria-label': 'Not ranked' }) : null,
+    ...unrankedAreas.map(group),
+    loose.length ? h('div', { class: 'area-group' },
+      h('div', { class: 'area-none' }, 'No area'),
+      h('div', { class: 'out-list' }, ...loose.map((p) => row(p, false)))) : null,
+    !projects.length && !areas.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
     // Paused means he is waiting on something, so they are folded away and unfold on hover.
     paused.length ? h('div', { class: 'out-folded' },
       h('div', { class: 'out-folded-head' }, `${paused.length} paused`),
-      h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row(p, true)))) : null,
-    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Areas'),
-      bulkButton('areas', '+ project ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
-    h('button', { class: 'tree-sub', type: 'button', title: 'The order and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
-      rankedAreas.length ? `Order from 30,000 ft · ${rankedAreas.length} of ${areas.length} ranked` : 'No order in 30,000 ft yet'),
-    // Areas are a flat list, not a tree: no rail, the rank sits where the rail's tick
-    // would be, so every name lines up with the project names above.
-    rankedAreas.length ? h('div', { class: 'out-list is-flat' }, ...rankedAreas.map(areaRow)) : null,
-    rankedAreas.length && unrankedAreas.length ? h('div', { class: 'out-divide', role: 'separator', 'aria-label': 'Not ranked' }) : null,
-    unrankedAreas.length ? h('div', { class: 'out-list is-flat' }, ...unrankedAreas.map(areaRow)) : null,
+      h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row({ ...p, sub: areaOf.get(p.name) || '' }, true)))) : null,
     ...somedayNodes(t.someday || []),
   ].filter(Boolean);
   const second = peopleNodes(t.people || [], row, dealt);
