@@ -1357,6 +1357,14 @@ a.chip:hover { border-color: var(--muted); }
 .statusbar.is-ready .status-text { color: var(--text); }
 .statusbar.is-warn .status-text { color: var(--you); }
 
+/* Stats: a plain table, figures right-aligned, zeros faint. */
+.stats { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 4px 0 10px; }
+.stats th, .stats td { padding: 5px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.stats thead th { color: var(--faint); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--line); }
+.stats .stats-label { text-align: left; color: var(--text); }
+.stats .stats-group th { text-align: left; padding-top: 12px; color: var(--muted); font: 650 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
+.stats td.is-zero { color: var(--faint); opacity: 0.6; }
+
 /* Focus: a switch in the top bar. Quiet when off; when on, plainly on. */
 .top-focus .top-sub { color: var(--faint); font-weight: 450; font-size: 12.5px; }
 .top-focus.is-on { color: var(--text); border-color: var(--line); background: var(--panel); }

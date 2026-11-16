@@ -16,7 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { DATA_DIR, log } from './config.js';
 import { git } from './git.js';
 import * as store from './store.js';
@@ -436,6 +436,12 @@ function fakeGithub(method, url, body) {
     return { full_name: `${m[1]}/${body.name}` };
   }
   if (method === 'PATCH' && m) return { full_name: `${m[1]}/${m[2]}` };
+  if (method === 'POST' && url === '/user/repos') {
+    const o = owner();
+    fs.mkdirSync(path.join(baseDir, o), { recursive: true });
+    execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', path.join(baseDir, o, `${body.name}.git`)], { windowsHide: true, stdio: 'ignore' });
+    return { full_name: `${o}/${body.name}` };
+  }
   if (method === 'GET' && url.startsWith('/user/repos')) {
     const o = owner();
     return fs.readdirSync(path.join(baseDir, o)).filter((n) => n.endsWith('.git')).map((n) => ({ full_name: `${o}/${n.slice(0, -4)}` }));

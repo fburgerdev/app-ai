@@ -23,6 +23,7 @@ import * as link from './link.js';
 import * as events from './events.js';
 import { initRepair, report } from './repair.js';
 import { initShip } from './ship.js';
+import { stats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
@@ -510,6 +511,8 @@ app.post('/api/next-actions/wake', (req, res) => {
   try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
+// What happened, counted by week (server/stats.js).
+app.get('/api/stats', (req, res) => { try { res.json(stats()); } catch (err) { res.status(500).json({ error: err.message }); } });
 // Check for a new version now; `force` updates even while Claude is working.
 app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
 // For the tests: report a failure the way the app's own parts do.

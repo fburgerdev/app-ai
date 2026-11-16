@@ -171,7 +171,7 @@ async function buildAppServer({ spinOff, repoTools, showFile }) {
         tool('github_rename_repo', 'Rename one of Florian\'s GitHub repos. Only when Florian asks for it. GitHub forwards the old address; the app moves its own copy and the threads that use it.',
           { repo: z.string().describe('owner/name or name'), new_name: z.string().describe('the new name, without the owner') },
           async (args) => { try { return ok(`Renamed to ${await repoTools.rename(args)}.`); } catch (err) { return fail(err); } }),
-        tool('github_create_repo', 'Create a new GitHub repo for Florian. Only when he asks for it. Private unless he says otherwise.',
+        tool('github_create_repo', 'Create a new GitHub repo for Florian. Only after he agreed in this thread, to the repo and to its name (lowercase with hyphens: what it is first, then a very concise description, e.g. "website-mensa-mail", "ytvideo-gtd-framework"). Private unless he says otherwise. Open it with open_repo afterwards.',
           { name: z.string(), private: z.boolean().optional(), description: z.string().optional() },
           async (args) => { try { return ok(`Created ${await repoTools.create(args)}. Open it with open_repo to work in it.`); } catch (err) { return fail(err); } }),
         tool('github_describe_repo', 'Set the description of one of Florian\'s GitHub repos.',
@@ -545,6 +545,15 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   }
   const renameAsk = repoTools && /RENAME-TEST ([\w./-]+) ([\w.-]+)/.exec(newest);
   if (renameAsk) await repoTools.rename({ repo: renameAsk[1], new_name: renameAsk[2] }).catch((err) => onEvent?.({ type: 'activity', text: err.message }));
+  // "CREATE-TEST name": he agreed to a new repo; it is made, opened and worked in.
+  const createAsk = repoTools && /CREATE-TEST ([\w.-]+)/.exec(newest);
+  if (createAsk) {
+    try {
+      const full = await repoTools.create({ name: createAsk[1] });
+      const r = await repoTools.open(full);
+      fs.writeFileSync(path.join(r.dir, 'README.md'), `# ${createAsk[1]}\n`);
+    } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
+  }
   const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
   if (wanted) {
     onEvent?.({ type: 'tool', name: 'mcp__app__spin_off', summary: `Spun off a thread: ${wanted[1].trim()}` });

@@ -75,7 +75,7 @@ const call = async (method, url, body) => {
   try { parsed = JSON.parse(text); } catch { /* text */ }
   return { status: res.status, data: parsed };
 };
-async function until(fn, what, ms = 20000) {
+async function until(fn, what, ms = 45000) { // generous: eight test servers run side by side
   const end = Date.now() + ms;
   while (Date.now() < end) {
     const v = await fn();
@@ -205,4 +205,26 @@ test('an empty repo gets a first commit, and the thread works in it like in any 
   const st = await repoStatus(t.id);
   assert.equal(st.main, 'main');
   assert.deepEqual(st.files, [{ name: 'CHANGED-BY-CLAUDE.md', status: 'A' }]);
+});
+
+test('a repo he agreed to is created, gets its first commit, and the thread works in it', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'A video about the GTD framework' })).data.thread;
+  await ready(t.id);
+  const done = await turn(t.id, 'Yes, CREATE-TEST ytvideo-gtd-framework');
+  assert.equal(done.thread.repo, 'fburgerdev/ytvideo-gtd-framework');
+  assert.match(done.messages.filter((m) => m.event).map((m) => m.text).join('\n'), /created the GitHub repo fburgerdev\/ytvideo-gtd-framework \(private\)/);
+  const made = path.join(hub, 'fburgerdev', 'ytvideo-gtd-framework.git');
+  assert.equal(git(made, 'log', '--format=%s', 'main').trim(), 'Start');
+  assert.deepEqual((await repoStatus(t.id)).files, [{ name: 'README.md', status: 'A' }]);
+});
+
+test('the stats count what happened', async () => {
+  const s = (await call('GET', '/api/stats')).data;
+  assert.deepEqual(s.periods.map((p) => p.key), ['thisWeek', 'lastWeek', 'fourWeeks', 'all']);
+  const row = (label) => s.rows.find((r) => r.label === label).values;
+  assert.ok(row('Threads you started').thisWeek >= 3);
+  assert.equal(row('Threads you started').thisWeek, row('Threads you started').all, 'everything here happened this week');
+  assert.ok(row('Changes merged into main').all >= 1, 'the merge from the button, counted from the repo itself');
+  assert.ok(row('Projects started').all >= 1, 'the Site project note, from the vault history');
+  assert.equal(typeof s.cost.all, 'number');
 });

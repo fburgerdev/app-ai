@@ -2146,6 +2146,7 @@ function openSettings(tab = S.settingsTab) {
   els.settingsBody.scrollTop = 0;
   if (tab === 'queue') return fillQueue(els.settingsBody, token);
   if (tab === 'keys') return fillKeys(els.settingsBody);
+  if (tab === 'stats') return fillStats(els.settingsBody, token);
   return fillConnections(els.settingsBody, token);
 }
 
@@ -2153,6 +2154,26 @@ for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener
 els.settingsClose.addEventListener('click', () => els.settings.close());
 els.settings.addEventListener('click', (e) => { if (e.target === els.settings) els.settings.close(); });
 els.openSettings.addEventListener('click', () => openSettings());
+
+// Stats: what happened, by week. Counted from what the app and the vault already keep.
+async function fillStats(body, token) {
+  body.append(h('h3', { class: 'window-head' }, 'Stats'));
+  let s;
+  try { s = await api('GET', '/api/stats'); } catch (err) { body.append(h('p', { class: 'panel-note is-error' }, err.message)); return; }
+  if (token !== settingsToken) return;
+  const groups = [...new Set(s.rows.map((r) => r.group))];
+  const cell = (v) => h('td', { class: v ? '' : 'is-zero' }, String(v));
+  body.append(
+    h('table', { class: 'stats' },
+      h('thead', {}, h('tr', {}, h('th', {}, ''), ...s.periods.map((p) => h('th', {}, p.label)))),
+      ...groups.map((g) => h('tbody', {},
+        h('tr', { class: 'stats-group' }, h('th', { colspan: String(s.periods.length + 1) }, g)),
+        ...s.rows.filter((r) => r.group === g).map((r) => h('tr', {}, h('td', { class: 'stats-label' }, r.label), ...s.periods.map((p) => cell(r.values[p.key])))))),
+      h('tbody', {},
+        h('tr', { class: 'stats-group' }, h('th', { colspan: String(s.periods.length + 1) }, 'Claude')),
+        h('tr', {}, h('td', { class: 'stats-label' }, 'Cost (API prices)'), ...s.periods.map((p) => h('td', {}, `$${s.cost[p.key].toFixed(2)}`))))),
+    h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
+}
 
 async function fillConnections(body, token) {
   body.append(h('h3', { class: 'window-head' }, 'Connections'));
