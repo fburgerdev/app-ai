@@ -21,6 +21,10 @@ NEW="$(git rev-parse "origin/$BRANCH")"
 if [ "$OLD" = "$NEW" ]; then rm -f "$STATE/waiting-since"; exit 0; fi
 if [ -f "$STATE/bad" ] && [ "$(cat "$STATE/bad")" = "$NEW" ]; then exit 0; fi
 
+# Never restart while the night prune is in the middle of a part: that part would be lost.
+# (Between parts, and while it waits for the usage limit, it picks up again after a restart.)
+if health | grep -q '"pruning":true'; then say "new version ${NEW%"${NEW#???????}"} is waiting: the night prune is running"; exit 0; fi
+
 # Do not restart in the middle of Claude's work, unless it has gone on for an hour.
 if health | grep -q '"busy":true'; then
   [ -f "$STATE/waiting-since" ] || date +%s > "$STATE/waiting-since"
