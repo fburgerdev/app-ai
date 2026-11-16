@@ -193,3 +193,13 @@ test('a git step refused because another git process holds the index runs again'
   assert.equal(await whenUnlocked(async () => { calls += 1; if (calls < 2) throw midWrite; return 'ok'; }, { wait: 1 }), 'ok');
   assert.equal(calls, 2);
 });
+
+test('pi_shell: what could break the Pi or cut off the way in needs his OK first', async () => {
+  const { needsConsent } = await import('../server/pi.js');
+  for (const cmd of ['sudo reboot', 'rm -rf /', 'rm -rf ~/', 'sudo rm -rf /etc', 'sudo mkfs.ext4 /dev/sda1', 'dd if=x.img of=/dev/mmcblk0', 'sudo tailscale down', 'sudo systemctl stop ssh', 'sudo shutdown -h now']) {
+    assert.ok(needsConsent(cmd), `needs consent: ${cmd}`);
+  }
+  for (const cmd of ['sudo apt-get install -y chromium', 'rm -rf ~/app-ai/node_modules', 'systemctl --user restart app-ai', 'journalctl --user -u app-ai -n 50', 'df -h']) {
+    assert.equal(needsConsent(cmd), '', `runs at once: ${cmd}`);
+  }
+});

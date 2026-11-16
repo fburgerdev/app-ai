@@ -109,3 +109,7 @@ The Talk page needs the app reachable from your phone over https. The Tailscale 
 - **Your threads so far stay on the laptop.** To take them along, copy the `threads` and `extractions` folders from the laptop's data folder (`%LOCALAPPDATA%\app-ai`) to `~/.local/share/app-ai/` before the first start. Claude's own session files do not move with them; each thread then carries on from the app's transcript the first time you reply.
 - **Run it in one place.** Stop using the laptop's copy once the Pi runs, or the two will hold different threads. The brain itself is safe either way, since both only push through GitHub.
 - **Updating the app:** by itself, once step 6 is done. By hand: `cd ~/app-ai && git pull && npm install && systemctl --user restart app-ai`.
+
+## Claude runs the Pi
+
+Threads have a `pi_shell` tool: any shell command on the Pi, as the user `florian` with passwordless sudo. From the laptop it goes over SSH (`Host pi` in `~/.ssh/config`, the key `~/.ssh/id_ed25519_app_pi`); on the Pi it runs locally. Commands that would wipe a disk, delete a system or home folder, reboot the Pi or cut off SSH or Tailscale are refused until Florian agreed in the thread. Set up 16-11-2026 with two one-time steps on the Pi: the app's key in `~/.ssh/authorized_keys`, and `/etc/sudoers.d/app-ai`. `"pi": { "enabled": false }` in config.json turns the tool off.
