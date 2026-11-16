@@ -193,6 +193,21 @@ function railItem(t) {
   );
 }
 
+// Deep work comes first in the queue (the server decides which threads that is). When
+// both kinds are waiting, a quiet label over each part says which is which.
+function withDeepLabels(ready) {
+  const deep = new Set(S.queue.deep || []);
+  const big = ready.filter((t) => deep.has(t.id));
+  if (!big.length || big.length === ready.length) return ready.map(railItem);
+  const label = (text, title) => h('p', { class: 'queue-part', title }, text);
+  return [
+    label('Deep work', 'Thinking sessions, building in a repo, documents, long threads: answered first, so they keep running.'),
+    ...ready.filter((t) => deep.has(t.id)).map(railItem),
+    label('In between', 'Cards, mail, questions and small threads: for while the deep ones work.'),
+    ...ready.filter((t) => !deep.has(t.id)).map(railItem),
+  ];
+}
+
 // `drop` names what dropping a thread on the section does: "queue" or "done".
 const section = (label, count, items, extra, drop) => h('section', { class: 'group', dataset: drop ? { drop } : {} },
   h('h2', { class: 'group-head' }, label, count ? h('span', { class: 'count' }, String(count)) : null, extra),
@@ -214,7 +229,7 @@ function queueLists() {
   parts.push(section('Next up', ready.length, [
     note ? h('p', { class: 'group-note' }, note) : null,
     laterLine,
-    ...(ready.length ? ready.map(railItem) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
+    ...(ready.length ? withDeepLabels(ready) : [h('p', { class: 'group-empty' }, busy.length ? 'Nothing yet. Claude is still working.' : 'Nothing is waiting.')]),
     h('p', { class: 'group-foot' }, S.cards.running
       ? h('span', { class: 'looking' }, h('span', { class: 'pulse' }), 'Looking for opportunities')
       : h('button', { class: 'link', type: 'button', onclick: () => api('POST', '/api/cards/make', {}).catch((e) => toast(e.message)) }, 'Look for opportunities')),

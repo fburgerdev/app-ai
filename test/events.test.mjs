@@ -421,3 +421,21 @@ test('focus ends at the next sleep time, or midnight without one', async () => {
   assert.equal(focusEnd(at, { on: true, from: '00:30' }), new Date(2026, 10, 16, 0, 30).getTime());
   assert.equal(focusEnd(at, { on: false, from: '23:00' }), new Date(2026, 10, 16, 0, 0).getTime());
 });
+
+test('deep work comes first in the queue; small things fill the time in between', async () => {
+  await call('PUT', '/api/settings', { focus: false });
+  await call('POST', '/api/cards/make', {});
+  const card = await until(async () => (await state()).threads.find((t) => t.kind === 'card' && t.state === 'ready'), 'a card waiting');
+  // A small question, then a build session that started later: the session goes first.
+  const small = (await call('POST', '/api/threads', { text: 'Quick: what time is it in Berlin?' })).data.thread;
+  await ready(small.id);
+  const deep = (await call('POST', '/api/threads', { text: 'Build the tracker code for the new page' })).data.thread;
+  await until(async () => (await thread(deep.id)).thread.type === 'build' && (await thread(deep.id)).thread.state === 'ready', 'the session typed as build');
+  const s = await until(async () => { const x = (await state()).queue; return x.order.includes(deep.id) && x.order.includes(card.id) && !x.ranking ? x : null; }, 'all in the queue');
+  const lastDeep = Math.max(...s.deep.map((id) => s.order.indexOf(id)));
+  const firstSmall = Math.min(...s.order.filter((id) => !s.deep.includes(id)).map((id) => s.order.indexOf(id)));
+  assert.ok(lastDeep < firstSmall, 'every deep thread before every small one');
+  assert.ok(s.order.indexOf(deep.id) < s.order.indexOf(small.id), 'the new session before the older quick question');
+  assert.ok(s.deep.includes(deep.id) && !s.deep.includes(card.id) && !s.deep.includes(small.id));
+  assert.ok(s.order.indexOf(card.id) > s.order.indexOf(deep.id));
+});

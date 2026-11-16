@@ -1365,6 +1365,10 @@ a.chip:hover { border-color: var(--muted); }
 .stats .stats-group th { text-align: left; padding-top: 12px; color: var(--muted); font: 650 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 .stats td.is-zero { color: var(--faint); opacity: 0.6; }
 
+/* The two parts of the queue: deep work first, small things in between. */
+.queue-part { margin: 6px 8px 2px 21px; color: var(--faint); font-size: 11.5px; letter-spacing: 0.02em; }
+.queue-part:first-of-type { margin-top: 2px; }
+
 /* Focus: a switch in the top bar. Quiet when off; when on, plainly on. */
 .top-focus .top-sub { color: var(--faint); font-weight: 450; font-size: 12.5px; }
 .top-focus.is-on { color: var(--text); border-color: var(--line); background: var(--panel); }

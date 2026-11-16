@@ -77,7 +77,10 @@ export function queueOrder() {
   const fresh = all.filter((t) => !requeuedLately(t));
   const requeued = all.filter(requeuedLately).sort((a, b) => a.requeuedAt - b.requeuedAt);
   const held = fresh.filter((t) => pins.has(t.id)).sort((a, b) => pins.get(a.id) - pins.get(b.id));
-  const ids = [...fresh.filter((t) => !pins.has(t.id)), ...requeued].map((t) => t.id);
+  // Deep work first, in the ranker's order, then everything else in its order. What he
+  // put back a moment ago still goes to the very end, and what he dragged keeps its place.
+  const free = fresh.filter((t) => !pins.has(t.id));
+  const ids = [...free.filter((t) => store.isDeep(t)), ...free.filter((t) => !store.isDeep(t)), ...requeued].map((t) => t.id);
   for (const t of held) ids.splice(Math.min(pins.get(t.id), ids.length), 0, t.id);
   return ids;
 }
@@ -97,7 +100,12 @@ export function moveTo(thread, index) {
 }
 
 export function queueStatus() {
-  return { order: queueOrder(), why, ranking };
+  const ids = queueOrder();
+  const deep = ids.filter((id) => store.isDeep(store.getThread(id)));
+  // The ranker's reason only holds when its first choice is still first.
+  const first = store.getThread(ids[0]);
+  const reason = first && store.isDeep(first) && order[0] !== first.id ? 'deep work goes first' : why;
+  return { order: ids, deep, why: reason, ranking };
 }
 
 function schedule() {
@@ -106,6 +114,8 @@ function schedule() {
   timer.unref?.();
 }
 
+// Deep work is put first after the ranking, so the ranker orders each part by itself;
+// it is told which is which so its reason fits.
 function describe(t) {
   const mins = Math.round((Date.now() - t.queuedAt) / 60_000);
   const waited = mins < 90 ? `${mins} min` : mins < 2880 ? `${Math.round(mins / 60)} h` : `${Math.round(mins / 1440)} d`;
@@ -113,7 +123,7 @@ function describe(t) {
   if (t.kind === 'card') kind = `${t.card?.type === 'chase' ? 'chase card' : 'opportunity card'} (${t.card?.channel})`;
   else if (t.kind === 'brain-update') kind = 'questions from the brain update';
   else if (t.kind === 'mail-reply') kind = 'mail to answer';
-  const bits = [`[${kind}]`, t.title];
+  const bits = [`[${kind}${store.isDeep(t) ? ', deep work' : ''}]`, t.title];
   if (t.project) bits.push(`project: ${t.project}`);
   bits.push(`waiting ${waited}`);
   if (t.requeuedAt) bits.push('requeued before');
