@@ -22,6 +22,9 @@ import * as datasync from './datasync.js';
 import * as link from './link.js';
 import * as events from './events.js';
 import { initRepair, report } from './repair.js';
+import { createPruner } from './prune.js';
+import { buildPolicy, runAgent } from './agent.js';
+import { git as runGit } from './git.js';
 import { initShip } from './ship.js';
 import { initPi } from './pi.js';
 import { stats } from './stats.js';
@@ -32,7 +35,7 @@ import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
 import { parseMail } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import * as drafts from './drafts.js';
-import { dateTimeDMY } from './util.js';
+import { dateDMY, dateTimeDMY, readPrompt, todayLine } from './util.js';
 import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
 
@@ -90,7 +93,47 @@ app.use((req, res, next) => {
 // ---------- the laptop and the Pi ----------
 // On the laptop, while the Pi is reachable, the page's requests are passed on to it.
 // These few are always this computer's own.
-const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running;
+// The night prune (server/prune.js). Florian, 16-11-2026: scheduled, on the Pi, saved part
+// by part. Its progress is a file on this computer only, never in the data repo.
+const pruner = createPruner({
+  stateFile: path.join(DATA_DIR, 'prune-run.json'),
+  vaultDir: config.brainDir,
+  protectedPaths: config.protectedPaths,
+  runAgent: (params) => runAgent({ ...params, fake: config.fake, usageKind: 'prune' }),
+  withWriter: brain.withWriter,
+  pullForWriting: brain.pullForWriting,
+  commitAndPush: brain.commitAndPush,
+  discardChanges: brain.discardChanges,
+  checkPush: () => runGit(config.brainDir, ['push', '--dry-run', '--quiet', 'origin', `HEAD:${config.brainBranch}`]),
+  checkPolicy: async () => {
+    const policy = buildPolicy({ mode: 'extract', cwd: config.brainDir, artifactsDir: null, protectedPaths: config.protectedPaths });
+    const probes = [
+      ['Write', { file_path: path.join(config.brainDir, brain.coreName(), 'People', 'x.md'), content: 'x' }],
+      ['Edit', { file_path: path.join(config.brainDir, brain.coreName(), 'Projects Index.md'), old_string: 'a', new_string: 'b' }],
+      ['Bash', { command: `rm "${brain.coreName()}/People/x.md"` }],
+      ['Bash', { command: `git mv "${brain.coreName()}/Projects/a.md" "Archive/Projects/a.md"` }],
+    ];
+    for (const [tool, input] of probes) {
+      const r = await policy(tool, input);
+      if (r.behavior !== 'allow') return `${tool} is refused (${r.message})`;
+    }
+    return '';
+  },
+  createReport: ({ title, text }) => {
+    const thread = store.createThread({ title, kind: 'brain-update' });
+    store.appendMessage(thread.id, { role: 'assistant', parts: [{ type: 'text', text }] });
+    store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'The night prune: what went in, and its questions' });
+    datasync.saveNow('prune report').catch(() => {});
+    return thread.id;
+  },
+  log,
+  readPrompt,
+  today: todayLine,
+  dateDMY,
+  model: () => getState().model,
+  effort: () => getState().effort,
+});
+const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning;
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -194,7 +237,7 @@ const version = (() => {
     return { commit: '', date: '', subject: '' };
   }
 })();
-app.get('/api/health', (req, res) => res.json({ ok: true, busy: Boolean(isBusy()), version: version.commit }));
+app.get('/api/health', (req, res) => res.json({ ok: true, busy: Boolean(isBusy()), pruning: pruner.status().partRunning, version: version.commit }));
 
 app.get('/api/state', (req, res) => {
   cards.maybeMakeCards();
@@ -786,6 +829,13 @@ app.post('/api/brain/extract', (req, res) => {
   res.json(extraction.startExtraction({ only: req.body.only === 'mail' ? 'mail' : '' }));
 });
 
+// The night prune. The Pi's timer starts it with a POST from the Pi itself.
+app.post('/api/prune/start', (req, res) => {
+  if (!brain.brainStatus().ready) return res.json({ started: false, reason: brain.brainStatus().error || 'The brain is not cloned yet.' });
+  res.json(pruner.start({ deadline: req.body?.deadline }));
+});
+app.get('/api/prune', (req, res) => res.json(pruner.status()));
+
 app.get('/api/brain/runs', (req, res) => {
   res.json({ runs: extraction.lastRuns(15) });
 });
@@ -877,6 +927,8 @@ async function purgeWhenQuiet() {
   else { log(`app data: cleaning the saved history waits: ${r.reason}`); setTimeout(purgeWhenQuiet, 60 * 60_000).unref?.(); }
 }
 setTimeout(() => purgeWhenQuiet().catch((err) => log(`app data: cleaning the saved history failed: ${err.message}`)), 90_000).unref?.();
+// A night prune cut off by a restart (an update, a crash) carries on once the vault is ready.
+setTimeout(() => { if (brain.brainStatus().ready) pruner.resume(); }, 45_000).unref?.();
 store.events.on('connections-changed', () => store.events.emit('connections', {}));
 
 server.on('error', (err) => {

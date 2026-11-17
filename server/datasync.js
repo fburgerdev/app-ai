@@ -38,6 +38,7 @@ const IGNORE = [
   '/threads/*/work/',
   '/purge-history.json',
   '/link.json',
+  '/prune-run.json',
   '',
 ].join('\n');
 
