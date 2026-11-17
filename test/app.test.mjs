@@ -219,6 +219,21 @@ test('update brain raises the water level to the press, files the notes and empt
   assert.equal(reply.messages[0].auto, true);
   assert.equal(reply.thread.lastUserAt, 0, 'the app\'s own opening message is not something Florian said');
   assert.equal(reply.artifacts.length, 1);
+  // Sending the reply finishes the thread: it leaves the inbox.
+  const sent = await call('POST', `/api/threads/${reply.thread.id}/mail/send`, { name: reply.artifacts[0].name });
+  assert.equal(sent.status, 200);
+  assert.equal(sent.data.closed, true);
+  assert.equal((await thread(reply.thread.id)).thread.state, 'done', 'a sent reply closes its thread');
+});
+
+test('a sent reply closes the thread it was written in; other mails leave it open', async () => {
+  const { closesOnSend } = await import('../server/mail.js');
+  const open = (kind) => ({ id: 'x', kind, state: 'ready' });
+  assert.ok(closesOnSend(open('mail-reply'), { replyToThreadId: '' }));
+  assert.ok(closesOnSend(open(undefined), { replyToThreadId: 'T1' }), 'a reply from any thread');
+  assert.equal(closesOnSend(open(undefined), { replyToThreadId: '' }), null, 'a new mail leaves the thread open');
+  assert.equal(closesOnSend(open('card'), { replyToThreadId: 'T1' }), null, 'cards close themselves');
+  assert.equal(closesOnSend({ id: 'x', kind: 'mail-reply', state: 'working' }, {}), null, 'not while Claude works in it');
 });
 
 test('cards: made in the background, edited in place, accepted or declined, never made twice', async () => {
@@ -227,7 +242,8 @@ test('cards: made in the background, edited in place, accepted or declined, neve
   const opp = s.threads.find((t) => t.card?.type === 'opportunity');
   const chase = s.threads.find((t) => t.card?.type === 'chase');
   assert.equal(opp.card.channel, 'linkedin');
-  assert.equal(s.brain.waiting, 1, 'cards do not count as threads to file');
+  // The plan thread, and the reply thread with its note that the mail went out.
+  assert.equal(s.brain.waiting, 2, 'cards do not count as threads to file');
 
   assert.equal((await call('POST', `/api/threads/${opp.id}/messages`, { text: 'hi' })).status, 409, 'a card takes no reply');
   const text = await artifactText(opp.id, 'Message.md');
