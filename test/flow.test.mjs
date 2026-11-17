@@ -24,13 +24,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 git(dir, 'init', '--bare', '-b', 'main', remote);
 git(dir, 'init', '--bare', '-b', 'main', dataRemote);
 git(dir, 'clone', remote, seed);
-for (const d of ['Brain', 'Claude', '.obsidian', 'For Claude/processed']) fs.mkdirSync(path.join(seed, d), { recursive: true });
+for (const d of ['Core', 'Claude', '.obsidian', 'For Claude/processed']) fs.mkdirSync(path.join(seed, d), { recursive: true });
 fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
 fs.writeFileSync(path.join(seed, 'Scratchpad.md'), 'private scratch\n');
 fs.writeFileSync(path.join(seed, '.obsidian', 'workspace.json'), '{}\n');
 fs.writeFileSync(path.join(seed, 'For Claude', 'Inbox.md'), '\n');
 fs.writeFileSync(path.join(seed, 'For Claude', 'processed', 'old.md'), 'old\n');
-fs.writeFileSync(path.join(seed, 'Brain', 'Next Actions.md'), '- [ ] something\n');
+fs.writeFileSync(path.join(seed, 'Core', 'Next Actions.md'), '- [ ] something\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
 git(seed, 'checkout', '-B', 'main');
 git(seed, 'add', '-A');
@@ -156,16 +156,16 @@ test('only what is new since the last update is handed over, and questions come 
 
 test('a push from elsewhere is picked up before the next turn', async () => {
   git(seed, 'pull', 'origin', 'main');
-  fs.writeFileSync(path.join(seed, 'Brain', 'From Laptop.md'), 'hello\n');
+  fs.writeFileSync(path.join(seed, 'Core', 'From Laptop.md'), 'hello\n');
   fs.writeFileSync(path.join(seed, 'Scratchpad.md'), 'changed on the laptop\n');
   git(seed, 'add', '-A');
   git(seed, 'commit', '-m', 'inbox: test');
   git(seed, 'push', 'origin', 'main');
   await call('POST', '/api/brain/refresh', {});
-  assert.ok(fs.existsSync(path.join(data, 'brain', 'Brain', 'From Laptop.md')));
+  assert.ok(fs.existsSync(path.join(data, 'brain', 'Core', 'From Laptop.md')));
   assert.ok(!fs.existsSync(path.join(data, 'brain', 'Scratchpad.md')));
   const note = await call('GET', `/api/vault?link=${encodeURIComponent('From Laptop')}`);
-  assert.equal(note.data.path, 'Brain/From Laptop.md');
+  assert.equal(note.data.path, 'Core/From Laptop.md');
   const outside = await call('GET', `/api/vault?link=${encodeURIComponent('../../config.json')}`);
   assert.equal(outside.status, 404);
 });

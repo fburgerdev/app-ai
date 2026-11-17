@@ -8,7 +8,7 @@ For an entry that is worth preparing (a meeting with people outside his own grou
 - `where`: the place, if the calendar has one.
 - `important`: `true` for what deserves a real preparation (a fair, a conference, a talk he gives, a first meeting with an organisation, a meeting where something gets decided). Its thread opens a day before. `false` for smaller things (a call, a regular meeting with something new on it); those open on the day.
 - `why` says when it is and why it deserves preparing.
-- `project` is the project or area it belongs to, if the Brain shows one.
-- `text` is the brief for that thread: what the entry is, when and where, who is there as far as the calendar and the Brain show, and which notes to read. Ask it to write a short briefing (what he wants out of it, what is open with the people there, what to bring or have ready) and then to start a preparation session as `Claude/Thinking With Me.md` describes. For a small entry, a few lines of briefing are enough.
+- `project` is the project or area it belongs to, if the vault shows one.
+- `text` is the brief for that thread: what the entry is, when and where, who is there as far as the calendar and the vault show, and which notes to read. Ask it to write a short briefing (what he wants out of it, what is open with the people there, what to bring or have ready) and then to start a preparation session as `Claude/Thinking With Me.md` describes. For a small entry, a few lines of briefing are enough.
 
 Skip routine entries (travel, blocks of working time, private appointments, recurring internal meetings with nothing new) and anything already past. At most four preps per run. Most runs find nothing to prepare; that is normal.

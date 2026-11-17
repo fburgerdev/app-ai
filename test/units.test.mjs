@@ -23,9 +23,9 @@ test('thread policy: writes only into the artifacts folder', async () => {
   const artifactsDir = path.resolve('/data/threads/t1/artifacts');
   const can = buildPolicy({ mode: 'thread', cwd, artifactsDir, shell: false });
   assert.equal((await can('Write', { file_path: path.join(artifactsDir, 'Mail.md') })).behavior, 'allow');
-  assert.equal((await can('Write', { file_path: path.join(cwd, 'Brain', 'X.md') })).behavior, 'deny');
+  assert.equal((await can('Write', { file_path: path.join(cwd, 'Core', 'X.md') })).behavior, 'deny');
   assert.equal((await can('Edit', { file_path: path.join(artifactsDir, '..', '..', 'other', 'x.md') })).behavior, 'deny');
-  assert.equal((await can('Read', { file_path: path.join(cwd, 'Brain', 'X.md') })).behavior, 'allow');
+  assert.equal((await can('Read', { file_path: path.join(cwd, 'Core', 'X.md') })).behavior, 'allow');
   assert.equal((await can('Read', { file_path: path.resolve('/home/someone/.ssh/id_rsa') })).behavior, 'deny');
   assert.equal((await can('WebSearch', { query: 'x' })).behavior, 'allow');
   assert.equal((await can('Bash', { command: 'ls' })).behavior, 'deny');
@@ -57,26 +57,26 @@ test('thread policy: without a repo, scripts run in the artifacts folder and now
   const off = buildPolicy({ mode: 'thread', cwd, artifactsDir, shell: false, artifactsShell: false });
   assert.equal((await off('Bash', { command: `cd "${artifactsDir}" && ls` })).behavior, 'deny');
   // Writes stay where they were: only the artifacts folder.
-  assert.equal((await can('Write', { file_path: path.join(cwd, 'Brain', 'X.md') })).behavior, 'deny');
+  assert.equal((await can('Write', { file_path: path.join(cwd, 'Core', 'X.md') })).behavior, 'deny');
   assert.equal(startsIn('  cd /d "C:\\x\\a" && dir', path.resolve('C:\\x\\a')), true);
 });
 
 test('brain update policy: vault only, protected paths never, no git history, no web', async () => {
   const cwd = path.resolve('/vault');
   const can = buildPolicy({ mode: 'extract', cwd, readDirs: [path.resolve('/run/transcripts')], protectedPaths: ['Scratchpad.md', '.obsidian', 'For Claude', 'For Florian'] });
-  assert.equal((await can('Write', { file_path: path.join(cwd, 'Brain', 'Areas', 'X.md') })).behavior, 'allow');
+  assert.equal((await can('Write', { file_path: path.join(cwd, 'Core', 'Areas', 'X.md') })).behavior, 'allow');
   assert.equal((await can('Write', { file_path: path.join(cwd, 'Scratchpad.md') })).behavior, 'deny');
   assert.equal((await can('Edit', { file_path: path.join(cwd, 'For Claude', 'Inbox.md') })).behavior, 'deny');
   assert.equal((await can('Write', { file_path: path.resolve('/elsewhere/x.md') })).behavior, 'deny');
   assert.equal((await can('Read', { file_path: path.resolve('/run/transcripts/01 A.md') })).behavior, 'allow');
   assert.equal((await can('Bash', { command: 'git mv "Artifacts/Mails/a.md" "Artifacts/Mails/sent/a.md"' })).behavior, 'allow');
   assert.equal((await can('Bash', { command: 'git commit -m x' })).behavior, 'deny');
-  assert.equal((await can('Bash', { command: 'cd Brain && git push' })).behavior, 'deny');
+  assert.equal((await can('Bash', { command: 'cd Core && git push' })).behavior, 'deny');
   assert.equal((await can('WebFetch', { url: 'https://example.com' })).behavior, 'deny');
 });
 
 test('tool lines read like sentences', () => {
-  assert.equal(describeTool('Read', { file_path: '/vault/Brain/Next Actions.md' }, '/vault'), 'Read Brain/Next Actions.md');
+  assert.equal(describeTool('Read', { file_path: '/vault/Core/Next Actions.md' }, '/vault'), 'Read Core/Next Actions.md');
   assert.equal(describeTool('WebFetch', { url: 'https://example.com/a/b' }), 'Read example.com');
   assert.equal(describeTool('TodoWrite', {}), null);
 });
@@ -136,29 +136,29 @@ test('a note renamed without a commit is found under its new name, and the old n
   const { projectContext } = await import('../server/projects.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-rename-'));
   const run = (...args) => execFileSync('git', args, { cwd: dir, windowsHide: true });
-  fs.mkdirSync(path.join(dir, 'Brain', 'Projects'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'Brain', 'Projects', 'Old Talk.md'), '# Old Talk\n');
+  fs.mkdirSync(path.join(dir, 'Core', 'Projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Core', 'Projects', 'Old Talk.md'), '# Old Talk\n');
   run('init', '--quiet');
   run('add', '-A');
   run('-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '--quiet', '-m', 'seed');
   brain.initBrain({ brainDir: dir, hiddenPaths: [] });
   assert.equal((await brain.ensureClone()).ready, true);
-  assert.equal(projectContext('Old Talk')[0].path, 'Brain/Projects/Old Talk.md');
+  assert.equal(projectContext('Old Talk')[0].path, 'Core/Projects/Old Talk.md');
   // A brain update that is still writing: the file moves, the commit has not happened.
-  fs.renameSync(path.join(dir, 'Brain', 'Projects', 'Old Talk.md'), path.join(dir, 'Brain', 'Projects', 'New.md'));
+  fs.renameSync(path.join(dir, 'Core', 'Projects', 'Old Talk.md'), path.join(dir, 'Core', 'Projects', 'New.md'));
   assert.deepEqual(projectContext('Old Talk'), []);
-  assert.equal(brain.resolveWikilink('New').path, 'Brain/Projects/New.md');
+  assert.equal(brain.resolveWikilink('New').path, 'Core/Projects/New.md');
   // Once the rename is committed, a thread still filed under the old name follows it.
   const { renamedTo } = await import('../server/projects.js');
-  fs.writeFileSync(path.join(dir, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## No area\n\n- [[New]] — the talk\n');
+  fs.writeFileSync(path.join(dir, 'Core', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## No area\n\n- [[New]] — the talk\n');
   run('add', '-A');
   run('-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '--quiet', '-m', 'rename');
   await brain.ensureClone();
   assert.equal(renamedTo('Old Talk'), 'New');
   assert.equal(renamedTo('Never Existed'), '', 'only a rename git knows of is followed');
   // A second rename: the old name follows the whole chain.
-  fs.renameSync(path.join(dir, 'Brain', 'Projects', 'New.md'), path.join(dir, 'Brain', 'Projects', 'Newest.md'));
-  fs.writeFileSync(path.join(dir, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## No area\n\n- [[Newest]] — the talk\n');
+  fs.renameSync(path.join(dir, 'Core', 'Projects', 'New.md'), path.join(dir, 'Core', 'Projects', 'Newest.md'));
+  fs.writeFileSync(path.join(dir, 'Core', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## No area\n\n- [[Newest]] — the talk\n');
   run('add', '-A');
   run('-c', 'user.name=t', '-c', 'user.email=t@example.org', 'commit', '--quiet', '-m', 'rename again');
   await brain.ensureClone();

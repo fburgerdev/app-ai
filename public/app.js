@@ -453,7 +453,7 @@ function treeNodes() {
   }));
   const row = (x, grey) => outlineRow({ ...x, grey, hereName });
   const each = 'One thread each, for those without an open thread';
-  // Areas: the ranked ones in the order of 30,000 ft (Brain/Horizons), each with its
+  // Areas: the ranked ones in the order of 30,000 ft (Core/Horizons), each with its
   // number; then a quiet divider; then the ones left out of the ranking, alphabetically
   // and looking the same, since they are outside the ranking, not below it.
   const rankOf = new Map(t.groups.filter((g) => g.isArea && g.rank).map((g) => [g.name, g]));

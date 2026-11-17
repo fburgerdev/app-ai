@@ -1,6 +1,6 @@
 // Next Actions as sleeping threads.
 //
-// A line in Brain/Next Actions.md and a thread in the inbox are two states of the same
+// A line in Core/Next Actions.md and a thread in the inbox are two states of the same
 // to-do: asleep ("I will do this, not now") and awake ("I am working on it").
 //
 //   wake    Florian starts a line: it becomes a thread in the inbox, opening with a
@@ -20,7 +20,7 @@ import * as runner from './runner.js';
 import { isKnownProject } from './projects.js';
 import { readPrompt } from './util.js';
 
-const FILE = 'Brain/Next Actions.md';
+const actionsFile = () => brain.corePath('Next Actions.md');
 const unlink = (s) => s.replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1');
 
 export function parse(text) {
@@ -38,7 +38,7 @@ export function parse(text) {
 const awake = () => store.listThreads().filter((t) => t.nextAction && !t.nextAction.removed);
 
 export function list() {
-  const file = brain.readVaultFile(FILE);
+  const file = brain.readVaultFile(actionsFile());
   const lines = file ? parse(fs.readFileSync(file.full, 'utf8')) : [];
   const woken = new Set(awake().map((t) => t.nextAction.text));
   return {
@@ -49,7 +49,7 @@ export function list() {
 }
 
 export function wake({ project, text }) {
-  const file = brain.readVaultFile(FILE);
+  const file = brain.readVaultFile(actionsFile());
   const line = file && parse(fs.readFileSync(file.full, 'utf8')).find((l) => l.text === text && (!project || l.project === project));
   if (!line) throw new Error('That line is not in Next Actions any more.');
   if (awake().some((t) => t.nextAction.text === line.text)) throw new Error('That one is already awake.');

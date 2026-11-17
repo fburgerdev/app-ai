@@ -323,10 +323,10 @@ test('the app answers under its allowed names and no others', async () => {
 test('what Claude reads from the vault is logged', async () => {
   const lines = fs.readFileSync(path.join(data, 'reads.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const file = lines.find((l) => l.kind === 'file' && l.by === 'thread');
-  assert.equal(file.path, 'Brain/Next Actions.md');
+  assert.equal(file.path, 'Core/Next Actions.md');
   assert.deepEqual(file.lines, [1, 40]);
   assert.ok(file.threadId);
   const search = lines.find((l) => l.kind === 'search');
-  assert.equal(search.path, 'Brain');
+  assert.equal(search.path, 'Core');
   assert.equal(search.pattern, 'deadline');
 });

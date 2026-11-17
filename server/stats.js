@@ -49,11 +49,14 @@ const count = (times, p) => times.filter((t) => t >= p.from && t < p.to).length;
 // Notes added and removed under a vault folder, by the date of the commit.
 function vaultChanges(folder) {
   const dir = brain.brainDir();
+  // The notes' folder was called Brain/ until 17-11-2026; its history counts under both
+  // names. Renaming the folder moved every note (-M sees a move, not an add and a delete).
+  const names = [...new Set([brain.coreName(), 'Brain'])];
   const out = { added: [], removed: [] };
   if (!dir || !fs.existsSync(path.join(dir, '.git'))) return out;
   let text = '';
   try {
-    text = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=AD', '--name-status', '--format=@%ct', '--', folder],
+    text = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=AD', '--name-status', '--format=@%ct', '--', ...names.map((c) => `${c}/${folder}`)],
       { cwd: dir, encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
   } catch { return out; }
   let ts = 0;
@@ -63,7 +66,7 @@ function vaultChanges(folder) {
     if (!m) continue;
     const file = m[2];
     // Only notes directly in the folder; the index and roster files are not things.
-    if (!file.endsWith('.md') || path.posix.dirname(file) !== folder) continue;
+    if (!file.endsWith('.md') || !names.some((c) => path.posix.dirname(file) === `${c}/${folder}`)) continue;
     if (NOT_NOTES.has(path.posix.basename(file, '.md'))) continue;
     (m[1] === 'A' ? out.added : out.removed).push(ts);
   }
@@ -119,9 +122,9 @@ export function stats(now = Date.now()) {
   const cards = readCardLog().filter((e) => e.type !== 'prep');
   for (const e of cards) if (e.outcome === 'accepted' && e.how === 'sent') sent.push(e.ts);
   const runs = lastRuns(10_000).filter((r) => r.status === 'updated' && r.finishedAt);
-  const projects = vaultChanges('Brain/Projects');
-  const people = vaultChanges('Brain/People');
-  const areas = vaultChanges('Brain/Areas');
+  const projects = vaultChanges('Projects');
+  const people = vaultChanges('People');
+  const areas = vaultChanges('Areas');
   const costs = usageCosts();
 
   const rows = [

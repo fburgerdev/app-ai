@@ -19,6 +19,7 @@ import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
 import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
+import { lastThreadOn } from './threadexport.js';
 import * as repos from './repos.js';
 import * as repair from './repair.js';
 import * as ship from './ship.js';
@@ -125,6 +126,18 @@ export function stopTurn(threadId) {
   return true;
 }
 
+// The last thread on this thread's project, as the vault holds it: named, so that a new
+// thread reads it once, in full. Everything else in Threads/ is only searched.
+function lastThreadNote(thread) {
+  let last = null;
+  try { last = lastThreadOn(brain.brainDir(), thread.project, { exceptId: thread.id, cacheKey: brain.brainStatus().head }); } catch { /* starts without it */ }
+  if (!last) return [];
+  return [
+    '',
+    `The last thread on "${thread.project}" before this one is \`${last.path}\` ("${last.title}", last written in ${dateTimeDMY(last.last)}). If you have not read it in this thread yet, read it in full before you answer: it holds where the work stood, in more detail than the note's \`Left off:\` line. What Claude said in it is what Claude proposed then, not what Florian decided.`,
+  ];
+}
+
 function threadInstructions(thread) {
   const preload = brain.readPreload();
   const preloadText = preload.length
@@ -145,6 +158,7 @@ function threadInstructions(thread) {
         `Its notes are included here in full, current as of this turn, so do not read them again: ${project.map((f) => `\`${f.path}\``).join(', ')}. Work from them; they are where this project's state lives.`,
         '',
         ...project.map((f) => `<vault-file path="${f.path}">\n${f.text.trim()}\n</vault-file>`),
+        ...lastThreadNote(thread),
       ].join('\n')
     : '';
   const g = google.googleStatus();
