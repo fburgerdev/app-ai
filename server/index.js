@@ -207,8 +207,11 @@ vendor('/vendor/fonts/literata', '@fontsource-variable/literata');
 vendor('/vendor/fonts/instrument-sans', '@fontsource-variable/instrument-sans');
 vendor('/vendor/fonts/jetbrains-mono', '@fontsource-variable/jetbrains-mono');
 // The mail file format is the same code on both sides.
-app.get('/mail.js', (req, res) => res.type('text/javascript').sendFile(path.join(ROOT, 'server', 'mail.js')));
-app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'] }));
+app.get('/mail.js', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.type('text/javascript').sendFile(path.join(ROOT, 'server', 'mail.js')); });
+// The page and its modules are always checked against the server (a 304 when unchanged),
+// never taken from the browser's cache on trust: after the app updates itself, a cached
+// old module next to a new one stops the whole page (17-11-2026).
+app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'], setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 // ---------- state and live updates ----------
 // `local` says whether the browser runs on the same computer as the app. Opening a file

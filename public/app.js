@@ -2410,7 +2410,9 @@ function checkSleep() {
   if (sleepScreen.hidden) {
     sleepScreen.hidden = false;
     document.body.classList.add('is-asleep');
-    closePickers();
+    // At the very start the pickers do not exist yet (closePickers is defined further
+    // down): calling it then stopped the whole page, 17-11-2026.
+    try { closePickers(); } catch { /* nothing open yet */ }
     if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   }
 }
