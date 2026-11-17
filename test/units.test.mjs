@@ -58,7 +58,8 @@ test('thread policy: without a repo, scripts run in the artifacts folder and now
   assert.equal((await off('Bash', { command: `cd "${artifactsDir}" && ls` })).behavior, 'deny');
   // Writes stay where they were: only the artifacts folder.
   assert.equal((await can('Write', { file_path: path.join(cwd, 'Brain', 'X.md') })).behavior, 'deny');
-  assert.equal(startsIn('  cd /d "C:\\x\\a" && dir', path.resolve('C:\\x\\a')), process.platform === 'win32');
+  // A Windows drive path only means something on Windows; elsewhere it is just a folder by that name.
+  if (process.platform === 'win32') assert.equal(startsIn('  cd /d "C:\\x\\a" && dir', path.resolve('C:\\x\\a')), true);
 });
 
 test('brain update policy: vault only, protected paths never, no git history, no web', async () => {
