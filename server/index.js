@@ -891,6 +891,19 @@ events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
 setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillSignatures().catch(() => {}); }, 20_000).unref?.();
+// Turns that will never finish go back to the inbox, but only by the computer that knows:
+// its own, at once; the other computer's only when that one is gone and this one works.
+const settle = () => {
+  const l = link.status();
+  const otherGone = link.mayRunBackground() && (!l.enabled || !l.online);
+  const n = store.settleOrphans({ isRunning: runner.isRunning, otherGone });
+  if (n) log(`threads: ${n} turn(s) that will not finish went back to the inbox`);
+};
+setTimeout(() => {
+  settle();
+  if (link.mayRunBackground()) { const n = store.clearFalseErrors(); if (n) log(`threads: cleared a false "ended on an error" from ${n} finished thread(s)`); }
+}, 5000).unref?.();
+setInterval(settle, 60_000).unref?.();
 // Threads from before the workbench: what a script left among the shown files leaves
 // the list, once per thread (store.pruneArtifacts). A thread Claude works on now waits.
 setTimeout(() => {
