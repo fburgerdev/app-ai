@@ -6,6 +6,7 @@ The app signs in to Google as you, through a Google Cloud project that belongs t
 
 - Threads can search and read your mail, read your calendar, and add an entry to it. Entries they add are orange (Pumpkin) and can carry a Google Meet link; they never have guests.
 - A mail Claude writes gets two buttons: **Put in Gmail** (a draft) and **Send** (after one confirmation). Only your click uses them.
+- Sending a reply archives its conversation in Gmail (out of the inbox, still in All Mail; an answer brings it back) and closes the thread in the app.
 - "Update brain" also reads the mail that arrived and went out since the last update.
 
 Claude has no tool for saving drafts, sending mail, deleting anything or inviting people, so a thread cannot do those, whatever it is told. Sending exists only behind the Send button.
@@ -24,7 +25,7 @@ Claude has no tool for saving drafts, sending mail, deleting anything or invitin
    "google": { "clientId": "….apps.googleusercontent.com", "clientSecret": "…" }
    ```
 7. Restart the app. Open **Settings** (top right) → **Connections** and press **Connect Google**. Sign in with the account that holds your mail (the personal one; PBU mail is forwarded into it).
-8. Google shows a warning that the app is not verified. That is expected for your own project: choose "Advanced" → "Go to … (unsafe)", then allow the three permissions.
+8. Google shows a warning that the app is not verified. That is expected for your own project: choose "Advanced" → "Go to … (unsafe)", then tick every permission Google lists (mail, drafts, managing mail, calendar entries).
 
 Connections now shows "connected". Every new turn in every thread can use mail and calendar.
 
@@ -33,3 +34,4 @@ Connections now shows "connected". Every new turn in every thread can use mail a
 - The sign-in is kept in `google-token.json` in the app's data folder. "Disconnect" in Connections deletes it. To withdraw access on Google's side as well: https://myaccount.google.com/permissions.
 - A mail is a file in its thread. You can edit it there, and every version is kept, yours and Claude's.
 - If a thread reports that Google refused the sign-in, connect again in Connections.
+- A sign-in from before 17-11-2026 cannot archive. Connections then shows **Connect Google again**; press it and allow everything.

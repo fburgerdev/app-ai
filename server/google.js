@@ -12,8 +12,10 @@ import { GOOGLE_TOKEN_FILE, log } from './config.js';
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.compose', // needed for drafts
+  'https://www.googleapis.com/auth/gmail.modify', // archiving a conversation once its reply is sent
   'https://www.googleapis.com/auth/calendar.events',
 ];
+const MODIFY = 'https://www.googleapis.com/auth/gmail.modify';
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CALENDAR = 'https://www.googleapis.com/calendar/v3';
 
@@ -45,7 +47,11 @@ function writeToken(token) {
 export function googleStatus() {
   const configured = Boolean(config.google.clientId && config.google.clientSecret);
   const token = readToken();
-  return { configured, connected: Boolean(configured && token?.refresh_token), email: token?.email || '' };
+  const connected = Boolean(configured && token?.refresh_token);
+  // A sign-in from before archiving existed holds no record of its permissions; it has
+  // to be made again before Send can archive.
+  const canArchive = connected && String(token.scope || '').split(' ').includes(MODIFY);
+  return { configured, connected, canArchive, email: token?.email || '' };
 }
 
 export const googleConnected = () => googleStatus().connected;
@@ -88,6 +94,7 @@ export async function finishAuth({ code, state }) {
     refresh_token: data.refresh_token,
     access_token: data.access_token,
     expires: Date.now() + (data.expires_in || 3600) * 1000,
+    scope: data.scope || '', // what he actually allowed; he can untick a permission
     email: '',
   };
   writeToken(token);
@@ -261,6 +268,14 @@ export async function gmailSend({ draftId, replyToThreadId, from, to, cc, bcc, s
   const saved = await gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body });
   const sent = await api(`${GMAIL}/drafts/send`, { method: 'POST', body: { id: saved.draftId } });
   return { messageId: sent.id, threadId: sent.threadId };
+}
+
+// Archives a conversation: it leaves the Gmail inbox and stays in All Mail. A later
+// answer brings it back to the inbox, as in Gmail itself. Only ever called after the
+// Send button sent a reply in it; no tool Claude has leads here.
+export async function gmailArchiveThread({ threadId }) {
+  if (!googleStatus().canArchive) throw new Error('Gmail has not allowed archiving yet. Connect Google again under Connections.');
+  await api(`${GMAIL}/threads/${encodeURIComponent(threadId)}/modify`, { method: 'POST', body: { removeLabelIds: ['INBOX'] } });
 }
 
 // Automated mail: no person wrote it and nobody answers it. Mail Florian sent is never
