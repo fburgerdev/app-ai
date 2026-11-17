@@ -921,12 +921,17 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
     try {
       await save();
       await saving;
-      await api('POST', `/api/threads/${threadId}/mail/${path}`, { name, reason: reason ? reason() : '' });
+      const out = await api('POST', `/api/threads/${threadId}/mail/${path}`, { name, reason: reason ? reason() : '' });
       ok = true;
-      toast(okText);
+      toast(out.closed ? `${okText} The thread is done.` : okText);
       document.activeElement?.blur();
       if (onDecided) onDecided();
-      else { await onArtifacts({ threadId }); }
+      else if (out.closed) {
+        // A sent reply closes its thread: it leaves the inbox and the next one opens.
+        S.threads.set(threadId, out.thread);
+        renderRail(); renderTree();
+        if (S.current === threadId) advance(threadId);
+      } else { await onArtifacts({ threadId }); }
     } catch (err) { toast(err.message); } finally {
       acting = false;
       // After a failure the card is as it was, so he can try again.

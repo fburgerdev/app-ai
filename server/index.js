@@ -32,7 +32,7 @@ import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
 import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
-import { parseMail } from './mail.js';
+import { parseMail, closesOnSend } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import * as drafts from './drafts.js';
 import { dateDMY, dateTimeDMY, readPrompt, todayLine } from './util.js';
@@ -799,7 +799,16 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
         text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.mail.to}. Subject: ${m.mail.subject}.]`,
       });
     }
-    res.json({ ok: true, thread: store.getThread(m.thread.id) });
+    // A reply sent from a mail thread finishes that thread: it leaves the inbox, as if he
+    // had marked it done (Florian, 17-11-2026). The next brain update files and archives it.
+    const closed = closesOnSend(store.getThread(m.thread.id), m.mail);
+    if (closed) {
+      queue.recordDecision('done', closed);
+      store.updateThread(closed.id, { state: 'done', doneAt: Date.now(), error: '' });
+      runner.sign(closed.id, { again: true }).catch(() => {});
+      cards.maybeMakeCards();
+    }
+    res.json({ ok: true, closed: Boolean(closed), thread: store.getThread(m.thread.id) });
   } catch (err) {
     res.status(502).json({ error: err.message });
   } finally {

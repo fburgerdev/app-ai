@@ -32,6 +32,15 @@ export function parseMail(text) {
   };
 }
 
+// The thread a sent mail closes, or null. A reply finishes the thread it was written in:
+// a thread the app opened for a mail to answer, or any other thread when the mail answers
+// a conversation in Gmail. Cards close themselves; a thread Claude is still working in or
+// already closed is left as it is.
+export function closesOnSend(thread, mail) {
+  if (!thread || thread.kind === 'card' || thread.state !== 'ready') return null;
+  return thread.kind === 'mail-reply' || mail?.replyToThreadId ? thread : null;
+}
+
 export function serializeMail(mail) {
   const head = { ...mail, 'reply-to-thread': mail.replyToThreadId };
   const lines = ['---', 'type: mail'];
