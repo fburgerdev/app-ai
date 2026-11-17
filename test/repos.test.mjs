@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { repoName } from '../server/repos.js';
+import { acquire, holder, holderName, jobHolder, release, repoName } from '../server/repos.js';
 import { cleanup, freePort } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,6 +21,22 @@ test('repo names are read the ways Florian writes them', () => {
   assert.equal(repoName('https://github.com/fburgerdev/brain.git'), 'fburgerdev/brain');
   assert.equal(repoName('../../etc'), null);
   assert.equal(repoName('a b'), null);
+});
+
+test('a job holds a repo until it gives it back; a waiter that gave up is not handed it later', async () => {
+  const r = 'fburgerdev/lock-test';
+  const job = jobHolder('brain update');
+  assert.equal(await acquire(r, job), true);
+  assert.equal(holderName(r), 'the brain update');
+  // A thread the app does not know holds nothing, but a job is not a thread and still holds.
+  assert.equal(await acquire(r, 'some-thread', { wait: false }), false, 'the job is not pushed aside');
+  assert.equal(await acquire(r, 'gave-up', { timeoutMs: 30 }), false, 'gives up after its time');
+  const later = acquire(r, 'still-waiting');
+  release(r, job);
+  assert.equal(await later, true);
+  assert.equal(holder(r), 'still-waiting', 'the one that gave up left the queue');
+  release(r, 'still-waiting');
+  assert.equal(holder(r), null);
 });
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-repos-'));
@@ -216,6 +232,20 @@ test('a repo he agreed to is created, gets its first commit, and the thread work
   const made = path.join(hub, 'fburgerdev', 'ytvideo-gtd-framework.git');
   assert.equal(git(made, 'log', '--format=%s', 'main').trim(), 'Start');
   assert.deepEqual((await repoStatus(t.id)).files, [{ name: 'README.md', status: 'A' }]);
+});
+
+test('a brain update waits for a thread that is changing the vault, then runs', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'Rename a folder in the vault' })).data.thread;
+  await ready(t.id);
+  const working = turn(t.id, 'REPO-TEST=brain REPO-SLOW=6000 rename it');
+  await until(async () => (await thread(t.id)).thread.repo === 'fburgerdev/brain' && (await thread(t.id)).thread.repoBranch, 'the thread holds the vault', 15000);
+  assert.equal((await call('POST', '/api/brain/extract', {})).data.started, true);
+  const waiting = await until(async () => { const b = (await call('GET', '/api/state')).data.brain; return /^Waiting for "Rename a folder in the vault", which is changing the vault/.test(b.step) ? b : null; }, 'the update says it waits', 5000);
+  assert.equal(waiting.brain.writing, false, 'it has not touched the vault yet');
+  await working;
+  await until(async () => !(await call('GET', '/api/state')).data.brain.running, 'the update ran after the thread', 45000);
+  const run = (await call('GET', '/api/brain/runs')).data.runs[0];
+  assert.notEqual(run?.status, 'failed', JSON.stringify(run));
 });
 
 test('the stats count what happened', async () => {

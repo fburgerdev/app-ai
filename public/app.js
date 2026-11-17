@@ -1978,7 +1978,7 @@ async function showRepo(panel) {
   const tools = [h('a', { class: 'btn btn-quiet', href: st.url, target: '_blank', rel: 'noopener' }, 'GitHub')];
   panelFrame(st.repo, tools, body);
 
-  if (st.holder) body.append(h('p', { class: 'panel-note repo-busy' }, `“${st.holder}” is working in this repo right now. This thread waits for it before Claude touches the repo.`));
+  if (st.holder) body.append(h('p', { class: 'panel-note repo-busy' }, `${st.holderJob ? st.holder : `“${st.holder}”`} is working in this repo right now. This thread waits for it before Claude touches the repo.`));
   if (!st.cloned || !st.branch) {
     body.append(h('p', { class: 'panel-note' }, st.merged ? 'Merged into ' + st.main + '. The next change Claude makes starts a fresh branch.'
       : !st.cloned ? 'Not on the app’s machine yet. It is cloned the moment Claude opens it.'
