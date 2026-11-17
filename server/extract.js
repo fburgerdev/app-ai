@@ -29,7 +29,8 @@ import { readCardLog } from './cards.js';
 import { saveNow } from './datasync.js';
 import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
-import { report } from './repair.js';
+import { exportThreads } from './threadexport.js';
+import { report as reportFailure } from './repair.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
@@ -146,8 +147,8 @@ function writeThreads(dir, changed) {
       `Started: ${dateTimeDMY(thread.createdAt)}`,
       `Project or area: ${thread.project || 'none named'}`,
       `Closed by Florian: ${thread.state === 'done' ? 'yes' : 'no, still open'}`,
-      ...(thread.nextAction && !thread.nextAction.removed ? [`Woken from Next Actions: Florian started this thread from the line "${thread.nextAction.text}" under "${thread.nextAction.project || 'no project'}" in \`Brain/Next Actions.md\`. Remove that line from the file.`] : []),
-      ...(thread.deferred ? [`Deferred by Florian, ${dateTimeDMY(thread.deferredAt)}: he put this thread to sleep. File what it produced, then write its to-do as one line into \`Brain/Next Actions.md\` (see "Next actions" in your instructions). The app deletes the thread afterwards.`] : []),
+      ...(thread.nextAction && !thread.nextAction.removed ? [`Woken from Next Actions: Florian started this thread from the line "${thread.nextAction.text}" under "${thread.nextAction.project || 'no project'}" in \`${brain.corePath('Next Actions.md')}\`. Remove that line from the file.`] : []),
+      ...(thread.deferred ? [`Deferred by Florian, ${dateTimeDMY(thread.deferredAt)}: he put this thread to sleep. File what it produced, then write its to-do as one line into \`${brain.corePath('Next Actions.md')}\` (see "Next actions" in your instructions). The app deletes the thread afterwards.`] : []),
       ...(thread.spunFrom ? [`Spin-off: Florian spun this thread off from the thread "${thread.spunTitle}". Its first ${thread.spunAt} messages are a copy of that thread and are filed from there.`] : []),
       '',
       '## Files Claude made in this thread',
@@ -232,8 +233,9 @@ export function parseReport(text) {
 }
 
 // What changed in the vault, for display. Session files in Artifacts/Thinking hold what
-// Claude read into a session; the vault says those are never shown to Florian.
-const visibleChanges = (changes) => changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/'));
+// Claude read into a session; the vault says those are never shown to Florian. The
+// thread files are the app's own export of what he already knows: the conversations.
+const visibleChanges = (changes) => changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/') && !c.path.startsWith(`${brain.THREADS_FOLDER}/`));
 
 export function startExtraction({ only = '' } = {}) {
   if (current) return { started: false, reason: 'A brain update is already running.' };
@@ -261,7 +263,7 @@ export function startExtraction({ only = '' } = {}) {
   runExtraction(id, changed, pressedAt, mailOnly)
     .catch((err) => {
       log(`brain update failed: ${err.stack || err.message}`);
-      report('the brain update', err.stack || err.message);
+      reportFailure('the brain update', err.stack || err.message);
       return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {
@@ -366,7 +368,9 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
       mode: 'extract',
       artifactsDir: null,
       readDirs: [dir],
-      protectedPaths: config.protectedPaths,
+      // Threads/ is written by the app's export alone, and what is in Archive/ is frozen:
+      // a note is moved there (git mv), never edited there.
+      protectedPaths: [...config.protectedPaths, brain.THREADS_FOLDER, brain.ARCHIVE_FOLDER],
       title: `${mailOnly ? 'Gmail update' : 'Brain update'} ${dateDMY()}`,
       fake: config.fake,
       onEvent: (ev) => {
@@ -378,6 +382,18 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
     if (result.error) throw new Error(result.error);
 
     const report = parseReport(result.finalText || result.text);
+    // The threads as they stand now, written into the vault by the app itself; they go
+    // into the same commit. A failure here must not cost the update what it filed.
+    if (!mailOnly) {
+      setStep('Writing the threads into the vault');
+      try {
+        const done = exportThreads(brain.brainDir());
+        log(`brain update: ${done.total} threads in the vault, ${done.written} written, ${done.renamed} renamed`);
+      } catch (err) {
+        log(`brain update: the threads could not be written into the vault: ${err.stack || err.message}`);
+        reportFailure('writing the threads into the vault', err.stack || err.message);
+      }
+    }
     setStep('Committing and pushing');
     const subject = report.subject || `thinking: the app, ${dateDMY()}`;
     const committed = await brain.commitAndPush({
@@ -423,7 +439,8 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
     return {
       ...base,
       finishedAt: Date.now(),
-      status: committed ? 'updated' : 'nothing',
+      // A commit that holds nothing but thread files filed nothing new.
+      status: committed && (visibleChanges(committed.changes).length || committed.changes.some((c) => c.path.startsWith('Artifacts/Thinking/'))) ? 'updated' : 'nothing',
       written: report.written,
       hasQuestions: Boolean(report.questions),
       questionsThread,

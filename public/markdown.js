@@ -99,7 +99,7 @@ const marked = new Marked({
 
 const CALLOUT = /^\s*\[!(\w+)\][+-]?\s*(.*)$/;
 // Inline code that names a vault file becomes a link to it.
-const VAULT_PATH = /^(Brain|Claude|Artifacts|Files|For Florian|For Claude)\/[^<>:"|?*]+\.[a-z0-9]{1,5}$/i;
+const VAULT_PATH = /^(Core|Brain|Threads|Archive|Claude|Artifacts|Files|For Florian|For Claude)\/[^<>:"|?*]+\.[a-z0-9]{1,5}$/i;
 
 function decorate(root) {
   // Maths

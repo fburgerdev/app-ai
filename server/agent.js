@@ -457,12 +457,12 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   if (mode === 'extract') {
     onEvent?.({ type: 'tool', name: 'Read', summary: 'Read CLAUDE.md' });
     await sleep(150 * speed);
-    const dir = path.join(cwd, 'Brain');
+    const dir = path.join(cwd, fs.existsSync(path.join(cwd, 'Brain')) && !fs.existsSync(path.join(cwd, 'Core')) ? 'Brain' : 'Core');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, 'App Test.md');
     const stamp = new Date().toISOString();
     fs.appendFileSync(file, `- stand-in brain update at ${stamp}\n`);
-    onEvent?.({ type: 'tool', name: 'Edit', summary: 'Edited Brain/App Test.md' });
+    onEvent?.({ type: 'tool', name: 'Edit', summary: 'Edited Core/App Test.md' });
     const transcripts = (readDirs || []).flatMap((dir) => fs.readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .map((name) => fs.readFileSync(path.join(dir, name), 'utf8')));
@@ -473,7 +473,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       'COMMIT: thinking: stand-in brain update from the app',
       '',
       '## Written',
-      '- Brain/App Test.md — one test line',
+      '- Core/App Test.md — one test line',
       ...(wantsQuestions ? ['', '## Questions', '**App test**', '1. Add "Call the office" to Next Actions?'] : []),
       ...(wantsReply ? ['', '## Mail to answer', '- T-EXAMPLE | Terminvorschlag | asks for a date'] : []),
     ].join('\n');
@@ -487,7 +487,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     const stamp = Date.now().toString(36);
     // Names from the vault's own index, so the stand-in's cards land in real folders.
     let index = '';
-    try { index = fs.readFileSync(path.join(cwd, 'Brain', 'Projects', 'Projects Index.md'), 'utf8'); } catch { /* no index */ }
+    try { index = fs.readFileSync(path.join(cwd, fs.existsSync(path.join(cwd, 'Core')) ? 'Core' : 'Brain', 'Projects', 'Projects Index.md'), 'utf8'); } catch { /* no index */ }
     const someProject = /^- \[\[([^\]]+)\]\]/m.exec(index)?.[1] || '';
     const someArea = /^## \[\[([^\]]+)\]\]/m.exec(index)?.[1] || '';
     fs.writeFileSync(path.join(artifactsDir, 'one.json'), JSON.stringify({
@@ -563,10 +563,10 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     await spinOff({ title: `Only ${wanted[1].trim()}`, task: `Work only on ${wanted[1].trim()}.` });
   }
   text += await say('Let me look at what the vault has on this.\n\n');
-  onEvent?.({ type: 'tool-input', name: 'Read', input: { file_path: path.join(cwd, 'Brain', 'Next Actions.md'), offset: 1, limit: 40 } });
-  onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Brain/Next Actions.md' });
+  onEvent?.({ type: 'tool-input', name: 'Read', input: { file_path: path.join(cwd, 'Core', 'Next Actions.md'), offset: 1, limit: 40 } });
+  onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Core/Next Actions.md' });
   await sleep(400 * speed);
-  onEvent?.({ type: 'tool-input', name: 'Grep', input: { pattern: 'deadline', path: path.join(cwd, 'Brain') } });
+  onEvent?.({ type: 'tool-input', name: 'Grep', input: { pattern: 'deadline', path: path.join(cwd, 'Core') } });
   onEvent?.({ type: 'tool', name: 'Grep', summary: 'Searched the vault for "deadline"' });
   await sleep(400 * speed);
   onEvent?.({ type: 'tool', name: 'WebSearch', summary: 'Searched the web for "example query"' });

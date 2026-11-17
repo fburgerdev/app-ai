@@ -1,6 +1,6 @@
 // The vault's areas and projects, as the app shows them.
 //
-// The list is read from Brain/Projects/Projects Index.md in the app's clone. The app
+// The list is read from Core/Projects/Projects Index.md in the app's clone. The app
 // keeps no list of its own, so a project exists here exactly when it exists in the vault.
 
 import fs from 'node:fs';
@@ -10,7 +10,12 @@ import * as brain from './brain.js';
 import * as store from './store.js';
 import { labelOf, labelMissing } from './labels.js';
 
-const INDEX = 'Brain/Projects/Projects Index.md';
+const INDEX_REL = 'Projects/Projects Index.md';
+const indexFile = () => brain.readVaultFile(brain.corePath(INDEX_REL));
+// The folder was called Brain/ until 17-11-2026: its history is read under both names.
+const OLD_CORE = 'Brain';
+const coreNames = () => [...new Set([brain.coreName(), OLD_CORE])];
+const asCore = (p) => (p.startsWith(`${OLD_CORE}/`) ? `${brain.coreName()}/${p.slice(OLD_CORE.length + 1)}` : p);
 const link = (s) => /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/.exec(s)?.[1].trim() || '';
 
 export function parseIndex(text) {
@@ -51,12 +56,15 @@ function noteChanged(name) {
   if (noteTimes.head !== head) {
     const byPath = new Map();
     try {
-      const out = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '--format=@%ct', '--name-only', '--', 'Brain/Projects', 'Brain/Areas'],
+      // Only a note that was added or edited counts: one that was merely moved (the
+      // whole folder was renamed once) was not dealt with that day.
+      const folders = coreNames().flatMap((c) => [`${c}/Projects`, `${c}/Areas`]);
+      const out = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=AM', '--format=@%ct', '--name-only', '--', ...folders],
         { cwd: brain.brainDir(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
       let ts = 0;
       for (const line of out.split('\n')) {
         if (line.startsWith('@')) ts = Number(line.slice(1)) * 1000;
-        else if (line && !byPath.has(line)) byPath.set(line, ts);
+        else if (line && !byPath.has(asCore(line))) byPath.set(asCore(line), ts);
       }
     } catch { /* no history: threads alone decide */ }
     noteTimes = { head, byPath };
@@ -69,7 +77,7 @@ function noteChanged(name) {
 // whether it has open threads, and when Florian last dealt with it (his latest message
 // in one of its threads, or the last change to its note in the vault).
 export function projectTree() {
-  const file = brain.readVaultFile(INDEX);
+  const file = indexFile();
   if (!file) return { groups: [], missing: true };
   try { followRenames(); } catch { /* the outline shows what it can */ }
   const groups = withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')));
@@ -103,12 +111,11 @@ export function projectTree() {
   return { groups, people: peopleList(), someday: someday.map((x) => ({ ...x, label: labelOf(x.text) })) };
 }
 
-// Every note in Brain/Areas is an area, whether or not the Projects Index has a heading
+// Every note in Core/Areas is an area, whether or not the Projects Index has a heading
 // for it: one that is missing there is added, without projects, so it is never hidden.
-const AREAS_DIR = 'Brain/Areas';
 function areaFiles() {
   try {
-    return fs.readdirSync(path.join(brain.brainDir() || '', AREAS_DIR)).filter((n) => n.endsWith('.md')).map((n) => n.slice(0, -3));
+    return fs.readdirSync(path.join(brain.brainDir() || '', brain.corePath('Areas'))).filter((n) => n.endsWith('.md')).map((n) => n.slice(0, -3));
   } catch { return []; }
 }
 function withAreaFiles(groups) {
@@ -122,8 +129,6 @@ function withAreaFiles(groups) {
 // So that they come back to Florian the way projects do: who has something open, when
 // he last dealt with them; and each Someday item with how long it has sat there.
 
-const PEOPLE_DIR = 'Brain/People';
-const SOMEDAY = 'Brain/Someday.md';
 const NOT_PEOPLE = new Set(['People Index', 'PBU Community Members']);
 const ddmmyyyy = (s) => { const m = /(\d{2})-(\d{2})-(\d{4})/.exec(s || ''); return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12).getTime() : 0; };
 
@@ -131,7 +136,7 @@ let peopleCache = { head: null, list: [] };
 export function peopleList() {
   const head = brain.brainStatus().head;
   if (peopleCache.head === head && head) return peopleCache.list;
-  const dir = path.join(brain.brainDir() || '', PEOPLE_DIR);
+  const dir = path.join(brain.brainDir() || '', brain.corePath('People'));
   const list = [];
   let names = [];
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.md')); } catch { /* no people yet */ }
@@ -162,6 +167,7 @@ let somedayCache = { head: null, list: [] };
 export function somedayList() {
   const head = brain.brainStatus().head;
   if (somedayCache.head === head && head) return somedayCache.list;
+  const SOMEDAY = brain.corePath('Someday.md');
   const file = brain.readVaultFile(SOMEDAY);
   if (!file) return [];
   const lines = fs.readFileSync(file.full, 'utf8').split(/\r?\n/);
@@ -197,7 +203,7 @@ export function projectContext(name) {
     try { out.push({ path: f.path, text: fs.readFileSync(f.full, 'utf8') }); } catch { /* gone this moment */ }
   };
   add(name);
-  const file = brain.readVaultFile(INDEX);
+  const file = indexFile();
   if (file) {
     const area = parseIndex(fs.readFileSync(file.full, 'utf8')).find((g) => g.isArea && g.projects.some((p) => p.name === name));
     if (area) add(area.name);
@@ -224,7 +230,7 @@ function noteRenames() {
   if (renameCache.head === head && head) return renameCache.map;
   const map = new Map();
   try {
-    const out = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=R', '--name-status', '--format=', '--', 'Brain'],
+    const out = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '-M', '--diff-filter=R', '--name-status', '--format=', '--', ...coreNames()],
       { cwd: brain.brainDir(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
     for (const line of out.split('\n')) {
       const m = /^R\d*\t([^\t]+)\t([^\t]+)$/.exec(line.trim());
@@ -281,7 +287,7 @@ export function repoOf(name) {
 export function isKnownProject(name) {
   if (!name) return false;
   if (name === 'Someday' || peopleList().some((p) => p.name === name)) return true;
-  const file = brain.readVaultFile(INDEX);
+  const file = indexFile();
   if (!file) return false;
   return withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8'))).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));
 }
@@ -289,7 +295,7 @@ export function isKnownProject(name) {
 // Every project and area by name, with what the index says about it, for telling which
 // one a thread is about.
 export function projectChoices() {
-  const file = brain.readVaultFile(INDEX);
+  const file = indexFile();
   if (!file) return [];
   const out = [];
   for (const g of withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')))) {
@@ -300,11 +306,10 @@ export function projectChoices() {
 }
 
 // The ranking of the areas: the numbered list under `## Order` in
-// Brain/Horizons/30,000 ft Goals.md, one line each, `1. [[Area]] — where it should stand`.
+// Core/Horizons/30,000 ft Goals.md, one line each, `1. [[Area]] — where it should stand`.
 // Areas left out of it are unranked on purpose. Numbered lines under other headings are
 // not the ranking; a file without an `## Order` heading is read as one list. The rank is
 // the place in the list, so a line that cannot be read leaves no gap.
-const GOALS = 'Brain/Horizons/30,000 ft Goals.md';
 export function parseRanks(text) {
   const out = new Map();
   const lines = String(text).split(/\r?\n/);
@@ -322,7 +327,7 @@ export function parseRanks(text) {
   return out;
 }
 export function areaRanks() {
-  const file = brain.readVaultFile(GOALS);
+  const file = brain.readVaultFile(brain.corePath('Horizons/30,000 ft Goals.md'));
   if (!file) return new Map();
   try { return parseRanks(fs.readFileSync(file.full, 'utf8')); } catch { return new Map(); }
 }

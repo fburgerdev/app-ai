@@ -34,6 +34,19 @@ export function brainStatus() {
 
 export const brainDir = () => config.brainDir;
 
+// The vault's folders. `Core/` holds the dense, current facts that are read by default
+// (it was called `Brain/` until 17-11-2026; a clone that still has the old folder keeps
+// working). `Threads/` holds every thread as the app exports it, and `Archive/` the
+// notes of finished projects: both are only searched, never read by default.
+export const THREADS_FOLDER = 'Threads';
+export const ARCHIVE_FOLDER = 'Archive';
+export function coreName() {
+  const dir = config?.brainDir;
+  if (dir && !fs.existsSync(path.join(dir, 'Core')) && fs.existsSync(path.join(dir, 'Brain'))) return 'Brain';
+  return 'Core';
+}
+export const corePath = (rel = '') => (rel ? `${coreName()}/${rel}` : coreName());
+
 function serial(fn) {
   const run = chain.then(fn, fn);
   chain = run.catch(() => {});
@@ -261,9 +274,14 @@ let noteIndex = { head: null, byName: new Map(), at: 0 };
 
 function indexNotes() {
   const byName = new Map();
-  const visit = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  const visit = (dir, top = false) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
       if (entry.name === '.git' || entry.name === '.obsidian') continue;
+      // Already visited first, or never a link's target: a thread's title must not
+      // stand in for a note of the same name.
+      if (top && (entry.name === coreName() || entry.name === THREADS_FOLDER)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) visit(full);
       else {
@@ -272,7 +290,10 @@ function indexNotes() {
       }
     }
   };
-  visit(config.brainDir);
+  // The current notes win over everything else of the same name (an archived project
+  // whose name is in use again, a file kept for reference).
+  visit(path.join(config.brainDir, coreName()));
+  visit(config.brainDir, true);
   noteIndex = { head: status.head, byName, at: Date.now() };
 }
 

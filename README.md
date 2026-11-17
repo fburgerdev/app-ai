@@ -93,7 +93,7 @@ A **proposal** is a third kind of card: a piece of work Claude offers to do in a
 
 **What is coming up.** With the calendar connected, the same run looks at today and tomorrow every few hours. For an entry worth preparing (a meeting, a fair, a talk) it starts a thread by itself, marked "Coming up": Claude writes a briefing from the Brain and opens a preparation session with you. There is nothing to accept; delete the thread if you do not want it. Each entry is prepared once.
 
-Cards are made in the background by a run that reads the vault and searches the web for the right person. It starts by itself when fewer than three unseen cards are left while you work the queue, at most every 45 minutes, or when you press "Look for opportunities". Chase cards come from rows in `Brain/Waiting For.md` whose chase date has passed.
+Cards are made in the background by a run that reads the vault and searches the web for the right person. It starts by itself when fewer than three unseen cards are left while you work the queue, at most every 45 minutes, or when you press "Look for opportunities". Chase cards come from rows in `Core/Waiting For.md` whose chase date has passed.
 
 Nothing is proposed twice, whether you accepted or declined it. What you edited before accepting is recorded too, and both the queue and the next card run learn from it.
 
@@ -126,6 +126,8 @@ For every thread in which Claude made something (a mail, a document, a deck, a s
 - **Capture, every time.** Your feedback rounds in your words, the first and the latest version as outlines, your own edits, and what you praised go into the piece's capture file under `Artifacts/<Format>/`. A thinking session gets its session file in `Artifacts/Thinking/`.
 - **Extract, once you closed the thread.** A thread marked Done means the piece is finished: its learnings go into that format's `Pool.md`.
 - Turning a pool into rules ("improve on mails" and the like) stays your call and is not something the update does.
+
+**The threads themselves go into the vault too.** Before the commit, the app writes every thread you said or did something in as a Markdown file into `Threads/` (`YYYY-MM-DD Title.md`): the conversation, each turn labelled with who said it, and the final text of the files Claude made. No tool output, and no model is involved: `server/threadexport.js` makes the files from the app's data, which stays the original, and writes each one again on every update, so the two cannot drift. A thread the app has deleted since keeps its file. The vault then has two layers: `Core/` (the notes: dense, current, read by default) and `Threads/` with `Archive/` (finished projects' notes, frozen), which a thread only searches. One exception: a thread on a project is told which thread on that project came last, and reads it in full once.
 
 Then the app makes one `thinking:` commit and pushes. What the vault says needs your confirmation is not written; it comes back as a thread called "Brain update …: questions".
 
@@ -229,15 +231,15 @@ The outline on the right has two slides; scroll sideways (it snaps) or click the
 
 - **Projects**: the active projects, the paused ones folded away (they unfold on hover: paused
   means you are waiting on something), then the **areas** in the order of
-  `Brain/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`;
+  `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`;
   areas not in it follow by recency, and the line above them opens that file), then **Someday**
   (each item newest first, the parked old actions grey; **+** starts a thread on the item: do
   it now, keep it, or fold it).
-- **People**: everyone in `Brain/People/`, in four groups from the `Status:` line in each
+- **People**: everyone in `Core/People/`, in four groups from the `Status:` line in each
   person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**.
   Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
 
-The order is the Brain's, not the app's: change a `Status:` line or the 30,000 ft list (ask
+The order is the vault's, not the app's: change a `Status:` line or the 30,000 ft list (ask
 Claude in a thread) and the outline follows.
 
 ## What a message is worth
@@ -291,7 +293,7 @@ mood line, when it was made and how long it waited.
 
 ## Next actions, Done and Defer
 
-A line in `Brain/Next Actions.md` and a thread in the inbox are two states of the same to-do.
+A line in `Core/Next Actions.md` and a thread in the inbox are two states of the same to-do.
 
 - The lines show in the inbox drawer under **Next actions**, below Done, asleep. Click one and
   click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a

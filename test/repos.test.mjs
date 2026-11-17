@@ -51,8 +51,8 @@ function bare(name, files) {
 bare('brain', {
   'CLAUDE.md': '# vault\n',
   'Claude/Instructions.md': '# Instructions\n',
-  'Brain/Projects/Site.md': '# Site\n\nStatus: active\nrepo: `fburgerdev/site`\n',
-  'Brain/Projects/Projects Index.md': '# Projects Index\n\n## No area\n\n- [[Site]] — a website\n',
+  'Core/Projects/Site.md': '# Site\n\nStatus: active\nrepo: `fburgerdev/site`\n',
+  'Core/Projects/Projects Index.md': '# Projects Index\n\n## No area\n\n- [[Site]] — a website\n',
 });
 const site = bare('site', { 'index.html': '<h1>Hello</h1>\n' });
 bare('tool', { 'README.md': '# tool\n' });
@@ -193,7 +193,7 @@ test('without a repo, shell commands stay off; the vault stays read-only', async
   assert.equal((await policy('Bash', { command: 'gh repo delete x' })).behavior, 'deny');
   assert.equal((await policy('Write', { file_path: path.join(repo, 'a.txt') })).behavior, 'allow');
   assert.equal((await policy('Write', { file_path: path.join(repo, '.git', 'config') })).behavior, 'deny');
-  assert.equal((await policy('Write', { file_path: path.join(dir, 'vault', 'Brain', 'x.md') })).behavior, 'deny');
+  assert.equal((await policy('Write', { file_path: path.join(dir, 'vault', 'Core', 'x.md') })).behavior, 'deny');
 });
 
 test('an empty repo gets a first commit, and the thread works in it like in any other', async () => {

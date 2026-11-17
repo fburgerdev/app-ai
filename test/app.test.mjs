@@ -37,7 +37,7 @@ test('the project index is read the way the vault writes it', () => {
 });
 
 test('the brain update report yields questions and mail to answer', () => {
-  const r = parseReport('STATUS: questions\nCOMMIT: thinking: board date, room\n\n## Written\n- Brain/Projects/X.md — the date\n\n## Questions\n**X**\n1. Add the call?\n\n## Mail to answer\n- 18c2f | Terminvorschlag | wants a date\n- 99aa | Re: Angebot\n');
+  const r = parseReport('STATUS: questions\nCOMMIT: thinking: board date, room\n\n## Written\n- Core/Projects/X.md — the date\n\n## Questions\n**X**\n1. Add the call?\n\n## Mail to answer\n- 18c2f | Terminvorschlag | wants a date\n- 99aa | Re: Angebot\n');
   assert.equal(r.subject, 'thinking: board date, room');
   assert.match(r.questions, /Add the call/);
   assert.deepEqual(r.mail, [{ threadId: '18c2f', subject: 'Terminvorschlag', why: 'wants a date' }, { threadId: '99aa', subject: 'Re: Angebot', why: '' }]);
@@ -57,14 +57,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 git(dir, 'init', '--bare', '-b', 'main', remote);
 git(dir, 'init', '--bare', '-b', 'main', dataRemote);
 git(dir, 'clone', remote, seed);
-for (const d of ['Brain/Projects', 'Brain/Areas', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
+for (const d of ['Core/Projects', 'Core/Areas', 'Claude']) fs.mkdirSync(path.join(seed, d), { recursive: true });
 fs.writeFileSync(path.join(seed, 'CLAUDE.md'), '# vault\n');
 fs.writeFileSync(path.join(seed, 'Scratchpad.md'), 'the old scratchpad\n');
 fs.writeFileSync(path.join(seed, 'Claude', 'Instructions.md'), '# Instructions\n');
-fs.writeFileSync(path.join(seed, 'Brain', 'Areas', 'Campaign.md'), '# Campaign\n\nThe area note.\n');
-fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Motion.md'), '# Motion\n\nThe project note.\n');
-fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Grant.md'), '# Grant\n\nStatus: paused\nDeadline: —\n\nWaiting for the office.\n');
-fs.writeFileSync(path.join(seed, 'Brain', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Campaign]]\n\n- [[Motion]] — a motion\n\n## No area\n\n- [[Grant]] — a grant\n');
+fs.writeFileSync(path.join(seed, 'Core', 'Areas', 'Campaign.md'), '# Campaign\n\nThe area note.\n');
+fs.writeFileSync(path.join(seed, 'Core', 'Projects', 'Motion.md'), '# Motion\n\nThe project note.\n');
+fs.writeFileSync(path.join(seed, 'Core', 'Projects', 'Grant.md'), '# Grant\n\nStatus: paused\nDeadline: —\n\nWaiting for the office.\n');
+fs.writeFileSync(path.join(seed, 'Core', 'Projects', 'Projects Index.md'), '# Projects Index\n\n## [[Campaign]]\n\n- [[Motion]] — a motion\n\n## No area\n\n- [[Grant]] — a grant\n');
 git(seed, 'checkout', '-B', 'main');
 git(seed, 'add', '-A');
 git(seed, 'commit', '-m', 'seed');

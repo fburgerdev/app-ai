@@ -12,7 +12,7 @@ A card is something Florian can decide in a few seconds by accepting or declinin
 
 ## Chase cards (make these first)
 
-Read `Brain/Waiting For.md`. For every row under "Waiting on a person" whose `Chase by` date is today or earlier, and that is not in the list of cards already made below, draft the follow-up: short, friendly, referring to what was asked and when. Skip rows that say not to chase. Use mail when the Brain or his mail shows the address and that the earlier contact was by mail; otherwise a message he can paste into the channel the row names.
+Read `Core/Waiting For.md`. For every row under "Waiting on a person" whose `Chase by` date is today or earlier, and that is not in the list of cards already made below, draft the follow-up: short, friendly, referring to what was asked and when. Skip rows that say not to chase. Use mail when the vault or his mail shows the address and that the earlier contact was by mail; otherwise a message he can paste into the channel the row names.
 
 A chase by mail is a reply in the conversation it follows up on, never a new one. If you have mail tools, search his mail for that conversation (his last mail to the person about it), put its Gmail thread id into `replyTo`, and make the subject "Re: " plus that conversation's subject. Without mail tools, or if you cannot find the conversation, leave `replyTo` empty and give the mail a subject of its own without "Re:". The same holds for an opportunity card that answers or revives an existing mail conversation.
 
@@ -24,7 +24,7 @@ Use what "Opportunities" in `Claude/Instructions.md` says about scope and about 
 
 A proposal is a piece of work you would do yourself in a new thread, for one of his projects or areas: research he needs for a next step, a first draft of a document, working out a plan or a timeline, checking where something that has gone quiet stands, preparing a decision. Not a message to someone; those are the cards above.
 
-- Propose what moves a project toward its stated goal or unblocks its next action. Read the project notes and `Brain/Next Actions.md` for that. Favour projects that are stuck or have had no activity, and work he would otherwise have to remember to ask for.
+- Propose what moves a project toward its stated goal or unblocks its next action. Read the project notes and `Core/Next Actions.md` for that. Favour projects that are stuck or have had no activity, and work he would otherwise have to remember to ask for.
 - Never propose work that is already under way in one of the open threads listed below, or that a note says he decided against.
 - `title` names the work in at most seven words. `why` is one sentence of at most fifteen words.
 - `text` is the brief for the thread that does the work. He reads it in three seconds and decides, so it is short and has exactly this shape, in Markdown, at most 50 words in all:
