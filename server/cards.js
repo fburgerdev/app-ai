@@ -147,7 +147,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
         today: todayLine(),
         count: String(wantCards ? Math.max(1, Number(config.cards.perRun) || 3) : 0),
         calendar: calendarOn() ? readPrompt('cards-calendar.md').trim() : 'The calendar is not connected. Skip this part.',
-        threads: store.listThreads().filter((t) => t.kind !== 'card' && (t.state !== 'done' || t.kind === 'event')).map((t) => `- ${t.title}${t.project ? ` (${t.project})` : ''}`).slice(0, 60).join('\n') || '(none)',
+        threads: store.listThreads().filter((t) => t.kind !== 'card' && (t.state !== 'done' || t.kind === 'event')).map((t) => `- ${t.title}${t.project ? ` (${t.project})` : ''}${t.event ? `, an event on ${new Date(t.event.start).toString().slice(0, 21)}` : ''}`).slice(0, 60).join('\n') || '(none)',
         outDir,
         made: made.length ? made.slice(-300).join('\n') : '(none yet)',
         profile: profile ? `What his earlier choices have shown (make more of what he takes, none of what he declines):\n\n${profile}` : '',

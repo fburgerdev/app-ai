@@ -396,6 +396,25 @@ test('an event that is not open yet can be opened now, to prepare already', asyn
   assert.equal((await call('POST', '/api/events/nope/open', {})).status, 404);
 });
 
+test('when he says an entry was postponed, its event moves at once, from any thread', async () => {
+  const fair = await until(async () => (await state()).threads.find((t) => t.kind === 'event' && t.title === 'Example fair' && t.state !== 'done'), 'the fair, open');
+  const length = fair.event.end - fair.event.start;
+  const later = new Date(Date.now() + 5 * 24 * 3600_000);
+  later.setSeconds(0, 0);
+  const said = (await call('POST', '/api/threads', { text: `The fair got postponed. MOVE-TEST example fair TO ${later.toISOString()}` })).data.thread;
+  await ready(said.id);
+  const moved = await thread(fair.id);
+  assert.equal(moved.thread.event.start, later.getTime(), 'the new start');
+  assert.equal(moved.thread.event.end - moved.thread.event.start, length, 'the same length');
+  assert.equal(moved.thread.event.showAt, showAtFor(later.getTime(), moved.thread.event.important), 'opens by the new time');
+  assert.equal(moved.thread.event.started, true, 'an open event stays open');
+  assert.match(moved.messages.at(-1).text, /^\[The entry moved from .* to .*said in the thread/, 'its thread is told');
+  // A name that fits none changes nothing.
+  const wrong = (await call('POST', '/api/threads', { text: `MOVE-TEST no such meeting TO ${later.toISOString()}` })).data.thread;
+  await ready(wrong.id);
+  assert.equal((await thread(fair.id)).thread.event.start, later.getTime());
+});
+
 test('focus: only his own threads in the queue, no new cards, and it ends by itself', async () => {
   const mine = (await call('POST', '/api/threads', { text: 'Something of my own' })).data.thread;
   await ready(mine.id);

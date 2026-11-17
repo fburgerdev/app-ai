@@ -148,7 +148,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -184,6 +184,14 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell }) {
       ...(showFile ? [tool('show_file', 'Show Florian a file a script made: it is copied into this thread\'s artifacts folder and appears in the thread. Files you write into the artifacts folder with Write or Edit are shown already; use this for the finished result of a script (a filled PDF, an edited Word file, a chart). Only for files he should see: never for libraries, scripts or intermediate files.',
         { path: z.string().describe('The file, absolute or relative to the workbench'), name: z.string().optional().describe('The name he sees, if different from the file\'s; a name he would recognise') },
         async (args) => { try { return ok(await showFile(args)); } catch (err) { return fail(err); } })] : []),
+      ...(moveEvent ? [tool('move_event', 'Move one of the app\'s events (the threads in Events, made from his calendar) to a new time. Call it as soon as Florian says an entry was postponed, moved or brought forward, in any thread, so Events shows the new time at once and the briefing opens by it. Without `event`, in an event\'s own thread, it moves that one. It changes only the app; it does not change Google Calendar.',
+        {
+          event: z.string().optional().describe('The event\'s thread id, or words from its title ("Blom"); leave out in the event\'s own thread'),
+          start: z.string().describe('The new start, ISO 8601 with offset'),
+          end: z.string().optional().describe('The new end; left out, the event keeps its length'),
+          where: z.string().optional().describe('The new place, if that changed too'),
+        },
+        async (args) => { try { return ok(moveEvent(args)); } catch (err) { return fail(err); } })] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -226,6 +234,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__github_create_repo': return `Created the repo ${input.name}`;
     case 'mcp__app__github_describe_repo': return `Described the repo ${input.repo}`;
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
+    case 'mcp__app__move_event': return `Moved ${input.event ? `the event "${clip(input.event, 50)}"` : 'this event'} in Events`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
@@ -274,8 +283,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -393,7 +402,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -556,6 +565,12 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       const r = await repoTools.open(full);
       fs.writeFileSync(path.join(r.dir, 'README.md'), `# ${createAsk[1]}\n`);
     } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
+  }
+  // "MOVE-TEST <title words> TO <iso>": he said an entry moved; the stand-in moves it, as the real Claude would.
+  const moveAsk = moveEvent && /MOVE-TEST (.*?) TO (\S+)/.exec(newest);
+  if (moveAsk) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__move_event', summary: `Moved the event "${moveAsk[1]}" in Events` });
+    try { moveEvent({ event: moveAsk[1], start: moveAsk[2] }); } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
   }
   const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
   if (wanted) {
