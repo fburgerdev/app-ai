@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquire, holder, holderName, jobHolder, release, repoName } from '../server/repos.js';
-import { cleanup, freePort } from './helpers.mjs';
+import { cleanup, freePort, patience } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -92,7 +92,7 @@ const call = async (method, url, body) => {
   return { status: res.status, data: parsed };
 };
 async function until(fn, what, ms = 45000) { // generous: eight test servers run side by side
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * patience;
   while (Date.now() < end) {
     const v = await fn();
     if (v) return v;
@@ -157,11 +157,14 @@ test('one thread per repo: the second waits until the first turn has ended', asy
   const a = (await call('POST', '/api/threads', { text: 'First worker', project: 'Site' })).data.thread;
   const b = (await call('POST', '/api/threads', { text: 'Second worker', project: 'Site' })).data.thread;
   await ready(a.id); await ready(b.id);
-  const aTurn = turn(a.id, 'REPO-TEST REPO-SLOW go');
+  const hold = path.join(data, 'hold-first'); // a stays in the repo until this file goes
+  fs.writeFileSync(hold, '');
+  const aTurn = turn(a.id, 'REPO-TEST REPO-HOLD=first go');
   await until(async () => (await thread(a.id)).thread.repoBranch, 'a holds the repo', 8000);
   const bTurn = turn(b.id, 'REPO-TEST go too');
   const waited = await until(async () => { const t = (await thread(b.id)).thread; return /^Waiting for fburgerdev\/site/.test(t.activity || '') ? t : null; }, 'b waits for a', 8000);
   assert.match(waited.activity, /"First worker" is working in it/);
+  fs.rmSync(hold);
   const aDone = await aTurn;
   const bDone = await bTurn;
   assert.notEqual(aDone.thread.repoBranch, bDone.thread.repoBranch, 'each on a branch of its own');
@@ -237,11 +240,14 @@ test('a repo he agreed to is created, gets its first commit, and the thread work
 test('a brain update waits for a thread that is changing the vault, then runs', async () => {
   const t = (await call('POST', '/api/threads', { text: 'Rename a folder in the vault' })).data.thread;
   await ready(t.id);
-  const working = turn(t.id, 'REPO-TEST=brain REPO-SLOW=6000 rename it');
+  const hold = path.join(data, 'hold-vault'); // the thread stays in the vault until this file goes
+  fs.writeFileSync(hold, '');
+  const working = turn(t.id, 'REPO-TEST=brain REPO-HOLD=vault rename it');
   await until(async () => (await thread(t.id)).thread.repo === 'fburgerdev/brain' && (await thread(t.id)).thread.repoBranch, 'the thread holds the vault', 15000);
   assert.equal((await call('POST', '/api/brain/extract', {})).data.started, true);
   const waiting = await until(async () => { const b = (await call('GET', '/api/state')).data.brain; return /^Waiting for "Rename a folder in the vault", which is changing the vault/.test(b.step) ? b : null; }, 'the update says it waits', 5000);
   assert.equal(waiting.brain.writing, false, 'it has not touched the vault yet');
+  fs.rmSync(hold);
   await working;
   await until(async () => !(await call('GET', '/api/state')).data.brain.running, 'the update ran after the thread', 45000);
   const run = (await call('GET', '/api/brain/runs')).data.runs[0];

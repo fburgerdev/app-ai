@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { showAtFor } from '../server/events.js';
-import { cleanup, freePort } from './helpers.mjs';
+import { cleanup, freePort, patience } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -58,7 +58,7 @@ const call = async (method, url, body) => {
   return { status: res.status, data: await res.json().catch(() => null) };
 };
 async function until(fn, what, ms = 20000) {
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * patience;
   while (Date.now() < end) { try { const v = await fn(); if (v) return v; } catch { /* not yet */ } await sleep(80); }
   throw new Error(`timed out: ${what}`);
 }
