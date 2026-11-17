@@ -84,6 +84,14 @@ function toast(text) {
   toastTimer = setTimeout(() => { els.toast.hidden = true; }, 4500);
 }
 
+// Claude's usage limits, and when a held turn or brain update runs again.
+const LIMIT_NAMES = { five_hour: 'five-hour limit', seven_day: 'weekly limit', seven_day_opus: 'weekly limit', seven_day_sonnet: 'weekly limit', seven_day_overage_included: 'weekly limit', overage: 'extra-usage limit' };
+function holdClock(ts) {
+  const d = new Date(ts);
+  const hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? hm : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'numeric' })} ${hm}`;
+}
+
 function ago(ts) {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return 'just now';
@@ -174,7 +182,8 @@ function kindLabel(t) {
 
 function railItem(t) {
   let sub = '';
-  if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
+  if (t.state === 'working' && t.held) sub = `Held: carries on at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
+  else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
@@ -845,7 +854,8 @@ function renderBrain() {
     const last = b.last;
     const what = last.mailOnly ? 'Gmail update' : 'update';
     let text;
-    if (last.status === 'failed') text = `Last ${what} failed, ${stamp(last.finishedAt)}`;
+    if (last.status === 'held') text = b.held ? `Held by the usage limit: runs by itself at ${holdClock(b.held.until)}` : `Last ${what} was held by the usage limit, ${stamp(last.finishedAt)}`;
+    else if (last.status === 'failed') text = `Last ${what} failed, ${stamp(last.finishedAt)}`;
     else if (last.status === 'nothing') text = `Last ${what} ${stamp(last.finishedAt)}: nothing to file`;
     else text = `Last ${what} ${stamp(last.finishedAt)}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.pushed ? '' : ', not pushed yet'}`;
     rows.push(h('button', { class: `link brain-last${last.status === 'failed' || !last.pushed ? ' is-error' : ''}`, type: 'button', onclick: () => openPanel({ kind: 'run', run: last }) }, text));
@@ -860,7 +870,8 @@ function setBrain(status) {
   if (wasRunning && !status.running && status.last) {
     const last = status.last;
     const what = last.mailOnly ? 'Gmail update' : 'brain update';
-    if (last.status === 'failed') toast(`The ${what} failed: ${last.error}`);
+    if (last.status === 'held') toast(last.error);
+    else if (last.status === 'failed') toast(`The ${what} failed: ${last.error}`);
     else if (last.status === 'nothing') toast(last.mailOnly ? 'No new mail that needs filing.' : 'Brain update finished. Nothing needed filing.');
     else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
     if (S.panel?.kind === 'run') openPanel({ kind: 'run', run: last });
@@ -1088,6 +1099,7 @@ function messageEl(threadId, m) {
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
   if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
+  if (m.limit) el.append(h('p', { class: 'msg-note' }, `Claude's ${LIMIT_NAMES[m.limit.type] || 'usage limit'} cut the turn off here. The app carries on by itself when it lifts.`));
   if (m.error) el.append(h('p', { class: 'msg-note is-error' }, m.error));
   return el;
 }
@@ -1193,8 +1205,10 @@ function renderHead() {
     status = h('span', { class: `status status-${t.state === 'ready' ? 'ready' : 'done'}` }, t.state === 'ready' ? kindLabel(t) : `${kindLabel(t)}, ${t.card?.outcome || 'decided'}`);
     if (t.state === 'ready') actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else if (t.state === 'working') {
-    status = h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, 'Stop'));
+    status = t.held
+      ? h('span', { class: 'status status-held' }, `Held by the ${LIMIT_NAMES[t.held.type] || 'usage limit'} · carries on at ${holdClock(t.held.until)}`)
+      : h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
+    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held ? 'Cancel the hold' : 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
   } else if (t.state === 'ready') {
@@ -1253,7 +1267,7 @@ function renderComposer() {
     els.input.placeholder = 'What should Claude work on?';
     verb = 'Start';
   } else if (t.state === 'working') {
-    els.input.placeholder = 'Add to this thread. Claude gets it when this turn ends.';
+    els.input.placeholder = t.held ? 'Add to this thread. Claude gets it when the limit lifts.' : 'Add to this thread. Claude gets it when this turn ends.';
     verb = 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
@@ -2136,7 +2150,10 @@ async function showNote(panel) {
 function showRun(run) {
   const body = h('div', { class: 'panel-body' });
   const change = { A: 'new', M: 'changed', D: 'deleted', R: 'moved' };
-  if (run.status === 'failed') {
+  if (run.status === 'held') {
+    body.append(h('p', { class: 'panel-note' }, run.error),
+      h('p', { class: 'panel-note' }, 'Nothing counts as filed yet. You can also press Update brain yourself once the limit has lifted.'));
+  } else if (run.status === 'failed') {
     body.append(h('p', { class: 'panel-note is-error' }, `This update failed and wrote nothing: ${run.error}`),
       h('p', { class: 'panel-note' }, 'Nothing counts as filed. Update the brain again when the cause is fixed.'));
   } else {

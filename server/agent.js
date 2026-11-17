@@ -15,6 +15,7 @@ import { record as recordUsage } from './usage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './config.js';
+import { fromEvent, limitOf, noteLimit } from './limits.js';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -262,7 +263,9 @@ function friendlyError(text) {
 
 /**
  * Runs one turn.
- * @returns {Promise<{sessionId: string|null, text: string, error: string, durationMs: number, aborted: boolean}>}
+ * `limit` is set when the run was cut off by Claude's usage limit: { until, type }, with
+ * `until` 0 when Claude did not say when it lifts (limits.js).
+ * @returns {Promise<{sessionId: string|null, text: string, error: string, durationMs: number, aborted: boolean, limit?: {until: number, type: string}|null}>}
  */
 export async function runAgent(params) {
   const started = Date.now();
@@ -273,13 +276,17 @@ export async function runAgent(params) {
     // The stand-in reports a made-up amount, so the usage view has something to show.
     const usage = out.usage || (params.fake ? { input_tokens: 1200, output_tokens: Math.ceil((out.text || '').length / 4) } : null);
     recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs });
+    if (out.limit && !out.aborted) noteLimit(out.limit);
+    else if (!out.error && !out.aborted) noteLimit(null);
     return { ...out, durationMs };
   } catch (err) {
     if (params.signal?.aborted) {
       return { sessionId: params.resume || null, text: '', error: '', aborted: true, durationMs: Date.now() - started };
     }
     log(`agent error: ${err.stack || err.message}`);
-    return { sessionId: params.resume || null, text: '', error: friendlyError(err.message), aborted: false, durationMs: Date.now() - started };
+    const limit = limitOf({ error: err.message });
+    if (limit) noteLimit(limit);
+    return { sessionId: params.resume || null, text: '', error: friendlyError(err.message), aborted: false, limit, durationMs: Date.now() - started };
   }
 }
 
@@ -343,13 +350,19 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let sawDelta = false;
   let usage = null;
   let cost = 0;
+  let raw = ''; // the error as Claude Code worded it
+  let code = ''; // its kind, e.g. 'rate_limit'
+  let rejected = null; // the last limit Claude Code reported as reached
 
   for await (const msg of query({ prompt: input(), options })) {
     if (msg.session_id && msg.session_id !== sessionId) {
       sessionId = msg.session_id;
       onEvent?.({ type: 'session', sessionId });
     }
-    if (msg.type === 'stream_event') {
+    if (msg.type === 'rate_limit_event') {
+      // Which limit, and exactly when it lifts. A later "allowed" takes it back.
+      rejected = fromEvent(msg.rate_limit_info);
+    } else if (msg.type === 'stream_event') {
       if (msg.parent_tool_use_id) continue; // a helper's own text is not shown
       const ev = msg.event;
       if (ev.type === 'content_block_start' && ev.content_block?.type === 'text') {
@@ -364,7 +377,13 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
         onEvent?.({ type: 'activity', text: 'Thinking' });
       }
     } else if (msg.type === 'assistant') {
-      if (msg.error) error = friendlyError(msg.error);
+      if (msg.error) {
+        error = friendlyError(msg.error);
+        code = msg.error;
+        raw = (msg.message?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ') || msg.error;
+      } else if (!msg.parent_tool_use_id) {
+        code = '';
+      }
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           const summary = describeTool(block.name, block.input, cwd);
@@ -383,16 +402,19 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       onEvent?.({ type: 'tool-result' });
     } else if (msg.type === 'result') {
       if (msg.is_error || msg.subtype !== 'success') {
-        error = friendlyError(msg.result || (msg.errors || []).join(' ') || msg.subtype);
+        raw = msg.result || (msg.errors || []).join(' ') || raw || msg.subtype;
+        error = friendlyError(raw);
       } else {
-        error = '';
+        // A turn whose last word was "limit reached" did not finish, whatever the result says.
+        if (code !== 'rate_limit') { error = ''; raw = ''; }
         if (!lastText && msg.result) lastText = msg.result;
       }
       usage = msg.usage || null;
       cost = msg.total_cost_usd || 0;
     }
   }
-  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost };
+  const limit = error ? limitOf({ error: raw, code, seen: rejected }) : null;
+  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit };
 }
 
 // ---------- a stand-in for Claude, for trying the app without an account ----------
@@ -401,6 +423,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 // artifact when the message mentions a draft, and in a brain update edits one file.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let fakeBrainLimited = false;
 
 async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
@@ -475,6 +498,11 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     const transcripts = (readDirs || []).flatMap((dir) => fs.readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .map((name) => fs.readFileSync(path.join(dir, name), 'utf8')));
+    // "BRAIN-LIMIT-TEST" in what is filed: the first run meets the usage limit, once.
+    if (!fakeBrainLimited && transcripts.some((t) => /BRAIN-LIMIT-TEST/.test(t))) {
+      fakeBrainLimited = true;
+      return { sessionId, text: '', finalText: '', error: friendlyError('You\'ve hit your weekly limit · resets Fri 9am'), aborted: false, limit: { until: Date.now() + 400, type: 'seven_day' } };
+    }
     const wantsQuestions = transcripts.some((t) => /QUESTION-TEST/.test(t.split('## New')[1] || ''));
     const wantsReply = transcripts.some((t) => /MAIL-TEST/.test(t));
     const report = [
@@ -535,6 +563,14 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       }));
     }
     return { sessionId, text: 'Made the cards.', finalText: 'Made the cards.', error: '', aborted: false };
+  }
+
+  // "LIMIT-TEST" or "LIMIT-TEST=<ms>": the usage limit cuts the turn off after a first
+  // sentence; it lifts <ms> later. The run the app starts again by itself goes through.
+  const limitAsk = /LIMIT-TEST(?:=(\d+))?/.exec(userPrompt);
+  if (limitAsk && !/cut off by Claude's usage limit/.test(userPrompt)) {
+    const said = await say('Started on it.');
+    return { sessionId, text: said, finalText: said, error: friendlyError('You\'ve hit your 5-hour limit · resets 8:50pm'), aborted: false, limit: { until: Date.now() + Number(limitAsk[1] || 400), type: 'five_hour' } };
   }
 
   if (/FAIL-TEST/.test(prompt)) {

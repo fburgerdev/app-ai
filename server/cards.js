@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { runAgent } from './agent.js';
+import { limitedUntil } from './limits.js';
 import * as brain from './brain.js';
 import * as google from './google.js';
 import * as store from './store.js';
@@ -128,6 +129,7 @@ function startWork(card, text, lead) {
 
 export async function makeCards({ cards: wantCards = true } = {}) {
   if (running) return cardsStatus();
+  if (limitedUntil()) return cardsStatus(); // the usage limit is on: this round is skipped
   if (!brain.brainStatus().ready) throw new Error('The brain is not cloned yet.');
   running = true;
   if (wantCards) lastRun = Date.now();

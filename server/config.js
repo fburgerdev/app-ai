@@ -127,6 +127,11 @@ const DEFAULTS = {
   // (npm test), or at once if it has none. Failing tests leave it with a note in the thread.
   autoMerge: true,
 
+  // Claude's usage limits (five-hour, weekly). A turn or brain update they cut off runs
+  // again by itself once the limit has lifted: `marginMs` after the time Claude names,
+  // or `fallbackMs` later when it names none. `checkMs` is how often the app looks.
+  limits: { marginMs: 3 * 60_000, fallbackMs: 15 * 60_000, checkMs: 20_000 },
+
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
 
@@ -179,7 +184,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);

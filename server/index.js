@@ -133,7 +133,9 @@ const pruner = createPruner({
   model: () => getState().model,
   effort: () => getState().effort,
 });
-const isBusy = () => store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning;
+// A turn held by the usage limit is not work in progress: it must not keep the laptop
+// from handing over, or the app from updating itself.
+const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning;
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -153,7 +155,7 @@ let lastStatusSave = 0;
 const laptopHere = Boolean(config.remote) || ['win32', 'darwin'].includes(process.platform) || process.env.APP_AI_STATUS_BAR === '1';
 app.get('/api/status', async (req, res) => {
   const l = link.status();
-  const threads = store.listThreads().filter((t) => t.state === 'working').map((t) => ({ id: t.id, title: t.title }));
+  const threads = store.listThreads().filter((t) => t.state === 'working' && !t.held).map((t) => ({ id: t.id, title: t.title }));
   const extracting = extraction.extractionStatus().running;
   const carding = cards.cardsStatus().running;
   const [saved, unpushed] = await Promise.all([datasync.unsaved(), repos.unpushed().catch(() => [])]);
@@ -912,6 +914,10 @@ initLabels(config);
 brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatus()));
 process.on('unhandledRejection', (err) => { log(`unhandled: ${err?.stack || err}`); report('the app itself', String(err?.stack || err)); });
 cards.setMayRun(link.mayRunBackground);
+// Turns and brain updates held by the usage limit start again when it lifts, on the
+// computer that does the work then.
+runner.watchHolds(link.mayRunBackground);
+extraction.watchHold(link.mayRunBackground);
 events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
@@ -945,7 +951,7 @@ async function purgeWhenQuiet() {
   let list = [];
   try { list = JSON.parse(fs.readFileSync(PURGE_LIST, 'utf8')); } catch { return; }
   if (!list.length) { fs.rmSync(PURGE_LIST, { force: true }); return; }
-  if (!link.mayRunBackground() || store.listThreads().some((t) => t.state === 'working') || extraction.extractionStatus().running) { setTimeout(purgeWhenQuiet, 15 * 60_000).unref?.(); return; }
+  if (!link.mayRunBackground() || store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running) { setTimeout(purgeWhenQuiet, 15 * 60_000).unref?.(); return; }
   await link.remoteSave();
   const r = await datasync.purgeHistory(list).catch((err) => ({ done: false, reason: err.message }));
   if (r.done) fs.rmSync(PURGE_LIST, { force: true });

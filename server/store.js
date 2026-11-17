@@ -65,7 +65,8 @@ export function loadThreads() {
   for (const id of fs.readdirSync(THREADS_DIR)) {
     const meta = readJson(metaFile(id), null);
     if (!meta || meta.id !== id) continue;
-    if (meta.state === 'working' && mine(meta)) {
+    // A turn held by the usage limit is not running anywhere: it waits, and stays as it is.
+    if (meta.state === 'working' && mine(meta) && !meta.held) {
       meta.state = 'ready';
       meta.queuedAt = Date.now();
       meta.error = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
@@ -91,7 +92,8 @@ export function reloadThreads() {
       const meta = readJson(metaFile(id), null);
       if (!meta || meta.id !== id) continue;
       seen.add(id);
-      if (threads.get(id)?.state === 'working') continue;
+      // (A held turn is not being worked on: the other computer may have carried on with it.)
+      if (threads.get(id)?.state === 'working' && !threads.get(id).held) continue;
       // A turn running on the other computer: shown as working, never written here.
       // settleOrphans() deals with it if that computer goes away.
       threads.set(id, meta);
@@ -115,7 +117,7 @@ export function settleOrphans({ isRunning, otherGone = false, olderThanMs = 10 *
   const now = Date.now();
   let settled = 0;
   for (const t of threads.values()) {
-    if (t.state !== 'working' || isRunning(t.id)) continue;
+    if (t.state !== 'working' || t.held || isRunning(t.id)) continue;
     const here = mine(t);
     if (!here && !(otherGone && now - (t.updatedAt || 0) > olderThanMs)) continue;
     updateThread(t.id, {

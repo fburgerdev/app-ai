@@ -352,6 +352,17 @@ as the Agent SDK reports it per run; click it for the last five hours, seven day
 by kind. It covers both computers. It is not your plan's limit: the app cannot read how much
 of that is left.
 
+## Usage limits: held, then carried on
+
+When Claude's five-hour or weekly limit cuts a turn off, the thread does not come back with an error. It stays out of the inbox and says "Held by the five-hour limit: carries on by itself at 02:43". Three minutes after the limit lifts, the app starts the turn again and tells Claude to carry on where it stopped. So you can send something late, go to sleep, and find it done.
+
+- The time comes from Claude's own report (an exact time, and which limit), so a weekly limit is held until its day, not until the same clock time tonight. With no time given, the app tries again after 15 minutes.
+- What you send into a held thread waits in the same hold and goes in with the next try. "Cancel the hold" gives the thread back to you as it is.
+- The hold is saved with the thread, not kept as a timer. It survives a restart and an update of the app, and it travels to the Pi when you hand over: whichever computer does the work when the limit lifts carries on. A held thread does not keep the laptop from handing over or going to sleep.
+- A turn cut off while working in a repo leaves its work on the thread's branch on GitHub but is not merged into main. That happens when the turn has finished.
+- A brain update cut off by the limit files nothing and runs again by itself when the limit lifts. Cards skip their round while a limit is on.
+- The times are in `config.json` under `limits` (`marginMs`, `fallbackMs`, `checkMs`).
+
 ## Threads find their project
 
 A thread you start without a project gets one by itself after its first answer: a small

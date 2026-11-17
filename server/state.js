@@ -87,6 +87,8 @@ export function setState(patch) {
   if (patch.tier === 'auto' || patch.tier === 'ask') next.tier = patch.tier;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
+  // A brain update held by the usage limit: { until, type, only } (extract.js), or null.
+  if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '' } : null;
   if (typeof patch.focus === 'boolean') next.focus = patch.focus ? { on: true, until: focusEnd(Date.now(), next.sleep) } : { on: false, until: 0 };
   if (patch.sleep && typeof patch.sleep === 'object') {
     const sl = { ...DEFAULTS.sleep, ...next.sleep };

@@ -16,6 +16,7 @@
 // It runs only when he asks, it is the only thing in the app that writes the vault, and
 // only one can run at a time. It ends in one commit and a push.
 
+import { limitLabel, resumeAt, clock } from './limits.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent } from './agent.js';
@@ -38,6 +39,24 @@ let current = null; // { id, startedAt, step, threads }
 
 export function initExtraction(cfg) {
   config = cfg;
+}
+
+// A brain update the usage limit cut off starts again once the limit has lifted. The hold
+// is in the app's state, which both computers share; `mayRun` says whether this one does
+// the work right now.
+let holdTimer = null;
+export function watchHold(mayRun = () => true) {
+  clearInterval(holdTimer);
+  holdTimer = setInterval(() => {
+    try {
+      const held = getState().brainHeld;
+      if (!held || current || Date.now() < held.until || !mayRun()) return;
+      setState({ brainHeld: null });
+      const out = startExtraction({ only: held.only === 'mail' ? 'mail' : '' });
+      log(`brain update: the ${limitLabel(held.type)} lifted, ${out.started ? 'running again' : `not run again (${out.reason})`}`);
+    } catch (err) { log(`held brain update: ${err.stack || err.message}`); }
+  }, config.limits?.checkMs || 20_000);
+  holdTimer.unref?.();
 }
 
 function setStep(step) {
@@ -92,6 +111,7 @@ export function extractionStatus() {
     cards: readCardLog().filter((e) => e.ts > state.cardsLevel && e.type !== 'prep').length,
     mail: google.googleConnected(),
     mailLevel: state.mailLevel,
+    held: state.brainHeld || null, // cut off by the usage limit; runs again by itself at held.until
     last: lastRuns(1)[0] || null,
     brain: brain.brainStatus(),
   };
@@ -251,6 +271,7 @@ export function startExtraction({ only = '' } = {}) {
       : 'Nothing new to file: everything is already in the brain.' };
   }
 
+  if (getState().brainHeld) setState({ brainHeld: null }); // this run is the one that was waited for
   const id = new Date().toISOString().replace(/[:.]/g, '-');
   // The press fixes the level: each thread as it stands right now, and this moment for
   // mail and cards. Whatever comes after waits for the next update.
@@ -262,12 +283,20 @@ export function startExtraction({ only = '' } = {}) {
   current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title), mailOnly };
   runExtraction(id, changed, pressedAt, mailOnly)
     .catch((err) => {
+      if (err.limit) {
+        // Cut off by the usage limit: nothing is filed, and the update runs again by
+        // itself when the limit lifts (watchHold), on the computer that works then.
+        const until = resumeAt(err.limit, { marginMs: config.limits?.marginMs, fallbackMs: config.limits?.fallbackMs });
+        setState({ brainHeld: { until, type: err.limit.type || '', only: mailOnly ? 'mail' : '' } });
+        log(`brain update: held by the ${limitLabel(err.limit.type)} until ${new Date(until).toISOString()}`);
+        return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'held', until, pushed: true, error: `Claude's ${limitLabel(err.limit.type)} was reached. Nothing was filed; the update runs again by itself at ${clock(until)}.`, threads: current.threads, mailOnly };
+      }
       log(`brain update failed: ${err.stack || err.message}`);
       reportFailure('the brain update', err.stack || err.message);
       return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {
-      if (record.status === 'failed') await brain.discardChanges();
+      if (record.status === 'failed' || record.status === 'held') await brain.discardChanges();
       const runDir = path.join(EXTRACTIONS_DIR, id);
       fs.mkdirSync(runDir, { recursive: true });
       fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(record, null, 2));
@@ -379,6 +408,7 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
         else if (ev.type === 'text-start') setStep('Writing the report');
       },
     });
+    if (result.limit) throw Object.assign(new Error(result.error), { limit: result.limit });
     if (result.error) throw new Error(result.error);
 
     const report = parseReport(result.finalText || result.text);
