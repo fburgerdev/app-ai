@@ -923,7 +923,12 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
       await saving;
       const out = await api('POST', `/api/threads/${threadId}/mail/${path}`, { name, reason: reason ? reason() : '' });
       ok = true;
-      toast(out.closed ? `${okText} The thread is done.` : okText);
+      toast([
+        okText,
+        out.closed ? 'The thread is done.' : '',
+        out.archived ? 'Archived in Gmail.' : '',
+        out.archiveError ? `Not archived in Gmail: ${out.archiveError}` : '',
+      ].filter(Boolean).join(' '));
       document.activeElement?.blur();
       if (onDecided) onDecided();
       else if (out.closed) {
@@ -2225,6 +2230,8 @@ async function fillConnections(body, token) {
   if (g.connected) {
     body.append(block('Gmail and Calendar', { on: true, text: 'connected' },
       note(`Signed in${g.email ? ` as ${g.email}` : ''}. Threads can search and read your mail, read your calendar and add entries. Only the buttons on a mail put it into Gmail or send it, and only when you press them.`),
+      g.canArchive ? null : h('p', { class: 'panel-note is-error' }, 'Connect again to let Send archive a reply’s conversation in Gmail: press “Connect Google again” and allow all permissions.'),
+      g.canArchive ? null : h('a', { class: 'btn btn-brain', href: '/auth/google' }, 'Connect Google again'),
       h('button', { class: 'btn', type: 'button', onclick: async () => { await api('POST', '/api/google/disconnect', {}); toast('Disconnected.'); openSettings('connections'); } }, 'Disconnect')));
   } else if (g.configured) {
     body.append(block('Gmail and Calendar', { text: 'not connected' },

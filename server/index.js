@@ -808,7 +808,20 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
       runner.sign(closed.id, { again: true }).catch(() => {});
       cards.maybeMakeCards();
     }
-    res.json({ ok: true, closed: Boolean(closed), thread: store.getThread(m.thread.id) });
+    // A reply also takes its conversation out of the Gmail inbox. The mail is out either
+    // way, so a refusal here only shows as a note on the toast.
+    let archived = false;
+    let archiveError = '';
+    if (m.mail.replyToThreadId && !config.fake) {
+      try {
+        await google.gmailArchiveThread({ threadId: out.threadId || m.mail.replyToThreadId });
+        archived = true;
+      } catch (err) {
+        archiveError = err.message;
+        log(`mail: sent, but the conversation was not archived in Gmail: ${err.message}`);
+      }
+    } else if (m.mail.replyToThreadId) archived = true;
+    res.json({ ok: true, closed: Boolean(closed), archived, archiveError, thread: store.getThread(m.thread.id) });
   } catch (err) {
     res.status(502).json({ error: err.message });
   } finally {

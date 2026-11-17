@@ -72,6 +72,27 @@ test('a reply to a conversation that is not there goes out as a mail of its own'
   assert.doesNotMatch(decode(posted.message.raw), /^In-Reply-To:/m);
 });
 
+test('archiving takes a conversation out of the inbox, and only once Google allowed it', async () => {
+  const tokenFile = path.join(data, 'google-token.json');
+  const before = fs.readFileSync(tokenFile, 'utf8');
+  let call;
+  google.setHttp(async (url, init = {}) => {
+    if (String(url).includes('/modify')) call = { url: String(url), method: init.method, body: JSON.parse(init.body) };
+    return { ok: true, status: 200, json: async () => ({ access_token: 'fresh', expires_in: 3600 }) };
+  });
+  assert.equal(google.googleStatus().canArchive, false, 'an older sign-in has to be made again');
+  await assert.rejects(google.gmailArchiveThread({ threadId: 'T1' }), /Connect Google again/);
+  assert.equal(call, undefined);
+  const token = JSON.parse(before);
+  fs.writeFileSync(tokenFile, JSON.stringify({ ...token, scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify' }));
+  assert.equal(google.googleStatus().canArchive, true);
+  await google.gmailArchiveThread({ threadId: 'T1' });
+  assert.equal(call.method, 'POST');
+  assert.match(call.url, /\/threads\/T1\/modify$/);
+  assert.deepEqual(call.body, { removeLabelIds: ['INBOX'] });
+  fs.writeFileSync(tokenFile, before);
+});
+
 test('a calendar entry goes into the own calendar without guests', async () => {
   let body;
   google.setHttp(async (url, init = {}) => {
