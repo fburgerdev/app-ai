@@ -2460,6 +2460,12 @@ function renderStatus() {
   } else if (l.enabled && l.step && onPi) {
     tone = 'ready';
     text = `Taking everything back: ${l.step.toLowerCase()}…`;
+  } else if (onPi && !l.online) {
+    // Handed over, and the server does not answer: it stays handed over until he takes
+    // it back, so the row says so and offers it.
+    tone = 'ready';
+    text = `The ${pi.toLowerCase()} is not answering. Everything stays with it until you take it back.`;
+    buttons.push(act(`Take back to the ${lap}`, 'local', { title: `The ${lap} works with what the ${pi.toLowerCase()} last saved to GitHub; the rest comes over when it is back.` }));
   } else if (onPi) {
     tone = 'safe';
     text = `Handed over. Safe to suspend the ${lap}.`;
@@ -2491,8 +2497,9 @@ function renderStatus() {
   // repo work is only on this computer. Colour only then, and nothing moves.
   const failing = Boolean(st.saved.error);
   const steps = Boolean(l.enabled && l.step);
-  const loud = Boolean(l.finalizing) || steps || failing || Boolean(warn);
-  const mark = failing || warn ? 'warn' : (stage === 'safe' && l.finalizing) || onPi ? 'safe' : steps || (l.finalizing && stage !== 'safe') ? 'ready' : 'calm';
+  const piGone = onPi && !l.online;
+  const loud = Boolean(l.finalizing) || steps || failing || piGone || Boolean(warn);
+  const mark = failing || warn || piGone ? 'warn' : (stage === 'safe' && l.finalizing) || onPi ? 'safe' : steps || (l.finalizing && stage !== 'safe') ? 'ready' : 'calm';
   const side = () => h('span', { class: 'status-side' }, h('span', { class: `status-dot is-${mark}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap);
   const parts = () => [h('span', { class: 'status-text', role: 'status' }, text), warn, h('span', { class: 'status-actions' }, buttons)].filter(Boolean);
   // The buttons are one set of elements: in the panel while it is open, else in the row.

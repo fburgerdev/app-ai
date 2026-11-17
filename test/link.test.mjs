@@ -100,13 +100,34 @@ test('handing over: everything moves to the Pi and the page is passed on', async
   await res.body.cancel();
 });
 
-test('the Pi goes off while it has everything: the laptop takes over with what the Pi had saved', async () => {
+test('handed over, the laptop app restarts (a self-update): it stays on the Pi', async () => {
+  const before = (await call(lap, 'GET', '/api/link')).data;
+  assert.ok(fs.existsSync(path.join(dir, 'laptop', 'link.json')), 'the choice is kept on the laptop');
+  assert.match(fs.readFileSync(path.join(dir, 'laptop', '.gitignore'), 'utf8'), /^\/link\.json$/m, 'and never synced to the Pi');
+  await stop('laptop');
+  start('laptop', lapPort, { remote: pi, remoteCheckSeconds: 1 });
+  await up(lap);
+  const l = (await call(lap, 'GET', '/api/link')).data;
+  assert.equal(l.active, 'remote', 'straight back on the Pi');
+  assert.equal(l.choice, 'remote');
+  assert.equal(l.handedOverAt, before.handedOverAt);
+  await sleep(2500);
+  assert.equal((await call(lap, 'GET', '/api/link')).data.active, 'remote', 'and stays there');
+  assert.equal((await thread(lap, first.id)).messages.length, 6, 'the page still talks to the Pi');
+});
+
+test('the Pi goes off while it has everything: it stays handed over until he takes it back', async () => {
   await call(pi, 'POST', '/api/sync/push', {});
   await stop('pi');
+  const gone = await until(async () => { const x = (await call(lap, 'GET', '/api/link')).data; return !x.online && /not answering/.test(x.note) ? x : null; }, 'the laptop sees the Pi is gone');
+  assert.equal(gone.active, 'remote');
+  assert.equal(gone.choice, 'remote');
+  await sleep(3000);
+  assert.equal((await call(lap, 'GET', '/api/link')).data.active, 'remote', 'no taking back by itself');
+  await call(lap, 'POST', '/api/link', { choice: 'local' });
   const l = await linkIs('local');
   assert.equal(l.online, false);
   assert.equal(l.choice, 'local');
-  assert.match(l.note, /stopped answering/);
   assert.equal((await thread(lap, first.id)).messages.length, 6, 'came over through the data repo');
   second = (await call(lap, 'POST', '/api/threads', { text: 'Started on the laptop alone' })).data.thread;
   await answered(lap, second.id, 1);
