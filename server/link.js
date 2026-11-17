@@ -9,16 +9,23 @@
 //   hand over   the laptop saves to GitHub, the Pi takes that in, then the page is
 //               passed on. Waits until Claude has finished what it is doing here.
 //   take back   the Pi is asked to save (if it still answers), the laptop takes in what
-//               is on GitHub, then works by itself again. Happens by his click, when the
-//               laptop wakes up or starts, and when the Pi stops answering.
+//               is on GitHub, then works by itself again. Only by his click.
+//
+// The choice is remembered on this computer (link.json, never synced): handed over, it
+// stays on the Pi when the app restarts (also after a self-update), when the laptop
+// wakes up, and when the Pi stops answering for a while, until he takes it back
+// (Florian, 16-11-2026). While the Pi does not answer, the status row says so and offers
+// to take everything back.
 //
 // In between, both sides save to and take in from the data repo every few minutes, and
 // the laptop tells the Pi whenever it saved, so the phone (which talks to the Pi) is
 // never far behind. The Pi itself runs with no remote and only answers /api/sync/*.
 
+import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { log } from './config.js';
+import path from 'node:path';
+import { DATA_DIR, log } from './config.js';
 import * as datasync from './datasync.js';
 import { events } from './store.js';
 
@@ -41,10 +48,24 @@ const streams = new Set(); // passed-on requests still open (the live updates)
 export const enabled = () => Boolean(config?.remote);
 export const isRemote = () => active === 'remote';
 
+// Where the choice is kept on this computer.
+const CHOICE_FILE = () => path.join(DATA_DIR, 'link.json');
+function remember() {
+  try { fs.writeFileSync(CHOICE_FILE(), JSON.stringify({ choice, handedOverAt }) + '\n'); } catch (err) { log(`link: could not remember the choice (${err.message})`); }
+}
+function recall() {
+  try { return JSON.parse(fs.readFileSync(CHOICE_FILE(), 'utf8')); } catch { return {}; }
+}
+function setChoice(next) {
+  if (choice === next) return;
+  choice = next;
+  remember();
+}
+
 // Background work (cards, events, sorting threads) runs on one computer only: on the
-// laptop while it does the work; on the Pi while the laptop has not said for a few
-// minutes that it does.
-export const mayRunBackground = () => !finalizing && (enabled() ? !isRemote() : Date.now() - leaseAt > LEASE_MS);
+// laptop while it does the work and is not handing over; on the Pi while the laptop has
+// not said for a few minutes that it does.
+export const mayRunBackground = () => !finalizing && (enabled() ? choice === 'local' && !isRemote() : Date.now() - leaseAt > LEASE_MS);
 
 // Getting ready to suspend: no new background work starts, and what is here is saved, so
 // the status line can say when the computer can sleep. Any message from Florian ends it.
@@ -108,6 +129,7 @@ async function toRemote() {
   step = '';
   handedOverAt = Date.now();
   cutOver('remote');
+  remember();
 }
 
 async function toLocal() {
@@ -118,21 +140,29 @@ async function toLocal() {
   step = '';
   handedOverAt = 0;
   cutOver('local');
+  remember();
   if (online) remoteCall('POST', '/api/sync/lease', { timeout: 10_000 }).catch(() => {});
 }
 
 // Decides where the page should be, and moves it there.
 async function settle() {
   if (!enabled() || switching) return;
-  if (choice === 'remote' && !online) {
-    // One missed answer is not "off": only two in a row give up on the Pi.
-    if (active === 'remote' && misses < 2) return;
-    choice = 'local';
-    setNote(active === 'local' ? `${config.remoteName} is not reachable.` : `${config.remoteName} stopped answering. Back on the ${config.localName}, with what it had saved.`);
-    if (active === 'local') return;
-  }
   const want = choice === 'remote' ? 'remote' : 'local';
-  if (want === active) { step = ''; return; }
+  if (want === active) {
+    step = '';
+    // Handed over and the Pi does not answer: it stays handed over until he takes it back.
+    if (want === 'remote') setNote(online ? '' : `${config.remoteName} is not answering. Everything stays with it until you take it back.`);
+    return;
+  }
+  if (want === 'remote' && !online) {
+    // Not handed over yet, and the Pi is off: no handing over to a Pi that is off. One
+    // missed answer is not "off": only two in a row give up.
+    if (misses < 2) return;
+    step = '';
+    setChoice('local');
+    setNote(`${config.remoteName} is not reachable.`);
+    return;
+  }
   if (want === 'remote' && isBusy()) { step = 'Waiting for Claude to finish here'; setNote(''); return; }
   switching = true;
   try {
@@ -140,7 +170,7 @@ async function settle() {
   } catch (err) {
     step = '';
     setNote(`Staying on ${active === 'remote' ? config.remoteName : config.localName}: ${err.message}`);
-    if (want === 'remote') choice = 'local';
+    if (want === 'remote') setChoice('local');
   } finally {
     switching = false;
   }
@@ -151,15 +181,12 @@ async function tick() {
   if (ticking) return;
   ticking = true;
   try {
-    // A long gap between two ticks: the laptop was asleep. Awake again, it does the work.
-    const every = Math.max(1, Number(config.remoteCheckSeconds) || 15) * 1000;
-    const slept = Date.now() - lastTick > Math.max(60_000, every * 4);
+    // Awake again after sleeping, the laptop stays handed over: only his click takes back.
     lastTick = Date.now();
     await ping();
-    if (slept && choice === 'remote') { choice = 'local'; log('link: awake again; taking the threads back'); }
     await settle();
     // Doing the work here: the Pi leaves the background work to the laptop.
-    if (online && active === 'local') remoteCall('POST', '/api/sync/lease', { timeout: 10_000 }).catch(() => {});
+    if (online && active === 'local' && choice === 'local') remoteCall('POST', '/api/sync/lease', { timeout: 10_000 }).catch(() => {});
   } finally { ticking = false; lastTick = Date.now(); }
 }
 
@@ -171,7 +198,7 @@ export async function remoteSave() {
 }
 
 export function choose(next) {
-  choice = next === 'remote' ? 'remote' : 'local';
+  setChoice(next === 'remote' ? 'remote' : 'local');
   note = '';
   if ((choice === 'remote') !== (active === 'remote')) step = choice === 'remote' ? 'Starting the handover' : 'Taking everything back';
   else step = '';
@@ -183,7 +210,14 @@ export async function initLink(cfg, { busy }) {
   config = cfg;
   isBusy = busy;
   if (!enabled()) return;
-  log(`link: ${config.localName} does the work; ${config.remoteName} is ${config.remote}`);
+  // Handed over before the app stopped: still handed over. The laptop did nothing since,
+  // so the page goes straight to the Pi.
+  const kept = recall();
+  if (kept.choice === 'remote') {
+    choice = 'remote';
+    if (kept.handedOverAt) { handedOverAt = kept.handedOverAt; active = 'remote'; }
+    log(`link: ${kept.handedOverAt ? 'still handed over to' : 'handing over to'} ${config.remoteName}, as before the restart`);
+  } else log(`link: ${config.localName} does the work; ${config.remoteName} is ${config.remote}`);
   // Starting up: whatever the Pi has that is not on GitHub yet comes over first.
   ping().then(async (up) => {
     if (!up) return;

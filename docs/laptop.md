@@ -42,8 +42,11 @@ it hands over as soon as that is finished (Cancel stops it). Then the laptop sav
 the Pi takes everything in, and the line turns green: "Handed over … Safe to suspend the
 Laptop." From then on the laptop's window only passes everything on to the Pi.
 
-**Take back to the Laptop** brings everything back; it also happens by itself when the laptop
-wakes up or starts, and when the Pi stops answering. The Pi saves first if it can.
+**Take back to the Laptop** brings everything back, and only that click does: the laptop
+remembers the handover (in `link.json` in its data folder, never synced), so it stays on the Pi
+when the app restarts or updates itself, when the laptop wakes up, and when the Pi stops
+answering for a while. In that last case the row says the Pi is not answering and offers the
+take-back; the laptop then works with what the Pi last saved. The Pi saves first if it can.
 
 Background work (new cards, opening events, sorting threads into projects) runs on one side
 only: on the laptop while it does the work, on the Pi while the laptop is handed over or off.
@@ -61,8 +64,9 @@ the moment it has saved. A handover does the same at once, in both directions. S
   on both sides (a thread's status, the mood line), the version saved to GitHub first wins.
 - With the Pi off, the laptop just works; nothing can sync to the Pi until it is back, and
   when it is, it catches up by itself.
-- If the Pi goes off without warning while it has everything, the laptop carries on with
-  what the Pi last saved (at most two minutes old). The rest comes in when the Pi is back.
+- If the Pi goes off without warning while it has everything, the laptop stays handed over
+  until you take it back; then it carries on with what the Pi last saved (at most two minutes
+  old). The rest comes in when the Pi is back.
 - No internet at all: the laptop works on what it has and saves when it is online again.
 
 What does not travel: a turn Claude is in the middle of (it finishes where it started), and
