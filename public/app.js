@@ -2354,7 +2354,11 @@ const minutesOf = (hhmm) => { const [a, b] = hhmm.split(':').map(Number); return
 // The last sleep hours are kept here, so the screen is up before anything is loaded and
 // the app is never seen for a moment first.
 const SLEEP_SAVED = 'app-ai-sleep';
-let sleepPassed = 0; // until when the screen was waved away
+// Until when the screen was waved away. Kept for this window only (sessionStorage), so a
+// reload the app does by itself (after updating) does not bring it back; opening the app
+// again does.
+let sleepPassed = Number(sessionStorage.getItem('app-ai-sleep-passed')) || 0;
+const passSleep = (until) => { sleepPassed = until; try { sessionStorage.setItem('app-ai-sleep-passed', String(until)); } catch { /* fine */ } };
 let hiddenSince = 0;
 
 function sleepWindow(now = new Date()) {
@@ -2400,7 +2404,7 @@ function checkSleep() {
     h('div', { class: 'sleep-moon', 'aria-hidden': 'true' }),
     h('h1', { class: 'sleep-title' }, 'Time to sleep.'),
     h('p', { class: 'sleep-text' }, `It is ${clock(now.getTime())}. Everything here is still here at ${w.until}, and the queue keeps until then.`),
-    h('button', { class: 'btn btn-quiet sleep-pass', type: 'button', onclick: () => { sleepPassed = w.end; checkSleep(); } }, 'Let me in anyway'),
+    h('button', { class: 'btn btn-quiet sleep-pass', type: 'button', onclick: () => { passSleep(w.end); checkSleep(); } }, 'Let me in anyway'),
   ));
   document.body.classList.remove('is-booting');
   if (sleepScreen.hidden) {
@@ -2415,7 +2419,7 @@ setInterval(checkSleep, 30 * 1000);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenSince = Date.now(); return; }
   // Away for a while counts as opening the app again.
-  if (hiddenSince && Date.now() - hiddenSince > 10 * 60 * 1000) sleepPassed = 0;
+  if (hiddenSince && Date.now() - hiddenSince > 10 * 60 * 1000) passSleep(0);
   hiddenSince = 0;
   checkSleep();
 });
