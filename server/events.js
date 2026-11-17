@@ -72,6 +72,59 @@ export function openNow(threadId) {
   return store.getThread(threadId);
 }
 
+// The events not over yet, soonest first: what a thread can move.
+export function upcomingEvents(now = Date.now()) {
+  return store.listThreads()
+    .filter((t) => t.kind === 'event' && t.event && t.event.end >= now - 3600_000 && !(t.state === 'done' && t.event.started))
+    .sort((a, b) => a.event.start - b.event.start);
+}
+
+const when = (ms) => {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const list = (events) => events.map((t) => `- "${t.title}" (${t.id}), ${when(t.event.start)}`).join('\n') || '(none)';
+
+// Which event a thread means: the thread itself when it is one and nothing is named, else
+// by id, else by its title (all words of `ref` in it, case aside).
+export function findEvent(ref, fromThreadId) {
+  const own = store.getThread(fromThreadId);
+  const name = String(ref || '').trim();
+  if (!name) {
+    if (own?.kind === 'event' && own.event) return own;
+    throw new Error(`Name the event to move. The upcoming ones:\n${list(upcomingEvents())}`);
+  }
+  const byId = store.getThread(name);
+  if (byId?.kind === 'event' && byId.event) return byId;
+  const words = name.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = upcomingEvents().filter((t) => words.every((w) => t.title.toLowerCase().includes(w)));
+  if (hits.length === 1) return hits[0];
+  if (!hits.length) throw new Error(`No upcoming event matches "${name}". The upcoming ones:\n${list(upcomingEvents())}`);
+  throw new Error(`"${name}" matches more than one event; give its id:\n${list(hits)}`);
+}
+
+// An entry moved (postponed, brought forward): the event thread follows at once, in
+// Events and in when its briefing opens. Its thread gets a note, so the brain update and
+// its preparation know. Times are ISO 8601; without an end it keeps its length.
+export function moveEvent({ ref, start, end, where, fromThreadId, now = Date.now() }) {
+  const t = findEvent(ref, fromThreadId);
+  const s = Date.parse(start);
+  if (!Number.isFinite(s)) throw new Error(`"${start}" is not a time. Give it in ISO 8601 with the offset, e.g. 2026-11-19T12:00:00+01:00.`);
+  const e = end ? Date.parse(end) : s + (t.event.end - t.event.start);
+  if (!Number.isFinite(e) || e <= s) throw new Error('The end has to be a time after the start.');
+  const before = t.event;
+  const event = { ...before, start: s, end: e, showAt: showAtFor(s, before.important), ...(where != null ? { where: String(where).slice(0, 120) } : {}) };
+  store.updateThread(t.id, { event });
+  const by = fromThreadId && fromThreadId !== t.id ? ` (said in the thread "${store.getThread(fromThreadId)?.title || ''}")` : '';
+  store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[The entry moved from ${when(before.start)} to ${when(s)}–${when(e).slice(11)}${event.where && event.where !== before.where ? `, ${event.where}` : ''}, on ${when(now)}${by}.]` });
+  log(`events: moved "${t.title}" to ${when(s)}`);
+  // Not opened yet: it opens by the new time (at once, if that has come).
+  if (!before.started) tick();
+  const after = store.getThread(t.id);
+  return `Moved "${t.title}" to ${when(s)}–${when(e).slice(11)}. ${after.event.started ? 'Its thread is open in Events.' : `It opens by itself on ${when(after.event.showAt)}.`} This moves the event in the app only; the entry in Google Calendar is not changed by it.`;
+}
+
 export function initEvents({ mayRunHere }) {
   mayRun = mayRunHere;
   setInterval(tick, 60_000).unref?.();

@@ -24,6 +24,7 @@ import * as repos from './repos.js';
 import * as repair from './repair.js';
 import * as ship from './ship.js';
 import { piShell } from './pi.js';
+import { moveEvent } from './events.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -351,6 +352,7 @@ async function runTurn(threadId, prompt) {
       shell: config.threadShell,
       artifactsShell: config.artifactsShell !== false,
       piShell: config.pi?.enabled === false ? undefined : piShell,
+      moveEvent: (args) => moveEvent({ ref: args.event, start: args.start, end: args.end, where: args.where, fromThreadId: threadId }),
       signal: abort.signal,
       title: thread.title,
       fake: config.fake,

@@ -11,4 +11,6 @@ For an entry that is worth preparing (a meeting with people outside his own grou
 - `project` is the project or area it belongs to, if the vault shows one.
 - `text` is the brief for that thread: what the entry is, when and where, who is there as far as the calendar and the vault show, and which notes to read. Ask it to write a short briefing (what he wants out of it, what is open with the people there, what to bring or have ready) and then to start a preparation session as `Claude/Thinking With Me.md` describes. For a small entry, a few lines of briefing are enough.
 
+An entry whose event is already in that list under another time has moved: it is not made again.
+
 Skip routine entries (travel, blocks of working time, private appointments, recurring internal meetings with nothing new) and anything already past. At most four preps per run. Most runs find nothing to prepare; that is normal.
