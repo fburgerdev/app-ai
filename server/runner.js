@@ -4,6 +4,9 @@
 //   working  Claude is on it
 //   done     Florian closed it
 //
+// A turn cut off by Claude's usage limit keeps its thread "working", with `held` on it:
+// it runs again by itself once the limit has lifted (limits.js, "held turns" below).
+//
 // A message Florian sends makes a thread "working"; the end of Claude's turn makes it
 // "ready" again and puts it at the back of the inbox.
 
@@ -25,10 +28,12 @@ import * as repair from './repair.js';
 import * as ship from './ship.js';
 import { piShell } from './pi.js';
 import { moveEvent } from './events.js';
+import { limitLabel, resumeAt, clock } from './limits.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
 const waiting = []; // threadIds waiting for a free slot
+const heldPrompt = new Map(); // threadId -> the message a turn started again after a hold is really about
 
 export function initRunner(cfg) {
   config = cfg;
@@ -99,7 +104,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
 const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);
 
 function startTurn(threadId, prompt, background = false) {
-  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname() });
+  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null });
   if (!slotFree(background)) {
     waiting.push({ threadId, prompt, background });
     store.updateThread(threadId, { activity: background ? 'Waiting its turn (your own messages go first)' : 'Waiting for a free slot' }, { quiet: true });
@@ -110,6 +115,7 @@ function startTurn(threadId, prompt, background = false) {
     log(`turn failed unexpectedly: ${err.stack || err.message}`);
     if (store.getThread(threadId)?.kind !== 'repair') repair.report('a turn', err.stack || err.message);
     running.delete(threadId);
+    heldPrompt.delete(threadId);
     store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', error: err.message });
   });
 }
@@ -122,9 +128,66 @@ export function stopTurn(threadId) {
     return true;
   }
   const run = running.get(threadId);
-  if (!run) return false;
+  if (!run) {
+    // Held by the usage limit: stopping it cancels the hold, and it is his again.
+    const thread = store.getThread(threadId);
+    if (!thread?.held) return false;
+    heldPrompt.delete(threadId);
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false });
+    log(`thread "${thread.title}": hold cancelled`);
+    return true;
+  }
   run.abort.abort();
   return true;
+}
+
+// ---------- held turns: cut off by the usage limit, run again when it lifts ----------
+//
+// `held` on the thread: { until (when it runs again), type (which limit), prompt (the
+// message the turn was about), at, tier, tries }. The thread stays "working", so what
+// Florian adds meanwhile waits in `pending` like any message sent mid-turn, and "Stop"
+// cancels the hold. Nothing here keeps a timer per thread: the hold is data, and
+// resumeHeld() looks at the clock, on whichever computer does the work at that moment.
+
+const holdLine = (held) => `Held by the ${limitLabel(held.type)}: carries on by itself at ${clock(held.until)}`;
+
+function hold(threadId, limit, { prompt, tier, tries = 0 }) {
+  const until = resumeAt(limit, { marginMs: config.limits?.marginMs, fallbackMs: config.limits?.fallbackMs });
+  const held = { until, type: limit.type || '', prompt, at: Date.now(), tier, tries: tries + 1 };
+  store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '' });
+  log(`thread "${store.getThread(threadId)?.title}": held by the ${limitLabel(held.type)} until ${new Date(until).toISOString()}`);
+  return held;
+}
+
+// Starts every held turn whose limit has lifted. `mayRun` says whether this computer is
+// the one doing the work; the other one leaves the hold alone.
+export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
+  let started = 0;
+  for (const t of store.listThreads()) {
+    if (!t.held || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
+    if (!mayRun()) return started;
+    const { held } = t;
+    const added = t.pending || [];
+    const prompt = [
+      `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
+      held.prompt,
+      ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
+    ].join('\n\n');
+    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
+    heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: held.tries || 1 });
+    store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
+    log(`thread "${t.title}": the ${limitLabel(held.type)} lifted, carrying on`);
+    startTurn(t.id, prompt);
+    started += 1;
+  }
+  return started;
+}
+
+let holdTimer = null;
+export function watchHolds(mayRun) {
+  clearInterval(holdTimer);
+  holdTimer = setInterval(() => { try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); } }, config.limits?.checkMs || 20_000);
+  holdTimer.unref?.();
 }
 
 // The last thread on this thread's project, as the vault holds it: named, so that a new
@@ -377,8 +440,13 @@ async function runTurn(threadId, prompt) {
     const repeatsError = (p) => result.error && p.type === 'text' && result.error.includes(p.text.trim());
     const parts = run.parts.filter((p) => (p.type !== 'text' || p.text.trim()) && !repeatsError(p));
     const message = { role: 'assistant', parts, durationMs: result.durationMs, tier: tier.name };
+    // Cut off by the usage limit (and not stopped by him): held, not failed.
+    const limited = result.limit && !result.aborted ? result.limit : null;
+    const again = heldPrompt.get(threadId);
+    heldPrompt.delete(threadId);
     if (result.aborted) message.stopped = true;
-    if (result.error) message.error = result.error;
+    if (limited) message.limit = { type: limited.type || '' };
+    else if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
 
     // The repo is saved and given back before the thread shows as ready, so nothing
@@ -387,6 +455,13 @@ async function runTurn(threadId, prompt) {
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId);
+    if (limited) {
+      // The work so far is on its branch on GitHub, but half-done work is not merged into
+      // main. What he added meanwhile stays in `pending` and goes in with the next try.
+      running.delete(threadId);
+      hold(threadId, limited, { prompt: again?.prompt || prompt, tier: tier.name, tries: again?.tries || 0 });
+      return;
+    }
     // Tested and merged into main by itself, in the background (ship.js).
     ship.afterTurn(threadId).catch(() => {});
     const fresh = store.getThread(threadId);

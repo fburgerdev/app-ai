@@ -426,6 +426,7 @@ input.thread-title:hover { background: var(--panel); }
 .status { display: inline-flex; align-items: center; font-size: 13px; white-space: nowrap; }
 .status-ready { color: var(--s-ready); }
 .status-working { color: var(--s-working); }
+.status-held { color: var(--muted); }
 .status-done { color: var(--s-done); }
 .head-actions { display: flex; gap: 2px; margin-left: auto; }
 
