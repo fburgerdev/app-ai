@@ -4,7 +4,7 @@ The app signs in to Google as you, through a Google Cloud project that belongs t
 
 ## What threads can do afterwards
 
-- Threads can search and read your mail, read your calendar, and add an entry to it.
+- Threads can search and read your mail, read your calendar, and add an entry to it. Entries they add are orange (Pumpkin) and can carry a Google Meet link; they never have guests.
 - A mail Claude writes gets two buttons: **Put in Gmail** (a draft) and **Send** (after one confirmation). Only your click uses them.
 - "Update brain" also reads the mail that arrived and went out since the last update.
 
