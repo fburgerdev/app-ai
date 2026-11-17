@@ -82,6 +82,30 @@ test('a calendar entry goes into the own calendar without guests', async () => {
   assert.equal(out.id, 'E1');
   assert.deepEqual(body.start, { date: '2026-12-03' });
   assert.equal(body.attendees, undefined);
+  assert.equal(body.colorId, '6', 'entries Claude makes are Pumpkin');
+  assert.equal(body.conferenceData, undefined, 'no Meet link unless asked for');
+  assert.equal(out.meet, undefined);
+});
+
+test('a calendar entry can carry a Meet link, which comes back', async () => {
+  let body;
+  let asked;
+  google.setHttp(async (url, init = {}) => {
+    if (init.body && String(url).includes('/calendars/primary/events')) { body = JSON.parse(init.body); asked = String(url); }
+    return { ok: true, status: 200, json: async () => ({ id: 'E2', htmlLink: 'https://calendar.example/E2', hangoutLink: 'https://meet.google.com/abc-defg-hij' }) };
+  });
+  const out = await google.calendarCreate({ title: 'Call', start: '2026-11-18T11:00:00+01:00', end: '2026-11-18T11:30:00+01:00', meet: true });
+  assert.match(asked, /conferenceDataVersion=1/);
+  assert.equal(body.conferenceData.createRequest.conferenceSolutionKey.type, 'hangoutsMeet');
+  assert.ok(body.conferenceData.createRequest.requestId);
+  assert.equal(body.colorId, '6');
+  assert.equal(body.attendees, undefined);
+  assert.equal(out.meet, 'https://meet.google.com/abc-defg-hij');
+
+  google.setHttp(async () => ({ ok: true, status: 200, json: async () => ({ id: 'E3', htmlLink: 'https://calendar.example/E3' }) }));
+  const none = await google.calendarCreate({ title: 'Call', start: '2026-11-18T11:00:00+01:00', end: '2026-11-18T11:30:00+01:00', meet: true });
+  assert.equal(none.meet, undefined);
+  assert.match(none.note, /no Meet link/);
 });
 
 test('the tools can be built for a thread', async () => {

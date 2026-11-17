@@ -324,6 +324,8 @@ export async function gmailSince(sinceMs) {
 
 // ---------- calendar ----------
 
+const meetLink = (e) => e.hangoutLink || (e.conferenceData?.entryPoints || []).find((p) => p.entryPointType === 'video')?.uri || '';
+
 const eventLine = (e) => ({
   id: e.id,
   title: e.summary || '(no title)',
@@ -332,6 +334,7 @@ const eventLine = (e) => ({
   location: e.location || undefined,
   description: e.description ? e.description.slice(0, 500) : undefined,
   with: (e.attendees || []).map((a) => a.email).slice(0, 12),
+  meet: meetLink(e) || undefined,
 });
 
 export async function calendarList({ from, to, query, max = 50 }) {
@@ -347,15 +350,25 @@ export async function calendarList({ from, to, query, max = 50 }) {
   return (data.items || []).map(eventLine);
 }
 
+// Entries Claude makes are Pumpkin (orange) in Google Calendar, so Florian can tell them
+// from his own.
+const CLAUDE_COLOR = '6';
+
 // Adds an entry to your own calendar. It takes no guests, so nobody gets an invitation.
-export async function calendarCreate({ title, start, end, allDay, location, description }) {
+// With meet, Google makes a Meet link for it; Florian passes the link on himself.
+export async function calendarCreate({ title, start, end, allDay, location, description, meet }) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const when = (v) => (allDay ? { date: String(v).slice(0, 10) } : { dateTime: new Date(v).toISOString(), timeZone: zone });
-  const event = await api(`${CALENDAR}/calendars/primary/events`, {
-    method: 'POST',
-    body: { summary: title, start: when(start), end: when(end), location, description },
-  });
-  return { id: event.id, link: event.htmlLink };
+  const body = { summary: title, start: when(start), end: when(end), location, description, colorId: CLAUDE_COLOR };
+  if (meet) body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
+  const event = await api(`${CALENDAR}/calendars/primary/events${meet ? '?conferenceDataVersion=1' : ''}`, { method: 'POST', body });
+  const out = { id: event.id, link: event.htmlLink };
+  if (meet) {
+    const url = meetLink(event);
+    if (url) out.meet = url;
+    else out.note = 'The entry was made, but Google gave no Meet link for it. Florian can add one in the entry himself.';
+  }
+  return out;
 }
 
 // ---------- the tools a thread gets ----------
@@ -390,6 +403,7 @@ export async function buildGoogleServer() {
           allDay: z.boolean().optional(),
           location: z.string().optional(),
           description: z.string().optional(),
+          meet: z.boolean().optional().describe('true to attach a Google Meet link'),
         }, guarded(calendarCreate)),
     ],
   });
