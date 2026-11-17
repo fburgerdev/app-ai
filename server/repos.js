@@ -178,7 +178,15 @@ export async function openFor(threadId, full) {
     } else if (!exists) {
       branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
       const remote = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]).then(() => `origin/${base}`, () => 'HEAD');
-      await git(dir, ['checkout', '--quiet', '-B', branch, remote]);
+      // A thread that worked here, went to another repo and comes back no longer knows
+      // its branch, but the branch is still there, with work main does not have (the
+      // turn ended in the other repo, so nothing merged it). It goes on from that work
+      // instead of starting over from main and dropping it.
+      const unmerged = async (ref) => (await git(dir, ['rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false))
+        && !(await git(dir, ['merge-base', '--is-ancestor', ref, remote]).then(() => true, () => false));
+      if (await unmerged(`refs/heads/${branch}`)) await git(dir, ['checkout', '--quiet', branch]);
+      else if (await unmerged(`refs/remotes/origin/${branch}`)) await git(dir, ['checkout', '--quiet', '-B', branch, `origin/${branch}`]);
+      else await git(dir, ['checkout', '--quiet', '-B', branch, remote]);
     } else if (on !== branch) {
       await git(dir, ['checkout', '--quiet', branch]);
     }
