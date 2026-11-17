@@ -543,7 +543,8 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     try {
       const r = await repoTools.open(repoAsk[1]);
       fs.writeFileSync(path.join(r.dir, 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
-      if (/REPO-SLOW/.test(newest)) await new Promise((res) => setTimeout(res, 1500));
+      const slow = /REPO-SLOW(?:=(\d+))?/.exec(newest);
+      if (slow) await new Promise((res) => setTimeout(res, Number(slow[1] || 1500)));
     } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
   }
   const renameAsk = repoTools && /RENAME-TEST ([\w./-]+) ([\w.-]+)/.exec(newest);

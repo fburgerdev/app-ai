@@ -13,14 +13,17 @@
 // "Update Gmail" is the mail part by itself: it takes in the mail since the mail level
 // and raises only that level.
 //
-// It runs only when he asks, it is the only thing in the app that writes the vault, and
-// only one can run at a time. It ends in one commit and a push.
+// It runs only when he asks, it is the only thing in the app that files facts into the
+// vault, and only one can run at a time. It ends in one commit and a push. (A thread can
+// change the vault's structure and rules, through the vault's repo like any other repo;
+// the two never write at once, see runExtraction.)
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAgent } from './agent.js';
 import * as brain from './brain.js';
 import * as google from './google.js';
+import * as repos from './repos.js';
 import * as runner from './runner.js';
 import * as store from './store.js';
 import { EXTRACTIONS_DIR, log } from './config.js';
@@ -285,6 +288,30 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
   fs.mkdirSync(dir, { recursive: true });
   const state = getState();
 
+  // The vault is also a repo threads can open, to change its structure or its rules. The
+  // two never write it at once: the update waits for a thread that holds the vault, and a
+  // thread that opens it while the update runs waits for the update.
+  const vault = vaultRepo();
+  const job = repos.jobHolder('brain update');
+  if (vault) {
+    if (repos.holder(vault) && repos.holder(vault) !== job) setStep(`Waiting for ${repos.holderName(vault)}, which is changing the vault`);
+    await repos.acquire(vault, job);
+  }
+  try {
+    return await writeBrain(id, changed, pressedAt, mailOnly, dir, state);
+  } finally {
+    if (vault) repos.release(vault, job);
+  }
+}
+
+// The vault's repo as "owner/name", the way a thread opens it. A test's vault is a folder
+// on disk ending in "<owner>/<name>.git"; its last two parts are the name.
+function vaultRepo() {
+  const src = String(config.brainRepo || '');
+  return repos.repoName(src) || src.replace(/\.git$/i, '').split(/[\\/]/).filter(Boolean).slice(-2).join('/') || null;
+}
+
+async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
   return brain.withWriter('brain update', async () => {
     setStep('Getting the vault up to date');
     await brain.pullForWriting();

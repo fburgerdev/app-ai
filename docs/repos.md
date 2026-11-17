@@ -26,9 +26,17 @@ about how it behaves, and about the one extra for renaming and creating repos.
   push, switch branches, reset, delete branches or touch the remote: the app blocks those
   commands.
 - Shell commands on code (tests, builds, git commits) are allowed only while a thread holds a
-  repo, and file writes only inside it. The vault stays read-only as always. (A thread without
-  a repo can run scripts in its own artifacts folder, for PDF forms and Word files; see the
-  README.)
+  repo, and file writes only inside it. The app's clone of the vault stays read-only. (A thread
+  without a repo can run scripts in its own artifacts folder, for PDF forms and Word files; see
+  the README.)
+- **The vault is a repo too.** A thread that changes the vault's structure or rules opens
+  `brain` and works there like anywhere else. Facts stay with the brain update. The two take
+  turns: the brain update holds the vault's repo while it runs, so a thread opening it waits
+  (the repo panel says "The brain update is working in this repo"), and the update waits for
+  a thread that holds it.
+- **Only the repo open at the end of a turn is merged by itself.** A thread that switches repos
+  mid-turn leaves the first one's branch pushed but unmerged; it is merged once the thread
+  ends a turn in it again.
 
 ## Into main by itself
 

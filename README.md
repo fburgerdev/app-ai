@@ -135,7 +135,7 @@ Then the app makes one `thinking:` commit and pushes. What the vault says needs 
 
 **Done stays short.** A closed thread whose content is entirely in the brain is archived by the next "Update brain" and leaves the Done list. A thread closed with nothing of yours left to file is archived by the press alone, even when there is nothing else to file. Archived threads are kept in the app's data, not deleted; reopening one brings it back.
 
-These two buttons are the only things in the app that write the vault, and they run only when you press them.
+These two buttons are the only things in the app that file facts into the vault, and they run only when you press them. Changes to the vault itself (renaming a folder, a rule in `Claude/`, a change that goes with a change to the app) are made by the thread doing that work, in the vault's repo like in any other: on its own branch, merged into main by the app when the turn ends. The two never write at the same time: an update waits for a thread that is working in the vault ("Waiting for … which is changing the vault"), and a thread that opens the vault during an update waits for the update.
 
 ## Projects and areas
 
@@ -366,10 +366,10 @@ The whole app works in the phone's browser under the same address as Talk. One c
 ## How the brain is handled
 
 - **One clone stays on disk** in the app's data folder. Before a turn starts, the app brings it up to GitHub's state. Claude never clones, pulls, commits or pushes.
-- **Threads only read the vault.** That is enforced in code: a thread can write into its own files folder and nowhere else.
+- **Threads only read the app's clone.** That is enforced in code: a thread can write into its own files folder, and into a repo it holds, nowhere else. To change the vault's structure or rules, a thread opens the vault's repo (`fburgerdev/brain`) like any other; facts stay with the brain update.
 - **The vault's Scratchpad is never on this disk.** `Scratchpad.md`, `.obsidian/` and `For Claude/processed/` are left out of the clone.
 - **The current rules ride along.** `Claude/Instructions.md` and `Claude/Thinking With Me.md` are put into every thread's instructions fresh each turn.
-- **Only the brain update writes**, as described above. `For Claude/`, `For Florian/`, `Scratchpad.md` and `.obsidian/` are put back before the commit, whatever the run did.
+- **Only the brain update files facts**, as described above. `For Claude/`, `For Florian/`, `Scratchpad.md` and `.obsidian/` are put back before the commit, whatever the run did.
 
 Since 13-11-2026 the app is the only way into the vault: there is no Obsidian copy and no laptop sync any more, and the vault's `CLAUDE.md` describes the app's brain update as the way it changes.
 
