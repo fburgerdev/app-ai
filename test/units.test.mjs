@@ -231,3 +231,34 @@ test('only the computer that runs a turn can call it lost; the other leaves it b
   assert.deepEqual(out.otherGone, ['working', 'ready'], 'once it is gone: only what has not moved for a while');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('a turn the other computer finished shows its answer here, never a false error', async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-finished-'));
+  const threadsDir = path.join(dir, 'threads');
+  const write = (id, meta) => { fs.mkdirSync(path.join(threadsDir, id), { recursive: true }); fs.writeFileSync(path.join(threadsDir, id, 'thread.json'), JSON.stringify({ id, title: id, updatedAt: Date.now() - 60 * 60_000, ...meta })); };
+  const answer = (id) => fs.writeFileSync(path.join(threadsDir, id, 'messages.jsonl'), [
+    JSON.stringify({ id: 'u', role: 'user', text: 'hi' }),
+    JSON.stringify({ id: 'a', role: 'assistant', parts: [{ type: 'text', text: 'done' }] })].join('\n') + '\n');
+  write('synced', { state: 'working', workingOn: 'the-other-computer' });
+  write('stale', { state: 'working', workingOn: 'the-other-computer' }); answer('stale');
+  write('flagged', { state: 'ready', error: 'Claude was working on this on the other computer, which went away before it finished. Send a message to pick it up again.' }); answer('flagged');
+  const { execFileSync } = await import('node:child_process');
+  const script = `
+    const fs = await import('node:fs');
+    const store = await import(${JSON.stringify(new URL('../server/store.js', import.meta.url).href)});
+    store.loadThreads();
+    const file = ${JSON.stringify(path.join(threadsDir, 'synced', 'thread.json'))};
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), state: 'ready', workingOn: '' }));
+    store.reloadThreads();
+    store.settleOrphans({ isRunning: () => false, otherGone: true });
+    store.clearFalseErrors();
+    const g = (id) => [store.getThread(id).state, store.getThread(id).error || ''];
+    console.log(JSON.stringify({ synced: g('synced'), stale: g('stale'), flagged: g('flagged') }));`;
+  const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, APP_AI_DATA: dir }, encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual(out.synced, ['ready', ''], 'the other computer\'s saved "ready" wins over the old "working" in memory');
+  assert.deepEqual(out.stale, ['ready', ''], 'a turn whose answer arrived is ready, not lost');
+  assert.deepEqual(out.flagged, ['ready', ''], 'the false note from before goes');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

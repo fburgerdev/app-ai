@@ -92,10 +92,13 @@ export function reloadThreads() {
       const meta = readJson(metaFile(id), null);
       if (!meta || meta.id !== id) continue;
       seen.add(id);
+      // Only a turn running on this computer keeps what is in memory. A turn the other
+      // computer runs is shown as it saved it: working while it works, then its answer.
+      // Keeping the old "working" copy here hid the finished turn, and settleOrphans()
+      // later called it lost ("ended on an error") although the answer was there.
       // (A held turn is not being worked on: the other computer may have carried on with it.)
-      if (threads.get(id)?.state === 'working' && !threads.get(id).held) continue;
-      // A turn running on the other computer: shown as working, never written here.
-      // settleOrphans() deals with it if that computer goes away.
+      const cur = threads.get(id);
+      if (cur?.state === 'working' && !cur.held && mine(cur)) continue;
       threads.set(id, meta);
       // A conversation continued on both computers has more lines than either counted.
       const count = readMessages(id).length;
@@ -120,6 +123,12 @@ export function settleOrphans({ isRunning, otherGone = false, olderThanMs = 10 *
     if (t.state !== 'working' || t.held || isRunning(t.id)) continue;
     const here = mine(t);
     if (!here && !(otherGone && now - (t.updatedAt || 0) > olderThanMs)) continue;
+    // The other computer finished the turn and its answer is here, only its last state
+    // did not arrive: the thread is simply ready, with no note.
+    if (!here && finishedAnswer(t)) {
+      updateThread(t.id, { state: 'ready', queuedAt: now, activity: '', pending: [], workingOn: '', error: '' });
+      continue;
+    }
     updateThread(t.id, {
       state: 'ready', queuedAt: now, activity: '', pending: [], workingOn: '',
       error: here ? 'The app was closed while Claude was working on this. Send a message to pick it up again.'
@@ -132,12 +141,18 @@ export function settleOrphans({ isRunning, otherGone = false, olderThanMs = 10 *
 
 // Threads marked "ended on an error" by the bug fixed above, although their turn finished
 // fine: the last message is Claude's complete answer. The note goes; once per thread.
+// True when the thread's last message is Claude's complete answer.
+function finishedAnswer(t) {
+  const last = readMessages(t.id).at(-1);
+  return last?.role === 'assistant' && !last.error && !last.stopped && (last.parts || []).length > 0;
+}
+
+// Also the threads the reload bug above marked "went away before it finished".
 export function clearFalseErrors() {
   let cleared = 0;
   for (const t of threads.values()) {
-    if (t.state !== 'ready' || !/^Claude was working on this on the other computer when this one took over/.test(t.error || '')) continue;
-    const last = readMessages(t.id).at(-1);
-    if (last?.role === 'assistant' && !last.error && !last.stopped && (last.parts || []).length) { updateThread(t.id, { error: '' }); cleared += 1; }
+    if (t.state !== 'ready' || !/^Claude was working on this on the other computer(,| when this one took over)/.test(t.error || '')) continue;
+    if (finishedAnswer(t)) { updateThread(t.id, { error: '' }); cleared += 1; }
   }
   return cleared;
 }
