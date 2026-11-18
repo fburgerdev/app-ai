@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanup, freePort, until } from './helpers.mjs';
-import { isVideoRepo } from '../server/videokit.js';
+import { isVideoRepo, updateKit, _configure } from '../server/videokit.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-videokit-'));
@@ -86,4 +86,23 @@ test('a script edit from Video Kit lands on main on GitHub, and nothing outside 
   }
   const notVideo = await post('/api/videokit/save', { repo: 'brain', files: [{ path: 'x.md', content: 'x' }] });
   assert.equal(notVideo.status, 400);
+});
+
+test('Video Kit runs from its own copy of main, which follows GitHub', async () => {
+  const remote = bare('app-ytvideo-kit', { 'server.mjs': '// v1\n' });
+  const seed = path.join(dir, 'seed-app-ytvideo-kit');
+  const run = path.join(dir, 'kit-run');
+  const kitFile = () => fs.readFileSync(path.join(run, 'server.mjs'), 'utf8').trim();   // git on Windows may check out CRLF
+  _configure({ repoBase: hub, github: { owner: 'fburgerdev' }, videoKit: { dir: run } });
+  assert.equal(await updateKit(), true);
+  assert.equal(kitFile(), '// v1');
+  assert.equal(await updateKit(), false);
+  fs.writeFileSync(path.join(seed, 'server.mjs'), '// v2\n');
+  git(seed, 'commit', '-qam', 'v2');
+  git(seed, 'push', '-q', 'origin', 'main');
+  fs.writeFileSync(path.join(run, 'stray.txt'), 'left behind');
+  assert.equal(await updateKit(), true);
+  assert.equal(kitFile(), '// v2');
+  assert.equal(fs.existsSync(path.join(run, 'stray.txt')), false);
+  assert.ok(remote);
 });
