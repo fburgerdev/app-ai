@@ -33,6 +33,7 @@ const IGNORE = [
   '*.tmp',
   '/extractions/*/transcripts/',
   '/cards/runs/',
+  '/cards/state.json',
   '/uploads-pending/',
   '/repos/',
   '/threads/*/work/',
