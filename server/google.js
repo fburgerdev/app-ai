@@ -1,9 +1,11 @@
 // Gmail and Google Calendar for threads.
 //
 // The app talks to Google directly, signed in as you through your own Google Cloud
-// project (docs/google.md). Claude gets a small set of tools: search and read mail, save
-// a draft, read the calendar, add a calendar entry. There is no tool that sends mail,
-// deletes anything or invites people, so a thread cannot do those whatever it is told.
+// project (docs/google.md). Claude gets a small set of tools: search and read mail, read
+// the calendar, add a calendar entry. There is no tool that sends mail or deletes
+// anything, so a thread cannot do those whatever it is told. A calendar entry can carry
+// guests, who get Google's invitation (Florian's yes, 17-11-2026); the thread then gets a
+// note saying who was invited.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -369,15 +371,24 @@ export async function calendarList({ from, to, query, max = 50 }) {
 // from his own.
 const CLAUDE_COLOR = '6';
 
-// Adds an entry to your own calendar. It takes no guests, so nobody gets an invitation.
-// With meet, Google makes a Meet link for it; Florian passes the link on himself.
-export async function calendarCreate({ title, start, end, allDay, location, description, meet }) {
+// Adds an entry to your own calendar. With meet, Google makes a Meet link for it. With
+// guests (plain mail addresses), Google sends each of them an invitation at once; without,
+// nobody hears of the entry and Florian passes the link on himself.
+const ADDRESS = /^[^\s@<>,;"']+@[^\s@<>,;"']+\.[^\s@<>,;"']+$/;
+export async function calendarCreate({ title, start, end, allDay, location, description, meet, guests }) {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const when = (v) => (allDay ? { date: String(v).slice(0, 10) } : { dateTime: new Date(v).toISOString(), timeZone: zone });
+  const invited = [...new Set((Array.isArray(guests) ? guests : []).map((g) => String(g).trim().toLowerCase()).filter(Boolean))];
+  const wrong = invited.filter((g) => !ADDRESS.test(g));
+  if (wrong.length) throw new Error(`Not a mail address: ${wrong.join(', ')}. Give each guest as a plain address (name@example.org). Nothing was added to the calendar.`);
+  if (invited.length > 20) throw new Error('At most 20 guests. Nothing was added to the calendar.');
   const body = { summary: title, start: when(start), end: when(end), location, description, colorId: CLAUDE_COLOR };
   if (meet) body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
-  const event = await api(`${CALENDAR}/calendars/primary/events${meet ? '?conferenceDataVersion=1' : ''}`, { method: 'POST', body });
+  if (invited.length) body.attendees = invited.map((email) => ({ email }));
+  const query = new URLSearchParams({ ...(meet ? { conferenceDataVersion: '1' } : {}), ...(invited.length ? { sendUpdates: 'all' } : {}) }).toString();
+  const event = await api(`${CALENDAR}/calendars/primary/events${query ? `?${query}` : ''}`, { method: 'POST', body });
   const out = { id: event.id, link: event.htmlLink };
+  if (invited.length) out.invited = invited;
   if (meet) {
     const url = meetLink(event);
     if (url) out.meet = url;
@@ -388,7 +399,8 @@ export async function calendarCreate({ title, start, end, allDay, location, desc
 
 // ---------- the tools a thread gets ----------
 
-export async function buildGoogleServer() {
+// `onInvite({ title, start, invited })` is told when an entry went out with guests.
+export async function buildGoogleServer({ onInvite } = {}) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   const reply = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 1) }] });
@@ -410,7 +422,7 @@ export async function buildGoogleServer() {
         { threadId: z.string() }, guarded(gmailReadThread)),
       tool('calendar_list', 'List the entries in Florian\'s calendar between two moments (ISO 8601).',
         { from: z.string(), to: z.string(), query: z.string().optional(), max: z.number().int().min(1).max(100).optional() }, guarded(calendarList)),
-      tool('calendar_create', 'Add an entry to Florian\'s own calendar. It cannot invite anyone. For allDay give dates (YYYY-MM-DD) with the end date being the day after the last day.',
+      tool('calendar_create', 'Add an entry to Florian\'s own calendar. For allDay give dates (YYYY-MM-DD) with the end date being the day after the last day. With `guests`, Google sends each of them an invitation by mail at once.',
         {
           title: z.string(),
           start: z.string().describe('ISO 8601 with offset, or YYYY-MM-DD for all-day'),
@@ -419,7 +431,12 @@ export async function buildGoogleServer() {
           location: z.string().optional(),
           description: z.string().optional(),
           meet: z.boolean().optional().describe('true to attach a Google Meet link'),
-        }, guarded(calendarCreate)),
+          guests: z.array(z.string()).max(20).optional().describe('Mail addresses to invite. Google mails each an invitation at once and it cannot be taken back: only people Florian named, or agreed to, as guests of this entry in this thread. Leave out otherwise.'),
+        }, guarded(async (args) => {
+          const out = await calendarCreate(args);
+          if (out.invited?.length) { try { onInvite?.({ title: args.title, start: args.start, invited: out.invited }); } catch { /* the entry is made either way */ } }
+          return out;
+        })),
     ],
   });
 }

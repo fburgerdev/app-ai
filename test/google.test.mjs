@@ -129,6 +129,28 @@ test('a calendar entry can carry a Meet link, which comes back', async () => {
   assert.match(none.note, /no Meet link/);
 });
 
+test('a calendar entry invites guests only when they are given, and only real addresses', async () => {
+  let body;
+  let asked;
+  google.setHttp(async (url, init = {}) => {
+    if (init.body && String(url).includes('/calendars/primary/events')) { body = JSON.parse(init.body); asked = String(url); }
+    return { ok: true, status: 200, json: async () => ({ id: 'E4', htmlLink: 'https://calendar.example/E4', hangoutLink: 'https://meet.google.com/abc-defg-hij' }) };
+  });
+  const out = await google.calendarCreate({ title: 'Florian Burger × Office: next steps', start: '2026-11-25T11:00:00+01:00', end: '2026-11-25T11:30:00+01:00', meet: true, guests: ['Office@Example.org ', 'office@example.org', 'anna@example.org'] });
+  assert.deepEqual(body.attendees, [{ email: 'office@example.org' }, { email: 'anna@example.org' }], 'each guest once');
+  assert.match(asked, /sendUpdates=all/, 'Google sends the invitations');
+  assert.match(asked, /conferenceDataVersion=1/);
+  assert.deepEqual(out.invited, ['office@example.org', 'anna@example.org']);
+  // Something that is not an address stops the entry before anything reaches Google.
+  body = undefined;
+  await assert.rejects(google.calendarCreate({ title: 'Call', start: '2026-11-25T11:00:00+01:00', end: '2026-11-25T11:30:00+01:00', guests: ['Anna Beispiel'] }), /Not a mail address: anna beispiel/);
+  assert.equal(body, undefined);
+  // Without guests nobody is told.
+  await google.calendarCreate({ title: 'Call', start: '2026-11-25T11:00:00+01:00', end: '2026-11-25T11:30:00+01:00', guests: [] });
+  assert.equal(body.attendees, undefined);
+  assert.doesNotMatch(asked, /sendUpdates/);
+});
+
 test('the tools can be built for a thread', async () => {
   const server = await google.buildGoogleServer();
   assert.equal(server.name, 'google');

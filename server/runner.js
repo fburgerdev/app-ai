@@ -477,7 +477,10 @@ async function runTurn(threadId, prompt) {
       fake: config.fake,
       onEvent,
       spinOff,
-      mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer() } : undefined,
+      mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer({
+        // An invitation went out to other people: the thread says so, for him and for the brain update.
+        onInvite: ({ title, start, invited }) => store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude added "${title}" (${String(start).slice(0, 16).replace('T', ' ')}) to the calendar on ${dateTimeDMY(Date.now())}, and Google sent an invitation to: ${invited.join(', ')}.]` }),
+      }) } : undefined,
     };
     // No session yet but a conversation already: start from its text.
     const cold = !thread.sessionId && store.readMessages(threadId).length > 1;

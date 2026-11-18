@@ -239,7 +239,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
-    case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}`;
+    case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}${input.guests?.length ? `, inviting ${clip(input.guests.join(', '), 60)}` : ''}`;
     case 'TodoWrite':
     case 'TaskCreate':
     case 'TaskUpdate':
