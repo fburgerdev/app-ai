@@ -73,7 +73,19 @@ async function tidy(dir) {
   await git(dir, ['clean', '-fdq']).catch(() => {});
 }
 
-const tail = (out) => out.split('\n').map((l) => l.trimEnd()).filter(Boolean).slice(-12).join('\n');
+// The end of the output, and first the tests that failed with their error lines: node's own
+// summary at the end does not name them.
+const tail = (out) => {
+  const lines = out.split('\n').map((l) => l.trimEnd());
+  const failed = [];
+  lines.forEach((l, i) => {
+    if (!/^\s*not ok \d+/.test(l) || /^\s*not ok \d+ - .*\.(m?js|cjs)$/.test(l) && failed.length) return;
+    const detail = lines.slice(i + 1, i + 30).filter((x) => /^\s*(error|message|expected|actual|  \+ |  - )/.test(x) || /timed out|Error:/.test(x)).slice(0, 6);
+    failed.push([l.trim(), ...detail.map((x) => `  ${x.trim()}`)].join('\n'));
+  });
+  const end = lines.filter(Boolean).slice(-12).join('\n');
+  return failed.length ? `${failed.slice(0, 5).join('\n')}\n…\n${end}` : end;
+};
 
 // After a turn. Never throws; runs in the background.
 export async function afterTurn(threadId) {
