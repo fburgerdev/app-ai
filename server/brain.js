@@ -9,7 +9,9 @@
 //   - one job at a time writes it: the brain update, which commits and pushes.
 //
 // GitHub stays the ground truth. Nothing else may write this folder, so anything found
-// changed outside a brain update is thrown away.
+// changed outside a brain update is thrown away. (A thread that changes the vault's
+// structure or rules does it in its own copy of the vault's repo, like any repo, and
+// the app merges it on GitHub; this clone picks it up with its next refresh.)
 
 import { isNetworkError, report } from './repair.js';
 import fs from 'node:fs';

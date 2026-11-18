@@ -14,7 +14,7 @@
 import { record as recordUsage } from './usage.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { log } from './config.js';
+import { DATA_DIR, log } from './config.js';
 import { fromEvent, limitOf, noteLimit } from './limits.js';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -588,7 +588,10 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     try {
       const r = await repoTools.open(repoAsk[1]);
       fs.writeFileSync(path.join(r.dir, 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
-      if (/REPO-SLOW/.test(newest)) await new Promise((res) => setTimeout(res, 1500));
+      // "REPO-HOLD=name": stay in the repo for as long as the file hold-<name> is in the data
+      // folder, so a test decides when the turn ends instead of racing a clock.
+      const hold = /REPO-HOLD=([\w-]+)/.exec(newest);
+      for (let i = 0; hold && i < 3000 && fs.existsSync(path.join(DATA_DIR, `hold-${hold[1]}`)); i += 1) await new Promise((res) => setTimeout(res, 100));
     } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
   }
   const renameAsk = repoTools && /RENAME-TEST ([\w./-]+) ([\w.-]+)/.exec(newest);

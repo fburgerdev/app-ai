@@ -1,6 +1,32 @@
 // Shared by the test files.
 
 import fs from 'node:fs';
+import net from 'node:net';
+
+// How much longer than its stated time a wait may take. The stated times fit a machine
+// that has nothing else to do; when the app runs the suite by itself, the laptop may be
+// busy or throttled and everything takes several times as long. A wait that succeeds
+// costs nothing extra, so being patient only shows when something is really broken.
+export const patience = Math.max(1, Number(process.env.APP_AI_TEST_PATIENCE) || 5);
+
+// "localhost" is two addresses (::1 and 127.0.0.1) and Node gives each 250 ms before it
+// moves on. The servers listen on 127.0.0.1 only, so on a slow machine a request could
+// fail ("fetch failed") although the server was up.
+net.setDefaultAutoSelectFamilyAttemptTimeout?.(5000);
+
+// A request that never reached the server is sent again. Between two requests of a test
+// the server may close the connection the last one used (it does after five idle seconds),
+// and a slow machine notices too late: the next request goes into the closed connection
+// and fails with "fetch failed", although the server is fine.
+const plainFetch = globalThis.fetch;
+globalThis.fetch = async (...args) => {
+  for (let i = 0; ; i += 1) {
+    try { return await plainFetch(...args); } catch (err) {
+      if (i >= 2 || err?.message !== 'fetch failed') throw err;
+      await sleep(150);
+    }
+  }
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -24,7 +50,7 @@ export async function cleanup(dir, procs = []) {
 // tries: with eight servers and their gits running side by side, a step that takes two
 // seconds alone can take much longer.
 export async function until(fn, what, ms = 30000) {
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * patience;
   let last;
   while (Date.now() < end) {
     try { const v = await fn(); if (v) return v; } catch (err) { last = err; }
