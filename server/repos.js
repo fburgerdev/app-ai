@@ -108,6 +108,10 @@ async function startEmpty(dir, full) {
 // ---------- one thread at a time ----------
 
 export const holder = (full) => locks.get(key(full)) || null;
+export const holderTitle = (full) => store.getThread(holder(full))?.title || 'another thread';
+// For Video Kit (server/videokit.js): its git work on a repo goes in the same queue as the threads'.
+export const serialFor = (full, fn) => serial(full, fn);
+export const identityFor = (dir) => identity(dir);
 
 // Takes the repo for a thread. With `wait`, waits until it is free; without, gives up.
 export function acquire(full, threadId, { wait = true } = {}) {
