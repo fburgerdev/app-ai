@@ -164,7 +164,7 @@ hand. Claude can rename and create repos when you ask. Detail, and the token for
 
 Video Kit, the player for your videos' scripts, versions and comments (repo `app-ytvideo-kit`),
 starts with the app on http://localhost:4400 and starts again if it stops; **Video Kit** in the
-top bar opens it. It shows every `ytvideo-*` repo of yours: the app clones the ones not here
+top bar opens it. It runs from a copy of its own that always follows GitHub's main: every three minutes the app looks for a new version and, if there is one, starts Video Kit again on it, so a change merged into `app-ytvideo-kit` is live within minutes without restarting the app. It shows every `ytvideo-*` repo of yours: the app clones the ones not here
 yet, and keeps the copies no thread is working in on main and up to date (every ten minutes,
 and when Video Kit opens a video). What you type there (scripts, comments) is saved through the
 app: committed onto main and pushed, after the thread working in that repo, if any, is done.

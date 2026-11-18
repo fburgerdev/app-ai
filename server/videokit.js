@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { log } from './config.js';
+import { DATA_DIR, log } from './config.js';
 import { git } from './git.js';
 import * as repos from './repos.js';
 
@@ -26,6 +26,14 @@ let config;
 let child = null;
 let stopped = false;
 let restarts = 0;
+let restartNow = false;   // a new version is there: start again at once, not after a pause
+
+// Video Kit runs from a copy of its own, not from the repo copy threads work in: that one is on
+// whichever thread's branch worked last. This copy is always GitHub's main, and is brought up to
+// date every few minutes; when main has moved on, Video Kit is started again on the new code.
+// Florian, 18-11-2026: "make sure the auto update of app-ai also update the video-kit".
+const RUN_DIR = () => config.videoKit?.dir || path.join(DATA_DIR, 'videokit');
+const CHECK_MS = 3 * 60_000;
 
 const owner = () => config.github?.owner || 'fburgerdev';
 const kitPort = () => Number(config.videoKit?.port) || 4400;
@@ -37,8 +45,12 @@ export function initVideoKit(cfg) {
   // A little after the start, so cloning does not slow the app's own start down.
   setTimeout(() => { start().catch((err) => log(`video kit: could not start: ${err.message}`)); }, 3000).unref?.();
   setInterval(() => { syncVideoRepos().catch((err) => log(`video kit: syncing the video repos failed: ${err.message}`)); }, 10 * 60_000).unref?.();
+  setInterval(() => { updateKit().catch((err) => log(`video kit: could not look for a new version: ${err.message}`)); }, CHECK_MS).unref?.();
   process.on('exit', () => { stopped = true; child?.kill(); });
 }
+
+// For the tests: the settings, without starting anything.
+export function _configure(cfg) { config = cfg; }
 
 async function alreadyRunning() {
   try {
@@ -47,12 +59,40 @@ async function alreadyRunning() {
   } catch { return false; }
 }
 
+// The copy Video Kit runs from, cloned if missing and set to GitHub's main. True when it changed.
+let updating = null;
+export function updateKit() {
+  updating ||= (async () => {
+    const dir = RUN_DIR();
+    const url = `${config.repoBase.replace(/\/$/, '')}/${owner()}/${KIT}.git`;
+    if (!fs.existsSync(path.join(dir, '.git'))) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      await git(path.dirname(dir), ['clone', '--quiet', url, dir], { timeout: 300_000 });
+      log(`video kit: cloned into ${dir}`);
+      return true;
+    }
+    await git(dir, ['fetch', '--quiet', '--prune', 'origin'], { timeout: 120_000 });
+    await git(dir, ['remote', 'set-head', 'origin', '--auto']).catch(() => {});
+    const base = (await git(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).catch(() => 'origin/main')).trim();
+    const want = (await git(dir, ['rev-parse', base])).trim();
+    const have = (await git(dir, ['rev-parse', 'HEAD']).catch(() => '')).trim();
+    if (want === have) return false;
+    // Nobody works in this copy: it is set to main outright.
+    await git(dir, ['checkout', '--quiet', '--force', '-B', base.replace(/^origin\//, ''), base]);
+    await git(dir, ['clean', '-fdq']).catch(() => {});
+    log(`video kit: updated to ${want.slice(0, 7)}`);
+    if (child) { restartNow = true; child.kill(); }
+    return true;
+  })().finally(() => { updating = null; });
+  return updating;
+}
+
 async function start() {
   if (stopped || child) return;
+  await updateKit().catch((err) => log(`video kit: could not update its copy: ${err.message}`));
+  const dir = RUN_DIR();
   const full = `${owner()}/${KIT}`;
-  const dir = repos.dirOf(full);
-  // Its copy may be on a thread's branch; the player is plain files and runs from any of them.
-  if (!fs.existsSync(path.join(dir, 'server.mjs'))) await repos.ensure(full);
   await syncVideoRepos().catch((err) => log(`video kit: syncing the video repos failed: ${err.message}`));
   if (await alreadyRunning()) {
     // Started by hand (start.cmd): left alone, and looked at again later in case it is closed.
@@ -79,6 +119,12 @@ async function start() {
   child.on('exit', (code) => {
     child = null;
     if (stopped) return;
+    if (restartNow) {
+      restartNow = false;
+      log('video kit: starting again on the new version');
+      setTimeout(() => start().catch((e) => log(`video kit: could not start: ${e.message}`)), 500).unref?.();
+      return;
+    }
     if (Date.now() - at > 10 * 60_000) restarts = 0;
     restarts += 1;
     const wait = Math.min(10 * 60_000, 5000 * 2 ** Math.min(restarts, 7));
