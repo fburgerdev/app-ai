@@ -355,9 +355,9 @@ async function runTurn(threadId, prompt) {
       }
       const other = repos.holder(full);
       if (other && other !== threadId) {
-        activity(`Waiting for ${full}: "${store.getThread(other)?.title || 'another thread'}" is working in it`);
-        const got = await Promise.race([repos.acquire(full, threadId), new Promise((r) => setTimeout(() => r(false), 20 * 60_000))]);
-        if (!got) throw new Error(`${full} is still in use by the thread "${store.getThread(repos.holder(full))?.title}". Tell Florian; he can come back to this when that thread is done.`);
+        activity(`Waiting for ${full}: ${repos.holderName(full) || 'another thread'} is working in it`);
+        const got = await repos.acquire(full, threadId, { timeoutMs: 20 * 60_000 });
+        if (!got) throw new Error(`${full} is still in use by ${repos.holderName(full) || 'another thread'}. Tell Florian; he can come back to this when it is done.`);
       } else await repos.acquire(full, threadId);
       if (abort.signal.aborted) { repos.release(full, threadId); throw new Error('Stopped.'); }
       activity(`Opening ${full}`);

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cleanup, freePort } from './helpers.mjs';
+import { cleanup, freePort, patience } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-link-'));
@@ -48,7 +48,7 @@ const call = async (base, method, url, body) => {
   try { return { status: res.status, data: JSON.parse(text) }; } catch { return { status: res.status, data: text }; }
 };
 async function until(fn, what, ms = 30000) {
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * patience;
   while (Date.now() < end) {
     try { const v = await fn(); if (v) return v; } catch { /* not up yet */ }
     await sleep(100);
@@ -87,8 +87,8 @@ test('handing over: everything moves to the Pi and the page is passed on', async
   const l = await linkIs('remote');
   assert.equal(l.step, '');
   assert.ok(l.handedOverAt > 0);
-  const st = (await call(lap, 'GET', '/api/status')).data;
-  assert.equal(st.stage, 'safe', 'handed over: the laptop can sleep');
+  // The status follows a moment after the switch.
+  const st = await until(async () => { const x = (await call(lap, 'GET', '/api/status')).data; return x.stage === 'safe' ? x : null; }, 'handed over: the laptop can sleep');
   assert.equal(st.locked, true);
   assert.equal((await thread(pi, first.id)).messages.length, 4, 'the Pi has the whole conversation');
   await call(lap, 'POST', `/api/threads/${first.id}/messages`, { text: 'Now through the Pi' });

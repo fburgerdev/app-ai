@@ -113,17 +113,44 @@ export const holderTitle = (full) => store.getThread(holder(full))?.title || 'an
 export const serialFor = (full, fn) => serial(full, fn);
 export const identityFor = (dir) => identity(dir);
 
-// Takes the repo for a thread. With `wait`, waits until it is free; without, gives up.
-export function acquire(full, threadId, { wait = true } = {}) {
+// A job of the app itself can hold a repo too, under a name of its own: the brain update
+// holds the vault's repo while it writes, so no thread changes the vault meanwhile.
+export const jobHolder = (name) => `job:${name}`;
+const isJob = (id) => String(id || '').startsWith('job:');
+// A thread that no longer exists holds nothing; a job holds until it gives the repo back.
+const alive = (id) => isJob(id) || Boolean(store.getThread(id));
+
+// Who holds the repo, as a sentence can name it: "Tidy the server code" (quoted, a
+// thread) or the brain update (a job). Empty when nobody does.
+export function holderName(full) {
+  const id = holder(full);
+  if (!id) return '';
+  return isJob(id) ? `the ${id.slice(4)}` : `"${store.getThread(id)?.title || 'another thread'}"`;
+}
+
+// Takes the repo for a thread (or a job). With `wait`, waits until it is free; without, gives up.
+// With `timeoutMs`, gives up after that long and leaves the queue, so the repo is not
+// handed later to someone who stopped waiting (and would then hold it with nobody to give
+// it back).
+export function acquire(full, threadId, { wait = true, timeoutMs = 0 } = {}) {
   const k = key(full);
   const held = locks.get(k);
-  if (!held || held === threadId || !store.getThread(held)) {
+  if (!held || held === threadId || !alive(held)) {
     locks.set(k, threadId);
     return Promise.resolve(true);
   }
   if (!wait) return Promise.resolve(false);
   return new Promise((resolve) => {
-    waiters.set(k, [...(waiters.get(k) || []), () => { locks.set(k, threadId); resolve(true); }]);
+    let timer = null;
+    const take = () => { clearTimeout(timer); locks.set(k, threadId); resolve(true); };
+    waiters.set(k, [...(waiters.get(k) || []), take]);
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        waiters.set(k, (waiters.get(k) || []).filter((w) => w !== take));
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+    }
   });
 }
 
@@ -245,7 +272,10 @@ export async function status(threadId) {
   const dir = dirOf(full);
   const out = { repo: full, branch: thread.repoBranch || '', main: thread.repoMain || 'main', url: `https://github.com/${full}`, cloned: fs.existsSync(path.join(dir, '.git')), files: [], commits: [], ahead: 0, pushed: false, uncommitted: false, holder: '', merged: thread.repoMerged || 0 };
   const held = holder(full);
-  if (held && held !== threadId) out.holder = store.getThread(held)?.title || 'another thread';
+  if (held && held !== threadId) {
+    out.holder = isJob(held) ? `The ${held.slice(4)}` : store.getThread(held)?.title || 'another thread';
+    out.holderJob = isJob(held);
+  }
   if (!out.cloned || !out.branch) return out;
   return serial(full, async () => {
     const base = `origin/${out.main}`;
@@ -314,7 +344,7 @@ export async function merge(threadId) {
   if (!thread?.repo || !thread.repoBranch) throw new Error('This thread has no branch to merge.');
   if (thread.state === 'working') throw new Error('Claude is still working in this thread. Merge when it is done.');
   const full = thread.repo;
-  if (!(await acquire(full, threadId, { wait: false }))) throw new Error(`The thread "${store.getThread(holder(full))?.title}" is working in ${full} right now. Merge when it is done.`);
+  if (!(await acquire(full, threadId, { wait: false }))) throw new Error(`${holderName(full).replace(/^the /, 'The ')} is working in ${full} right now. Merge when it is done.`);
   try {
     const { dir, base } = await ensure(full);
     return await serial(full, async () => {
