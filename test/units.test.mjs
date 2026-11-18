@@ -281,3 +281,22 @@ test('usage: a run costs what it added to its session, not the session so far', 
   assert.equal(costOf({ kind: 'cards', cost: 1.5, ...line }), 1.5);
   assert.equal(costOf({ kind: 'thread', cost: 0.25, v: 2, ...line }), 0.25);
 });
+
+test('a message no turn took up is found, whatever order the two computers\' lines ended up in', async () => {
+  const { leftOver } = await import('../server/runner.js');
+  const t0 = 1_800_000_000_000;
+  const user = (ts, extra = {}) => ({ role: 'user', ts, text: `at ${ts - t0}`, ...extra });
+  const claude = (ts, durationMs) => ({ role: 'assistant', ts, durationMs, parts: [{ type: 'text', text: 'ok' }] });
+  // The usual course: every message has a turn that started after it.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), user(t0 + 70_000), claude(t0 + 200_000, 100_000)]), []);
+  // Sent while a turn ran on the other computer: that turn started before the message.
+  const late = user(t0 + 30_000);
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), late]), [late]);
+  assert.deepEqual(leftOver([user(t0), late, claude(t0 + 60_000, 50_000)]), [late], 'the lines of two computers come in any order');
+  // The app's own messages, notes about what he did and "send and done" are not owed an answer.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), user(t0 + 90_000, { auto: true }), user(t0 + 91_000, { event: true }), user(t0 + 92_000, { unanswered: true })]), []);
+  // After Stop, what he sent before stays unanswered: stop means stop.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), late], { stoppedAt: t0 + 40_000 }), []);
+  // Clocks a few seconds apart do not make an answered message look unanswered.
+  assert.deepEqual(leftOver([user(t0 + 3000), claude(t0 + 60_000, 60_000)]), []);
+});

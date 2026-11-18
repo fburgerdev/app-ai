@@ -101,10 +101,14 @@ export function reloadThreads() {
       if (cur?.state === 'working' && !cur.held && mine(cur)) continue;
       threads.set(id, meta);
       // A conversation continued on both computers has more lines than either counted.
-      const count = readMessages(id).length;
+      const all = readMessages(id);
+      const count = all.length;
       if (count > (meta.messageCount || 0)) {
         meta.messageCount = count;
         meta.lastUserAt = count; // so the next brain update looks at it again
+        // When he last wrote, from the lines themselves: the other computer's state does
+        // not know a message sent here (runner.js looks for ones no turn took up).
+        meta.lastUserTs = all.reduce((max, m) => (m.role === 'user' && !m.auto && (m.ts || 0) > max ? m.ts : max), meta.lastUserTs || 0);
         writeJson(metaFile(id), meta);
       }
     }

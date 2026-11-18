@@ -124,7 +124,7 @@ export function stopTurn(threadId) {
   const idx = waiting.findIndex((w) => w.threadId === threadId);
   if (idx >= 0) {
     waiting.splice(idx, 1);
-    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [] });
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], stoppedAt: Date.now() });
     return true;
   }
   const run = running.get(threadId);
@@ -133,7 +133,7 @@ export function stopTurn(threadId) {
     const thread = store.getThread(threadId);
     if (!thread?.held) return false;
     heldPrompt.delete(threadId);
-    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false });
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false, stoppedAt: Date.now() });
     log(`thread "${thread.title}": hold cancelled`);
     return true;
   }
@@ -188,6 +188,62 @@ export function watchHolds(mayRun) {
   clearInterval(holdTimer);
   holdTimer = setInterval(() => { try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); } }, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
+}
+
+// ---------- messages no turn took up ----------
+//
+// A message sent into a thread that says "working" waits for that turn to end. When the
+// turn was the other computer's, or was already over and only its last state had not
+// arrived yet (the laptop just took the work back from the Pi), nothing here ever picks
+// the message up: the thread comes back "ready" with the message in it and no answer
+// (18-11-2026: "start again, read my latest messages"). The conversation itself is never
+// lost, since both computers' lines are kept, so that is what this looks at: a message
+// of Florian's that no turn started after is still owed an answer.
+
+// The messages of his in `messages` that no turn took up, oldest first. A turn took a
+// message up when it started after the message was sent (its answer's time minus how
+// long it ran); the two computers' clocks may differ by a few seconds. Not counted:
+// what the app wrote itself, notes about what he did, messages sent with "send and
+// done" (they wait for his next one), and anything from before he pressed Stop.
+export function leftOver(messages, { stoppedAt = 0, slackMs = 5000 } = {}) {
+  let lastStart = 0;
+  for (const m of messages) if (m.role === 'assistant') lastStart = Math.max(lastStart, (m.ts || 0) - (m.durationMs || 0));
+  return messages.filter((m) => m.role === 'user' && !m.auto && !m.event && !m.unanswered && (m.ts || 0) > stoppedAt && (m.ts || 0) - slackMs > lastStart);
+}
+
+// Starts a turn for every waiting thread that holds such messages. Only on the computer
+// that does the work, only for messages of the last hours, and once per message: a turn
+// that fails says so in the thread, and trying again is his call then.
+export function answerLeftOver({ mayRun = () => true, now = Date.now() } = {}) {
+  const { minAgeMs = 60_000, maxAgeMs = 6 * 3600_000, slackMs = 5000 } = config.leftOver || {};
+  let started = 0;
+  for (const t of store.listThreads()) {
+    if (t.state !== 'ready' || t.held || t.deferred || t.archived || t.error || t.kind === 'card' || isRunning(t.id)) continue;
+    // Cheap first: nothing of his since the thread was last looked at.
+    if (!t.lastUserTs || now - t.lastUserTs > maxAgeMs || t.leftOverAt === t.lastUserTs) continue;
+    if (!mayRun()) return started;
+    const owed = leftOver(store.readMessages(t.id), { stoppedAt: t.stoppedAt || 0, slackMs });
+    const newest = owed.at(-1);
+    if (newest && now - newest.ts < minAgeMs) continue; // too fresh to tell: looked at again
+    store.updateThread(t.id, { leftOverAt: t.lastUserTs }, { quiet: true });
+    if (!newest || now - newest.ts > maxAgeMs) continue;
+    const prompt = [
+      `[The app: Florian sent the message${owed.length > 1 ? 's' : ''} below ${owed.length > 1 ? 'between' : 'at'} ${owed.length > 1 ? `${clock(owed[0].ts)} and ${clock(newest.ts)}` : clock(newest.ts)}, while the work was moving between his two computers, and no turn took ${owed.length > 1 ? 'them' : 'it'} up. The app noticed and started this turn by itself; he has not written anything since. Answer ${owed.length > 1 ? 'them' : 'it'} now, in the light of everything said before.]`,
+      ...owed.map((m) => promptFor(t.id, m.text || '', m.files || [])),
+    ].join('\n\n');
+    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[${owed.length > 1 ? `${owed.length} messages` : 'A message'} here had not been answered; the app started the turn by itself on ${dateTimeDMY(now)}.]` });
+    log(`thread "${t.title}": ${owed.length} message(s) no turn took up; answering now`);
+    startTurn(t.id, prompt);
+    started += 1;
+  }
+  return started;
+}
+
+let leftOverTimer = null;
+export function watchLeftOver(mayRun) {
+  clearInterval(leftOverTimer);
+  leftOverTimer = setInterval(() => { try { answerLeftOver({ mayRun }); } catch (err) { log(`unanswered messages: ${err.stack || err.message}`); } }, config.leftOver?.checkMs || 60_000);
+  leftOverTimer.unref?.();
 }
 
 // The last thread on this thread's project, as the vault holds it: named, so that a new
@@ -444,7 +500,7 @@ async function runTurn(threadId, prompt) {
     const limited = result.limit && !result.aborted ? result.limit : null;
     const again = heldPrompt.get(threadId);
     heldPrompt.delete(threadId);
-    if (result.aborted) message.stopped = true;
+    if (result.aborted) { message.stopped = true; store.updateThread(threadId, { stoppedAt: Date.now() }, { quiet: true }); }
     if (limited) message.limit = { type: limited.type || '' };
     else if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);

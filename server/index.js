@@ -929,6 +929,9 @@ cards.setMayRun(link.mayRunBackground);
 // computer that does the work then.
 runner.watchHolds(link.mayRunBackground);
 extraction.watchHold(link.mayRunBackground);
+// A message that no turn took up (sent while the work moved between the computers) is
+// answered after all.
+runner.watchLeftOver(link.mayRunBackground);
 events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
