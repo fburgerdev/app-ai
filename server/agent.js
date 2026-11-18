@@ -275,7 +275,10 @@ export async function runAgent(params) {
     const durationMs = Date.now() - started;
     // The stand-in reports a made-up amount, so the usage view has something to show.
     const usage = out.usage || (params.fake ? { input_tokens: 1200, output_tokens: Math.ceil((out.text || '').length / 4) } : null);
-    recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs });
+    // The SDK's price is the session's total so far; usage.js takes the earlier runs off.
+    // Only a real run that keeps its session can be carried on, so only those are tracked.
+    const kept = !params.fake && params.mode !== 'plain' && params.mode !== 'lookup';
+    recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs, sessionId: kept ? out.sessionId || '' : '', resumed: Boolean(params.resume) });
     if (out.limit && !out.aborted) noteLimit(out.limit);
     else if (!out.error && !out.aborted) noteLimit(null);
     return { ...out, durationMs };

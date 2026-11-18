@@ -39,6 +39,7 @@ const IGNORE = [
   '/purge-history.json',
   '/link.json',
   '/prune-run.json',
+  '/usage-sessions.json',
   '',
 ].join('\n');
 
