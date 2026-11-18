@@ -19,8 +19,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('a mail file round-trips through its header', () => {
   const mail = parseMail('---\ntype: mail\nto: Jörg <j@example.org>\nsubject: Nächste Schritte\nreply-to-thread: T1\n---\n\nHallo,\n\nviele Grüße\n');
-  assert.deepEqual(mail, { to: 'Jörg <j@example.org>', cc: '', bcc: '', subject: 'Nächste Schritte', from: '', replyToThreadId: 'T1', body: 'Hallo,\n\nviele Grüße' });
+  assert.deepEqual(mail, { to: 'Jörg <j@example.org>', cc: '', bcc: '', subject: 'Nächste Schritte', from: '', replyToThreadId: 'T1', attach: [], body: 'Hallo,\n\nviele Grüße' });
   assert.deepEqual(parseMail(serializeMail(mail)), mail);
+  // Files that go along: one line each, so a name may hold a comma.
+  const withFiles = parseMail('---\ntype: mail\nto: j@example.org\nsubject: Konzept\nattach: Konzept, Stand November.pdf\nattach: Files/2026-11-17 Skizze.pdf\nattach: Konzept, Stand November.pdf\n---\nAnbei.\n');
+  assert.deepEqual(withFiles.attach, ['Konzept, Stand November.pdf', 'Files/2026-11-17 Skizze.pdf']);
+  assert.deepEqual(parseMail(serializeMail(withFiles)), withFiles);
   assert.equal(parseMail('# Just a note\n'), null);
   assert.equal(parseMail('---\ntitle: something else\n---\nbody'), null);
 });
@@ -173,6 +177,35 @@ test('editing a mail makes a version of yours; the buttons put it in Gmail and s
   assert.equal((await call('POST', `/api/threads/${mailThread}/mail/send`, { name })).status, 409, 'a mail is sent once');
   assert.equal((await call('POST', `/api/threads/${mailThread}/artifact/save`, { name, content: 'x' })).status, 409, 'a sent mail cannot be changed');
   assert.equal((await call('POST', `/api/threads/${planThread}/mail/send`, { name: 'nothing.md' })).status, 404);
+});
+
+test('a mail takes files along: only ones that are there, and the thread notes them', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office with the plan attached' })).data.thread.id;
+  const t = await ready(id);
+  const name = t.artifacts[0].name;
+  const mail = parseMail(await artifactText(id, name));
+  // A file that is not in the thread stops the mail before anything goes out.
+  mail.attach = ['Not there.pdf'];
+  await call('POST', `/api/threads/${id}/artifact/save`, { name, content: serializeMail(mail) });
+  const refused = await call('POST', `/api/threads/${id}/mail/send`, { name });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /"Not there\.pdf" is not among this thread's files/);
+  assert.equal((await thread(id)).artifacts[0].mail?.sentAt, undefined);
+  // A file of the thread and a document from the vault's Files folder go along.
+  fs.mkdirSync(path.join(data, 'brain', 'Files'), { recursive: true });
+  fs.writeFileSync(path.join(data, 'brain', 'Files', '2026-11-17 Plan.pdf'), '%PDF-1.4 stand-in\n');
+  mail.attach = [name, 'Files/2026-11-17 Plan.pdf'];
+  await call('POST', `/api/threads/${id}/artifact/save`, { name, content: serializeMail(mail) });
+  assert.equal((await call('POST', `/api/threads/${id}/mail/send`, { name })).status, 200);
+  const note = (await thread(id)).messages.find((m) => m.event && /Florian sent the mail/.test(m.text));
+  assert.ok(note.text.endsWith(`Attached: ${name}, 2026-11-17 Plan.pdf.]`), note.text);
+  // Nothing outside the Files folder can be reached through such a line.
+  const other = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office once more' })).data.thread.id;
+  const o = await ready(other);
+  const sneaky = parseMail(await artifactText(other, o.artifacts[0].name));
+  sneaky.attach = ['Files/../CLAUDE.md'];
+  await call('POST', `/api/threads/${other}/artifact/save`, { name: o.artifacts[0].name, content: serializeMail(sneaky) });
+  assert.equal((await call('POST', `/api/threads/${other}/mail/draft`, { name: o.artifacts[0].name })).status, 400);
 });
 
 test('pads save; the scratchpad never reaches a run', async () => {

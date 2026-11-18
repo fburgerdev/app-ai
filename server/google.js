@@ -163,8 +163,22 @@ function encodeAddresses(list) {
     .join(', ');
 }
 
-// Builds the message in the form Gmail's API takes it.
-export function buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, references }) {
+// What kind of file an attachment is, from its name.
+const FILE_TYPES = {
+  '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=UTF-8', '.md': 'text/markdown; charset=UTF-8', '.csv': 'text/csv; charset=UTF-8', '.html': 'text/html; charset=UTF-8', '.json': 'application/json',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', '.doc': 'application/msword', '.xls': 'application/vnd.ms-excel',
+  '.odt': 'application/vnd.oasis.opendocument.text', '.zip': 'application/zip', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.ics': 'text/calendar; charset=UTF-8',
+};
+export const fileType = (name) => FILE_TYPES[/\.[^.]+$/.exec(String(name).toLowerCase())?.[0]] || 'application/octet-stream';
+
+const wrap76 = (b64) => b64.replace(/(.{76})/g, '$1\r\n').replace(/\r\n$/, '');
+
+// Builds the message in the form Gmail's API takes it. `attachments` are files that go
+// along: [{ name, data (a Buffer), type? }]. Without any, the message is plain text, as
+// it always was; with them it is the text followed by the files.
+export function buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, references, attachments = [] }) {
   const clean = (v) => String(v || '').replace(/[\r\n]+/g, ' ').trim();
   const headers = [];
   if (from) headers.push(`From: ${encodeAddresses(clean(from))}`);
@@ -174,9 +188,28 @@ export function buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, r
   headers.push(`Subject: ${encodeWord(clean(subject))}`);
   if (inReplyTo) headers.push(`In-Reply-To: ${clean(inReplyTo)}`);
   if (references) headers.push(`References: ${clean(references)}`);
-  headers.push('MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64');
-  const encoded = Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
-  return b64url(`${headers.join('\r\n')}\r\n\r\n${encoded}`);
+  const text = Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64');
+  if (!attachments.length) {
+    headers.push('MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64');
+    return b64url(`${headers.join('\r\n')}\r\n\r\n${text.replace(/(.{76})/g, '$1\r\n')}`);
+  }
+  const boundary = `=_app_${crypto.randomBytes(12).toString('hex')}`;
+  headers.push('MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [`--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(text)}`];
+  for (const file of attachments) {
+    // The name twice: the old way (every mail program reads it) and the new one (for umlauts).
+    const name = clean(file.name).replace(/["\\]/g, '') || 'file';
+    const plain = isAscii(name) ? name : encodeWord(name);
+    parts.push([
+      `--${boundary}`,
+      `Content-Type: ${file.type || fileType(name)}; name="${plain}"`,
+      `Content-Disposition: attachment; filename="${plain}"${isAscii(name) ? '' : `; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`}`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrap76(Buffer.from(file.data).toString('base64')),
+    ].join('\r\n'));
+  }
+  return b64url(`${headers.join('\r\n')}\r\n\r\n${parts.join('\r\n')}\r\n--${boundary}--\r\n`);
 }
 
 const header = (message, name) => (message.payload?.headers || []).find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -240,7 +273,7 @@ export async function gmailReadThread({ threadId }) {
 }
 
 // Creates a draft, or replaces one saved earlier (so a revised mail stays one draft).
-export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body }) {
+export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body, attachments }) {
   let inReplyTo = '';
   let references = '';
   if (replyToThreadId) {
@@ -255,7 +288,7 @@ export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, b
       references = `${header(last, 'References')} ${inReplyTo}`.trim();
     }
   }
-  const message = { raw: buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, references }) };
+  const message = { raw: buildRawMessage({ from, to, cc, bcc, subject, body, inReplyTo, references, attachments }) };
   if (replyToThreadId) message.threadId = replyToThreadId;
   const draft = draftId
     ? await api(`${GMAIL}/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { message } })
@@ -265,9 +298,9 @@ export async function gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, b
 
 // Sends a mail. Only ever called from the Send button in the app, after Florian confirms;
 // no tool Claude has leads here.
-export async function gmailSend({ draftId, replyToThreadId, from, to, cc, bcc, subject, body }) {
+export async function gmailSend({ draftId, replyToThreadId, from, to, cc, bcc, subject, body, attachments }) {
   if (!String(to || '').trim()) throw new Error('The mail has no recipient.');
-  const saved = await gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body });
+  const saved = await gmailSaveDraft({ draftId, replyToThreadId, from, to, cc, bcc, subject, body, attachments });
   const sent = await api(`${GMAIL}/drafts/send`, { method: 'POST', body: { id: saved.draftId } });
   return { messageId: sent.id, threadId: sent.threadId };
 }

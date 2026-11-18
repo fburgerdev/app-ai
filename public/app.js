@@ -904,6 +904,16 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
   body.value = mail.body;
   const status = h('span', { class: 'mail-status' });
   const actions = h('div', { class: 'mail-actions' });
+  // The files that go along (the mail's `attach:` lines). He can take one off; adding one
+  // is asked of Claude, who knows where the file is.
+  const attached = h('div', { class: 'mail-attach' });
+  const drawAttached = () => {
+    attached.hidden = !mail.attach.length;
+    attached.replaceChildren(h('span', {}, 'Attached'), ...mail.attach.map((file) => h('span', { class: 'mail-file', title: file },
+      file.split('/').pop(),
+      sent ? null : h('button', { type: 'button', class: 'mail-file-off', title: 'Do not attach this file', 'aria-label': `Do not attach ${file}`, onclick: () => { mail.attach = mail.attach.filter((f) => f !== file); drawAttached(); changed(); } }, '×'))));
+  };
+  drawAttached();
   let dirty = false;
   let saving = Promise.resolve();
 
@@ -962,7 +972,7 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
     }
     if (confirming) {
       actions.replaceChildren(
-        h('span', { class: 'mail-confirm' }, `Send to ${mail.to || '(no recipient)'} with the subject “${mail.subject}”?`),
+        h('span', { class: 'mail-confirm' }, `Send to ${mail.to || '(no recipient)'} with the subject “${mail.subject}”${mail.attach.length ? ` and ${plural(mail.attach.length, 'file', 'files')} attached` : ''}?`),
         h('button', { class: 'btn btn-send', type: 'button', onclick: () => act('send', 'Sent.') }, 'Send now'),
         h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => drawActions(false) }, 'Cancel'),
       );
@@ -984,7 +994,7 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
   }
   drawActions();
   const el = h('div', { class: `mail${sent ? ' is-sent' : ''}`, dataset: { name } },
-    field('To', 'to'), field('Subject', 'subject'), body, actions);
+    field('To', 'to'), field('Subject', 'subject'), attached, body, actions);
   requestAnimationFrame(() => grow(body));
   return el;
 }

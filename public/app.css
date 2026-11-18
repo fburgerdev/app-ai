@@ -833,6 +833,12 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .mail-field span { flex: none; width: 3.6em; color: var(--faint); font-size: 12.5px; }
 .mail-field input { flex: 1; min-width: 0; border: 0; background: none; padding: 9px 0; color: var(--bright); font-weight: 550; }
 .mail-field input:focus, .mail-body:focus, .card-text:focus, .pad:focus { outline: none; }
+.mail-attach { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 14px; border-bottom: 1px solid var(--line); }
+.mail-attach[hidden] { display: none; }
+.mail-attach > span:first-child { flex: none; width: 3.6em; margin-right: 2px; color: var(--faint); font-size: 12.5px; }
+.mail-file { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--bright); font-size: 13px; overflow-wrap: anywhere; }
+.mail-file-off { border: 0; background: none; padding: 0 2px; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; }
+.mail-file-off:hover { color: var(--bright); }
 .mail-body, .card-text {
   display: block;
   width: 100%;

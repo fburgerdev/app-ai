@@ -24,6 +24,28 @@ test('a draft with umlauts survives as a mail', () => {
   assert.equal(Buffer.from(body.replace(/\r\n/g, ''), 'base64').toString('utf8'), 'Hallo,\r\n\r\nviele Grüße\r\nFlorian');
 });
 
+test('a mail with files carries the text and every file whole, umlauts in the names included', () => {
+  const pdf = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0xff, 0x0a, 0x0d, 0x80, ...Array.from({ length: 300 }, (_, i) => i % 256)]);
+  const mail = decode(google.buildRawMessage({
+    to: 'j@example.org', subject: 'Konzept', body: 'Hallo,\n\nanbei das Konzept.\nFlorian',
+    attachments: [{ name: 'Konzept für Jörg.pdf', data: pdf }, { name: 'plan.txt', data: Buffer.from('Schritt 1\n') }],
+  }));
+  const [head] = mail.split('\r\n\r\n');
+  const boundary = /^Content-Type: multipart\/mixed; boundary="([^"]+)"$/m.exec(head)?.[1];
+  assert.ok(boundary, 'the mail says it has parts');
+  assert.ok(mail.endsWith(`\r\n--${boundary}--\r\n`), 'and where they end');
+  const parts = mail.slice(mail.indexOf(`--${boundary}`)).split(`--${boundary}`).slice(1, -1).map((p) => { const [h, ...b] = p.replace(/^\r\n/, '').split('\r\n\r\n'); return { head: h, data: Buffer.from(b.join('').replace(/\r\n/g, ''), 'base64') }; });
+  assert.equal(parts.length, 3);
+  assert.match(parts[0].head, /^Content-Type: text\/plain; charset=UTF-8$/m);
+  assert.equal(parts[0].data.toString('utf8'), 'Hallo,\r\n\r\nanbei das Konzept.\r\nFlorian');
+  assert.match(parts[1].head, /^Content-Type: application\/pdf; name="=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?="$/m);
+  assert.match(parts[1].head, /^Content-Disposition: attachment; filename="=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?="; filename\*=UTF-8''Konzept%20f%C3%BCr%20J%C3%B6rg\.pdf$/m);
+  assert.ok(parts[1].data.equals(pdf), 'the file arrives byte for byte');
+  assert.match(parts[2].head, /^Content-Disposition: attachment; filename="plan\.txt"$/m);
+  assert.equal(parts[2].data.toString('utf8'), 'Schritt 1\n');
+  for (const line of mail.split('\r\n')) assert.ok(line.length <= 200, 'no line a mail server would break');
+});
+
 test('a header cannot be smuggled in through the subject', () => {
   const mail = decode(google.buildRawMessage({ to: 'a@example.org', subject: 'Hi\r\nBcc: someone@evil.example', body: 'x' }));
   assert.doesNotMatch(mail.split('\r\n\r\n')[0], /^Bcc:/m);
