@@ -65,7 +65,7 @@ git(seed, 'commit', '-m', 'seed');
 git(seed, ...toRemote);
 
 fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ cards: { auto: false }, limits: { marginMs: 150, checkMs: 100 } }));
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ cards: { auto: false }, limits: { marginMs: 150, checkMs: 100 }, leftOver: { checkMs: 150, minAgeMs: 0, slackMs: 0 } }));
 const env = { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_DATA_REPO: dataRemote, APP_AI_BRAIN_REPO: remote, APP_AI_PORT: String(port) };
 const start = () => spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'a'), 'inherit'] });
 let server = start();
@@ -142,4 +142,26 @@ test('a brain update cut off by the limit files nothing and runs again by itself
   assert.equal((await call('GET', '/api/state')).data.brain.held, null);
   git(seed, ...fromRemote);
   assert.equal(fs.readFileSync(path.join(seed, 'Core', 'App Test.md'), 'utf8').trim().split('\n').length, 1, 'the cut-off run left nothing behind');
+});
+
+test('a message that came in from the other computer and that no turn took up is answered by itself', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Plan the week' })).data.thread.id;
+  const before = await ready(id);
+  assert.equal(before.messages.filter((m) => m.role === 'assistant').length, 1);
+  assert.equal((await call('POST', '/api/status/save', {})).status, 200);
+  // The other computer: it has the thread as it was saved, and he writes into it there
+  // while that computer believes a turn is still running, so nothing starts.
+  const other = path.join(dir, 'other-computer');
+  git(dir, 'clone', '-q', dataRemote, other);
+  fs.appendFileSync(path.join(other, 'threads', id, 'messages.jsonl'), `${JSON.stringify({ id: 'from-the-other', ts: Date.now(), role: 'user', text: 'And add the board meeting on Thursday.' })}\n`);
+  git(other, 'add', '-A');
+  git(other, 'commit', '-q', '-m', 'state');
+  git(other, ...toRemote);
+  assert.equal((await call('POST', '/api/sync/pull', {})).data.changed, true);
+  const t = await until(async () => { const x = await thread(id); return x.thread.state === 'ready' && x.messages.filter((m) => m.role === 'assistant').length === 2 ? x : null; }, 'the answer to the message nobody took up');
+  assert.ok(t.messages.some((m) => m.event && /had not been answered; the app started the turn by itself/.test(m.text || '')), 'the thread says what happened');
+  assert.equal(t.thread.error, '');
+  // Once: the answered message starts nothing more.
+  await new Promise((r) => setTimeout(r, 1200));
+  assert.equal((await thread(id)).messages.filter((m) => m.role === 'assistant').length, 2);
 });

@@ -33,9 +33,8 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 
 ## The queue
 
-The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from three things.
+The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from two things.
 
-- **The mood line** in the top bar (Alt+M). Type what you feel like ("maths", "research, no mails"). It saves as you type and nothing is sent; the queue reorders within a few seconds. Empty it to go back to normal.
 - **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → Queue. Your own lines are kept.
 - **Otherwise:** things with a date or that block others first, then what has waited longest, kinds mixed.
 
@@ -73,7 +72,6 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 | Alt+A | Show or hide the files Claude made in this thread |
 | Alt+U | Update the brain |
 | Alt+L | Show or hide the inbox |
-| Alt+M | Jump to the mood line |
 | Esc | Close the side panel or the settings window |
 
 ### Model and effort
@@ -101,12 +99,15 @@ Nothing is proposed twice, whether you accepted or declined it. What you edited 
 
 A mail Claude writes shows up in the thread as a mail card: To, Subject and the text, all editable in place.
 
+- **Files go along** when the mail file names them, one `attach:` line each: a file Claude made in the thread, a file you attached to a message, or a document from the vault's `Files/` folder. Ask Claude ("send me the sketch as a PDF by mail", "attach the concept"). The card lists them under **Attached**; × takes one off. A name that leads to no file stops the mail, so nothing goes out missing what it promises. 15 MB together at most.
 - **Put in Gmail** saves it as a draft. After further changes the button updates that same draft.
 - **Send…** asks once, showing recipient and subject, then sends.
 - Your own edits are kept as versions marked as yours; "versions" shows what changed.
 - When you send, the thread gets a note. The next brain update files the version Claude wrote and the version you sent side by side, which is what "improve on writing mails" learns from.
 
 Claude itself cannot put anything into Gmail or send. Only these two buttons can, and only when you press them.
+
+**Calendar.** Claude can add entries to your calendar: orange (Pumpkin), with a Meet link when it is a call. When you ask for people to be invited, it passes them as guests and Google mails them the invitation; the thread then carries a note saying who was invited. Without your asking, an entry has no guests.
 
 This needs Gmail connected, once: [docs/google.md](docs/google.md). Without it the card still works for editing and copying.
 
@@ -188,7 +189,7 @@ Switched off since 15-11-2026: a thread closed with Done does the same job and s
 
 - **To the open thread.** After a thread has been read to you, what you say is your reply to it. It is sent, and the next thread is read out. No closing keyword is needed.
 - **To a new thread**, when it is a new piece of work for Claude ("ask Claude to find out when the board meets").
-- **To the app**, when it is a command: next, done, repeat, read all, new thread, cancel, goodbye. A thread by name works too ("open the grant one"), and so does "my mood is …".
+- **To the app**, when it is a command: next, done, repeat, read all, new thread, cancel, goodbye. A thread by name works too ("open the grant one").
 - **Nowhere: it answers itself.** Ask what is waiting, what a thread said, or anything a chatbot can answer. Questions that need more (something current from the web, careful thought) go to a stronger model (Sonnet), which may search the web. The host keeps the conversation in mind, so you can ask follow-ups, and "make that a thread" turns the conversation into one.
 
 The short commands and "…and send it" at the end of a sentence work without the model, at once. If the model fails, nothing is lost: say "send" to give what you said to the open thread as it is.
@@ -211,7 +212,7 @@ Good to know:
 - Speaking needs Chrome (Android or computer) and, on the phone, the app reachable over https: [docs/pi.md](docs/pi.md) (the Tailscale part works for a laptop too). Typing works everywhere.
 - Chrome stops listening when the screen goes off. The page keeps the screen on; "Lock for the pocket" covers it with a dark shield that ignores touches.
 - Cards are left out; they are for reading and editing.
-- Every thing you say costs one small Haiku request. The conversation with the host itself is not kept and does not go into the brain; only what it passes to a thread or the mood line does.
+- Every thing you say costs one small Haiku request. The conversation with the host itself is not kept and does not go into the brain; only what it passes to a thread does.
 
 A real phone number does the same through Twilio, for a per-minute price: [docs/calling.md](docs/calling.md).
 
@@ -266,6 +267,12 @@ working, which runs on the tier of the work it belongs to. The tier a turn used 
 header; clicking it runs the same message again one tier up and keeps that tier for the
 thread, until you pick Auto or Quick select there again.
 
+Auto does not step down from Fable to Opus in a conversation that is still fresh (its last
+turn less than an hour ago, and more than a few pages long): Claude keeps what it has read
+ready per model, so a turn on the other model reads the whole conversation again at full
+price, which costs more than the easier message saves. It takes Fable's lower tier (High)
+instead. Stepping up, the effort, and your own choice are not touched.
+
 ## Focus
 
 The switch in the top bar ("Everything" / "Focus") is for working through your own threads
@@ -299,8 +306,8 @@ theirs in the background after the app starts.
 
 Every card you decide on is one line in `cards/log.jsonl` in the data folder (and so in the
 data repo): what was proposed and why, to whom, on which channel, what you did with it and
-how, your reason, whether and how you edited it, the text as proposed and as accepted, the
-mood line, when it was made and how long it waited.
+how, your reason, whether and how you edited it, the text as proposed and as accepted,
+when it was made and how long it waited.
 
 ## Next actions, Done and Defer
 
@@ -354,6 +361,10 @@ turn off.
 
 - **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again
   by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
+- **A message nobody answered.** A message sent just as the work moved between the laptop
+  and the Pi could end up in a thread with no turn to take it up. The app looks for such
+  messages every minute (on the computer doing the work, for messages of the last six
+  hours) and starts the turn itself, with a note in the thread. After Stop it does not.
 - **Anything else fails** (a brain update, the card run, saving, updating, a crash): the app
   opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the
   cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like
@@ -367,7 +378,10 @@ turn off.
 The amount in the top bar is what Claude used through this app today, counted at API prices
 as the Agent SDK reports it per run; click it for the last five hours, seven days, and today
 by kind. It covers both computers. It is not your plan's limit: the app cannot read how much
-of that is left.
+of that is left. Until 18-11-2026 the amount was far too high (about eight times over a
+week): Claude reports a thread's cost as the whole conversation so far, and the app added
+that up turn by turn. Each run is now counted for what it cost itself, and the days before
+are worked out again from their tokens.
 
 ## Usage limits: held, then carried on
 
@@ -413,7 +427,7 @@ App data is in its own folder, outside the vault:
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, the mood line, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
+That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`fburgerdev/app-ai-data`): threads and their files, water levels, the scratchpad, model and effort, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
 
 Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, logs, and each thread's workbench (`threads/<id>/work/`: scripts, installed libraries, files made on the way).
 
@@ -443,6 +457,7 @@ A computer that starts with an empty data folder takes over the saved state. Run
 | `allowedHosts` | empty | Other addresses the app answers under (Tailscale). |
 | `google` | empty | Client id and secret of your Google Cloud project. |
 | `voice` | off | `groqKey`, `speak`, `piper`, `openaiKey`: the Talk page's ear and voice (docs/voice.md). Calling through Twilio. Also `hostModel` (`haiku`) and `thinkModel` (`sonnet`): the host you talk to and the model it hands harder questions to. |
+| `leftOver` | every minute, messages 1 min to 6 h old | Looking for a message of yours that no turn took up (see "The app looks after itself"). |
 | `readLog` | `false` | Recording what is read from the vault (`reads.jsonl`, `npm run reads`). Off for now. |
 
 ## Tests

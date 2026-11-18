@@ -239,7 +239,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
-    case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}`;
+    case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}${input.guests?.length ? `, inviting ${clip(input.guests.join(', '), 60)}` : ''}`;
     case 'TodoWrite':
     case 'TaskCreate':
     case 'TaskUpdate':
@@ -275,7 +275,10 @@ export async function runAgent(params) {
     const durationMs = Date.now() - started;
     // The stand-in reports a made-up amount, so the usage view has something to show.
     const usage = out.usage || (params.fake ? { input_tokens: 1200, output_tokens: Math.ceil((out.text || '').length / 4) } : null);
-    recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs });
+    // The SDK's price is the session's total so far; usage.js takes the earlier runs off.
+    // Only a real run that keeps its session can be carried on, so only those are tracked.
+    const kept = !params.fake && params.mode !== 'plain' && params.mode !== 'lookup';
+    recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs, sessionId: kept ? out.sessionId || '' : '', resumed: Boolean(params.resume) });
     if (out.limit && !out.aborted) noteLimit(out.limit);
     else if (!out.error && !out.aborted) noteLimit(null);
     return { ...out, durationMs };
@@ -353,6 +356,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let raw = ''; // the error as Claude Code worded it
   let code = ''; // its kind, e.g. 'rate_limit'
   let rejected = null; // the last limit Claude Code reported as reached
+  let context = 0; // how many tokens the conversation held at Claude's last step
 
   for await (const msg of query({ prompt: input(), options })) {
     if (msg.session_id && msg.session_id !== sessionId) {
@@ -384,6 +388,9 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       } else if (!msg.parent_tool_use_id) {
         code = '';
       }
+      // What Claude read for this step plus what it wrote: the size of the conversation now.
+      const u = !msg.parent_tool_use_id && msg.message?.usage;
+      if (u) context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           const summary = describeTool(block.name, block.input, cwd);
@@ -414,7 +421,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     }
   }
   const limit = error ? limitOf({ error: raw, code, seen: rejected }) : null;
-  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit };
+  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit, context };
 }
 
 // ---------- a stand-in for Claude, for trying the app without an account ----------

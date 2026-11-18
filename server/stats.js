@@ -21,6 +21,7 @@ import * as brain from './brain.js';
 import { readCardLog } from './cards.js';
 import { lastRuns } from './extract.js';
 import { DATA_DIR } from './config.js';
+import { read as readUsage } from './usage.js';
 
 const APP_KINDS = new Set(['card', 'brain-update', 'mail-reply', 'checkin-active', 'checkin-paused', 'checkin-areas', 'repair', 'prep', 'event']);
 const NOT_NOTES = new Set(['Projects Index', 'People Index', 'PBU Community Members', 'Areas Index']);
@@ -95,16 +96,8 @@ function repoMerges() {
   return times;
 }
 
-function usageCosts() {
-  const out = [];
-  let text = '';
-  try { text = fs.readFileSync(path.join(DATA_DIR, 'usage.jsonl'), 'utf8'); } catch { return out; }
-  for (const l of text.split('\n')) {
-    if (!l) continue;
-    try { const e = JSON.parse(l); out.push({ ts: e.ts, cost: Number(e.cost) || 0 }); } catch { /* a torn line */ }
-  }
-  return out;
-}
+// What each run cost (usage.js works out the price of lines from before 18-11-2026 again).
+const usageCosts = () => readUsage().map((e) => ({ ts: e.ts, cost: e.cost }));
 
 export function stats(now = Date.now()) {
   const ps = periods(now);

@@ -132,6 +132,12 @@ const DEFAULTS = {
   // or `fallbackMs` later when it names none. `checkMs` is how often the app looks.
   limits: { marginMs: 3 * 60_000, fallbackMs: 15 * 60_000, checkMs: 20_000 },
 
+  // A message of Florian's that no turn took up (it was sent while the work moved between
+  // the laptop and the Pi) is answered by itself: looked for every `checkMs`, once the
+  // message is `minAgeMs` old, and never for one older than `maxAgeMs`. `slackMs` is how
+  // far the two computers' clocks may be apart.
+  leftOver: { checkMs: 60_000, minAgeMs: 60_000, maxAgeMs: 6 * 3600_000, slackMs: 5000 },
+
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
 
@@ -184,7 +190,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);

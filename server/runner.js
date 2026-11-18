@@ -124,7 +124,7 @@ export function stopTurn(threadId) {
   const idx = waiting.findIndex((w) => w.threadId === threadId);
   if (idx >= 0) {
     waiting.splice(idx, 1);
-    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [] });
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], stoppedAt: Date.now() });
     return true;
   }
   const run = running.get(threadId);
@@ -133,7 +133,7 @@ export function stopTurn(threadId) {
     const thread = store.getThread(threadId);
     if (!thread?.held) return false;
     heldPrompt.delete(threadId);
-    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false });
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false, stoppedAt: Date.now() });
     log(`thread "${thread.title}": hold cancelled`);
     return true;
   }
@@ -188,6 +188,62 @@ export function watchHolds(mayRun) {
   clearInterval(holdTimer);
   holdTimer = setInterval(() => { try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); } }, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
+}
+
+// ---------- messages no turn took up ----------
+//
+// A message sent into a thread that says "working" waits for that turn to end. When the
+// turn was the other computer's, or was already over and only its last state had not
+// arrived yet (the laptop just took the work back from the Pi), nothing here ever picks
+// the message up: the thread comes back "ready" with the message in it and no answer
+// (18-11-2026: "start again, read my latest messages"). The conversation itself is never
+// lost, since both computers' lines are kept, so that is what this looks at: a message
+// of Florian's that no turn started after is still owed an answer.
+
+// The messages of his in `messages` that no turn took up, oldest first. A turn took a
+// message up when it started after the message was sent (its answer's time minus how
+// long it ran); the two computers' clocks may differ by a few seconds. Not counted:
+// what the app wrote itself, notes about what he did, messages sent with "send and
+// done" (they wait for his next one), and anything from before he pressed Stop.
+export function leftOver(messages, { stoppedAt = 0, slackMs = 5000 } = {}) {
+  let lastStart = 0;
+  for (const m of messages) if (m.role === 'assistant') lastStart = Math.max(lastStart, (m.ts || 0) - (m.durationMs || 0));
+  return messages.filter((m) => m.role === 'user' && !m.auto && !m.event && !m.unanswered && (m.ts || 0) > stoppedAt && (m.ts || 0) - slackMs > lastStart);
+}
+
+// Starts a turn for every waiting thread that holds such messages. Only on the computer
+// that does the work, only for messages of the last hours, and once per message: a turn
+// that fails says so in the thread, and trying again is his call then.
+export function answerLeftOver({ mayRun = () => true, now = Date.now() } = {}) {
+  const { minAgeMs = 60_000, maxAgeMs = 6 * 3600_000, slackMs = 5000 } = config.leftOver || {};
+  let started = 0;
+  for (const t of store.listThreads()) {
+    if (t.state !== 'ready' || t.held || t.deferred || t.archived || t.error || t.kind === 'card' || isRunning(t.id)) continue;
+    // Cheap first: nothing of his since the thread was last looked at.
+    if (!t.lastUserTs || now - t.lastUserTs > maxAgeMs || t.leftOverAt === t.lastUserTs) continue;
+    if (!mayRun()) return started;
+    const owed = leftOver(store.readMessages(t.id), { stoppedAt: t.stoppedAt || 0, slackMs });
+    const newest = owed.at(-1);
+    if (newest && now - newest.ts < minAgeMs) continue; // too fresh to tell: looked at again
+    store.updateThread(t.id, { leftOverAt: t.lastUserTs }, { quiet: true });
+    if (!newest || now - newest.ts > maxAgeMs) continue;
+    const prompt = [
+      `[The app: Florian sent the message${owed.length > 1 ? 's' : ''} below ${owed.length > 1 ? 'between' : 'at'} ${owed.length > 1 ? `${clock(owed[0].ts)} and ${clock(newest.ts)}` : clock(newest.ts)}, while the work was moving between his two computers, and no turn took ${owed.length > 1 ? 'them' : 'it'} up. The app noticed and started this turn by itself; he has not written anything since. Answer ${owed.length > 1 ? 'them' : 'it'} now, in the light of everything said before.]`,
+      ...owed.map((m) => promptFor(t.id, m.text || '', m.files || [])),
+    ].join('\n\n');
+    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[${owed.length > 1 ? `${owed.length} messages` : 'A message'} here had not been answered; the app started the turn by itself on ${dateTimeDMY(now)}.]` });
+    log(`thread "${t.title}": ${owed.length} message(s) no turn took up; answering now`);
+    startTurn(t.id, prompt);
+    started += 1;
+  }
+  return started;
+}
+
+let leftOverTimer = null;
+export function watchLeftOver(mayRun) {
+  clearInterval(leftOverTimer);
+  leftOverTimer = setInterval(() => { try { answerLeftOver({ mayRun }); } catch (err) { log(`unanswered messages: ${err.stack || err.message}`); } }, config.leftOver?.checkMs || 60_000);
+  leftOverTimer.unref?.();
 }
 
 // The last thread on this thread's project, as the vault holds it: named, so that a new
@@ -421,7 +477,10 @@ async function runTurn(threadId, prompt) {
       fake: config.fake,
       onEvent,
       spinOff,
-      mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer() } : undefined,
+      mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer({
+        // An invitation went out to other people: the thread says so, for him and for the brain update.
+        onInvite: ({ title, start, invited }) => store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude added "${title}" (${String(start).slice(0, 16).replace('T', ' ')}) to the calendar on ${dateTimeDMY(Date.now())}, and Google sent an invitation to: ${invited.join(', ')}.]` }),
+      }) } : undefined,
     };
     // No session yet but a conversation already: start from its text.
     const cold = !thread.sessionId && store.readMessages(threadId).length > 1;
@@ -433,6 +492,9 @@ async function runTurn(threadId, prompt) {
       result = await runAgent({ ...base, prompt: recap(threadId, prompt), resume: undefined });
     }
 
+    // How big the conversation is now and when it was last read: Claude keeps what it
+    // has read ready for an hour, per model (stickyTier below).
+    store.updateThread(threadId, { turnEndedAt: Date.now(), ...(result.context ? { contextTokens: result.context } : {}) }, { quiet: true });
     recordArtifacts();
     // What was never shown leaves the artifacts folder for the workbench.
     try { store.tidyArtifacts(threadId); } catch { /* next turn */ }
@@ -444,7 +506,7 @@ async function runTurn(threadId, prompt) {
     const limited = result.limit && !result.aborted ? result.limit : null;
     const again = heldPrompt.get(threadId);
     heldPrompt.delete(threadId);
-    if (result.aborted) message.stopped = true;
+    if (result.aborted) { message.stopped = true; store.updateThread(threadId, { stoppedAt: Date.now() }, { quiet: true }); }
     if (limited) message.limit = { type: limited.type || '' };
     else if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
@@ -690,6 +752,27 @@ export async function backfillSignatures() {
 
 function tierOf(name) { return { name, ...TIERS[name] }; }
 
+// Auto picks a tier per message, but changing the model in the middle of a conversation
+// has a price of its own. Claude keeps what it has read ready for an hour, per model, and
+// reading it from there costs a twentieth (Opus) or a fortieth (Fable) of reading it fresh. A turn on the other model
+// finds nothing ready and reads the whole conversation again, at full price, and writes it
+// down once more. Measured over 13 to 18-11-2026: 18 of 21 such turns did, about an eighth
+// of everything threads used; stepping down from Fable to Opus for an easy message cost
+// more than the easy message saved. The effort can change freely (3 of 36 did).
+// So while a conversation of some size is still ready, Auto does not step down to the
+// cheaper model: it takes the current model's lowest tier instead. Stepping up stays, since
+// that is asked for by what the message needs. His own choice (quick select, "Again,
+// higher") is never touched.
+const READY_MS = 55 * 60_000;
+const WORTH_KEEPING = 30_000; // tokens
+export function stickyTier(pick, thread, now = Date.now()) {
+  const last = thread?.lastTier;
+  if (!TIER_NAMES.includes(pick) || !TIER_NAMES.includes(last) || !thread.sessionId) return pick;
+  if (TIERS[pick].model === TIERS[last].model || TIER_NAMES.indexOf(pick) > TIER_NAMES.indexOf(last)) return pick;
+  if (now - (thread.turnEndedAt || 0) > READY_MS || (thread.contextTokens || 0) < WORTH_KEEPING) return pick;
+  return TIER_NAMES.find((n) => TIERS[n].model === TIERS[last].model);
+}
+
 export async function tierFor(threadId, prompt) {
   const thread = store.getThread(threadId);
   // Chosen for this one message when sending (quick select), then forgotten.
@@ -726,7 +809,10 @@ export async function tierFor(threadId, prompt) {
       answer = String(result.finalText || result.text || '').trim().toLowerCase().replace(/[^a-z]/g, '');
     }
   } catch { /* the default carries the turn */ }
-  return tierOf(TIER_NAMES.includes(answer) ? answer : 'default');
+  const pick = TIER_NAMES.includes(answer) ? answer : 'default';
+  const kept = stickyTier(pick, thread);
+  if (kept !== pick) log(`thread "${thread?.title}": stays on ${TIERS[kept].model} (${Math.round((thread.contextTokens || 0) / 1000)}k tokens still ready); Auto had picked ${pick}`);
+  return tierOf(kept);
 }
 
 // The same message again, one tier higher, pinned on the thread from now on.

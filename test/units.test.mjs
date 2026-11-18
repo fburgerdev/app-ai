@@ -262,3 +262,59 @@ test('a turn the other computer finished shows its answer here, never a false er
   assert.deepEqual(out.flagged, ['ready', ''], 'the false note from before goes');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('usage: a run costs what it added to its session, not the session so far', async () => {
+  const { spent, costOf, priced } = await import('../server/usage.js');
+  const line = { model: 'opus', in: 2, out: 1000, cacheRead: 500_000, cacheWrite: 10_000 };
+  // The SDK reports the whole session: the second run of a session is the difference.
+  assert.equal(spent({ total: 5, before: undefined, resumed: false, line }), 5);
+  assert.ok(Math.abs(spent({ total: 5.2, before: 5, resumed: true, line }) - 0.2) < 1e-9);
+  // A session carried on that was never counted here: its tokens say what the run cost.
+  assert.ok(Math.abs(priced(line) - (2 * 4 + 1000 * 20 + 500_000 * 0.2 + 10_000 * 8) / 1e6) < 1e-9);
+  assert.equal(spent({ total: 150, before: undefined, resumed: true, line }), priced(line));
+  // A total that starts again from nothing (the session was made new) counts as it is.
+  assert.equal(spent({ total: 0.3, before: 5, resumed: true, line }), 0.3);
+  // An unknown model's total is taken as it is rather than guessed.
+  assert.equal(spent({ total: 7, before: undefined, resumed: true, line: { ...line, model: 'mystery' } }), 7);
+  // Lines written before the fix: thread turns are priced again, everything else stands.
+  assert.equal(costOf({ kind: 'thread', cost: 150, ...line }), priced(line));
+  assert.equal(costOf({ kind: 'cards', cost: 1.5, ...line }), 1.5);
+  assert.equal(costOf({ kind: 'thread', cost: 0.25, v: 2, ...line }), 0.25);
+});
+
+test('a message no turn took up is found, whatever order the two computers\' lines ended up in', async () => {
+  const { leftOver } = await import('../server/runner.js');
+  const t0 = 1_800_000_000_000;
+  const user = (ts, extra = {}) => ({ role: 'user', ts, text: `at ${ts - t0}`, ...extra });
+  const claude = (ts, durationMs) => ({ role: 'assistant', ts, durationMs, parts: [{ type: 'text', text: 'ok' }] });
+  // The usual course: every message has a turn that started after it.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), user(t0 + 70_000), claude(t0 + 200_000, 100_000)]), []);
+  // Sent while a turn ran on the other computer: that turn started before the message.
+  const late = user(t0 + 30_000);
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), late]), [late]);
+  assert.deepEqual(leftOver([user(t0), late, claude(t0 + 60_000, 50_000)]), [late], 'the lines of two computers come in any order');
+  // The app's own messages, notes about what he did and "send and done" are not owed an answer.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), user(t0 + 90_000, { auto: true }), user(t0 + 91_000, { event: true }), user(t0 + 92_000, { unanswered: true })]), []);
+  // After Stop, what he sent before stays unanswered: stop means stop.
+  assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), late], { stoppedAt: t0 + 40_000 }), []);
+  // Clocks a few seconds apart do not make an answered message look unanswered.
+  assert.deepEqual(leftOver([user(t0 + 3000), claude(t0 + 60_000, 60_000)]), []);
+});
+
+test('Auto does not step down to the cheaper model while a big conversation is still ready', async () => {
+  const { stickyTier } = await import('../server/runner.js');
+  const now = 1_800_000_000_000;
+  const warm = { sessionId: 's', lastTier: 'extra', turnEndedAt: now - 10 * 60_000, contextTokens: 300_000 };
+  // Fable to Opus would read the whole conversation again: Fable's lowest tier instead.
+  assert.equal(stickyTier('cheap', warm, now), 'high');
+  assert.equal(stickyTier('default', warm, now), 'high');
+  // The effort moves freely, and stepping up is what the message asks for.
+  assert.equal(stickyTier('high', warm, now), 'high');
+  assert.equal(stickyTier('extra', { ...warm, lastTier: 'low' }, now), 'extra');
+  assert.equal(stickyTier('cheap', { ...warm, lastTier: 'default' }, now), 'cheap');
+  // Nothing to keep: after an hour, in a short conversation, or in a new one.
+  assert.equal(stickyTier('cheap', { ...warm, turnEndedAt: now - 70 * 60_000 }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { ...warm, contextTokens: 8000 }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { ...warm, sessionId: null }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { lastTier: 'extra', sessionId: 's' }, now), 'cheap', 'a thread from before this was measured');
+});

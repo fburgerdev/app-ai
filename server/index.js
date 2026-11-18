@@ -764,6 +764,32 @@ app.post('/api/threads/:id/artifact/save', (req, res) => {
 const mailBusy = new Set();
 const fakeGmail = () => new Promise((resolve) => { setTimeout(resolve, 25); });
 
+// The files a mail's `attach:` lines name, read from where they are: a file Claude made
+// in the thread, a file Florian attached to a message, or a document in the vault's
+// Files/ folder. A name that leads nowhere stops the mail, so nothing goes out without a
+// file he expects to be on it.
+const MAX_ATTACHED = 15 * 1024 * 1024;
+function attachedFiles(threadId, names = []) {
+  const files = [];
+  let total = 0;
+  for (const given of names) {
+    const name = String(given).trim();
+    let file = null;
+    if (/^Files\//i.test(name)) {
+      const root = path.join(config.brainDir, 'Files');
+      const full = path.resolve(root, name.slice(6));
+      const rel = path.relative(root, full);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(full)) file = full;
+    } else file = store.artifactLivePath(threadId, name) || store.uploadPath(threadId, name);
+    if (!file || !fs.statSync(file).isFile()) throw new Error(`The attachment "${name}" is not among this thread's files. Take the line out of the mail, or ask Claude to put the file there.`);
+    const data = fs.readFileSync(file);
+    total += data.length;
+    if (total > MAX_ATTACHED) throw new Error('The attachments are larger than 15 MB together. Send a link instead, or fewer files.');
+    files.push({ name: path.basename(file), data });
+  }
+  return files;
+}
+
 function mailFor(req, res) {
   const thread = need(req, res);
   if (!thread) return null;
@@ -775,8 +801,10 @@ function mailFor(req, res) {
   if (!mail) { res.status(404).json({ error: 'That file is not a mail.' }); return null; }
   if (info.mail?.sentAt) { res.status(409).json({ error: 'This mail has already been sent.' }); return null; }
   if (!config.fake && !google.googleConnected()) { res.status(409).json({ error: 'Gmail is not connected. Connect it under Connections.' }); return null; }
+  let attachments;
+  try { attachments = attachedFiles(thread.id, mail.attach); } catch (err) { res.status(400).json({ error: err.message }); return null; }
   mailBusy.add(key);
-  return { thread, name, info, mail, version: info.versions.at(-1).v, release: () => mailBusy.delete(key) };
+  return { thread, name, info, mail: { ...mail, attachments }, version: info.versions.at(-1).v, release: () => mailBusy.delete(key) };
 }
 
 app.post('/api/threads/:id/mail/draft', async (req, res) => {
@@ -811,7 +839,7 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
       store.appendMessage(m.thread.id, {
         role: 'user',
         event: true,
-        text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.mail.to}. Subject: ${m.mail.subject}.]`,
+        text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.mail.to}. Subject: ${m.mail.subject}.${m.mail.attachments.length ? ` Attached: ${m.mail.attachments.map((f) => f.name).join(', ')}.` : ''}]`,
       });
     }
     // A reply sent from a mail thread finishes that thread: it leaves the inbox, as if he
@@ -929,6 +957,9 @@ cards.setMayRun(link.mayRunBackground);
 // computer that does the work then.
 runner.watchHolds(link.mayRunBackground);
 extraction.watchHold(link.mayRunBackground);
+// A message that no turn took up (sent while the work moved between the computers) is
+// answered after all.
+runner.watchLeftOver(link.mayRunBackground);
 events.initEvents({ mayRunHere: link.mayRunBackground });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
