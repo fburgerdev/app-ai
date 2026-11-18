@@ -318,3 +318,11 @@ test('Auto does not step down to the cheaper model while a big conversation is s
   assert.equal(stickyTier('cheap', { ...warm, sessionId: null }, now), 'cheap');
   assert.equal(stickyTier('cheap', { lastTier: 'extra', sessionId: 's' }, now), 'cheap', 'a thread from before this was measured');
 });
+
+test('the calendar is worth a run only when it holds an entry no run has looked at', async () => {
+  const { unseenEntries } = await import('../server/cards.js');
+  const seen = ['a 2026-11-20T10:00:00+01:00', 'b 2026-11-21T09:00:00+01:00'];
+  assert.deepEqual(unseenEntries(['a 2026-11-20T10:00:00+01:00'], seen), [], 'an entry that passed changes nothing');
+  assert.deepEqual(unseenEntries([...seen, 'c 2026-11-21T15:00:00+01:00'], seen), ['c 2026-11-21T15:00:00+01:00'], 'a new entry');
+  assert.deepEqual(unseenEntries(['a 2026-11-20T14:00:00+01:00'], seen), ['a 2026-11-20T14:00:00+01:00'], 'an entry that moved');
+});

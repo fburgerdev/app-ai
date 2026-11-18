@@ -35,7 +35,7 @@ const procs = {};
 function start(name, port, extra = {}) {
   const data = path.join(dir, name);
   fs.mkdirSync(data, { recursive: true });
-  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo, cards: { auto: false }, ...extra }));
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo, cards: { auto: false }, statusSaveSeconds: 5, ...extra }));
   const out = fs.openSync(path.join(dir, `${name}.log`), 'a');
   procs[name] = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data }, stdio: ['ignore', out, out] });
 }

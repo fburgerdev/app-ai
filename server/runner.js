@@ -303,8 +303,13 @@ function recap(threadId, newPrompt) {
   const thread = store.getThread(threadId);
   const earlier = store.readMessages(threadId).slice(0, -1);
   const lines = earlier.map((m) => `### ${m.role === 'user' ? (m.auto ? 'The app' : 'Florian') : 'Claude'}, ${dateTimeDMY(m.ts)}\n\n${messageText(m)}${m.files?.length ? `\n\n[He attached: ${m.files.map((f) => path.join(store.uploadsDir(threadId), f.name)).join(', ')}]` : ''}`);
+  // A long conversation keeps its beginning (what the thread is for) and its end (where
+  // it stands); only the middle is left out. Until 19-11-2026 everything but the last
+  // 60,000 characters was cut, so a long thread that changed computers lost its task.
   let body = lines.join('\n\n');
-  if (body.length > 60_000) body = `(the beginning is cut)\n\n${body.slice(-60_000)}`;
+  const HEAD = 40_000;
+  const TAIL = 260_000;
+  if (body.length > HEAD + TAIL) body = `${body.slice(0, HEAD)}\n\n[… the middle of the conversation is left out here: ${Math.round((body.length - HEAD - TAIL) / 1000)}k characters. The files made on the way are in the artifacts folder, and the thread's branch holds the commits. …]\n\n${body.slice(-TAIL)}`;
   const lead = thread?.spunFrom && earlier.length <= (thread.spunAt || 0)
     ? `This thread was spun off from the thread "${thread.spunTitle}". Below is that conversation up to that moment; the files made and attached there are copied into this thread's folders. The original thread carries on separately and does not see what happens here. The message at the end is the task for this spin-off: do that, not the original thread's work.`
     : 'This thread\'s earlier session could not be reopened, so here is the conversation so far.';

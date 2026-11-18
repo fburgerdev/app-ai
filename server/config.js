@@ -63,6 +63,9 @@ const DEFAULTS = {
   dataRepo: 'https://github.com/fburgerdev/app-ai-data.git',
   dataBranch: 'main',
   dataSyncMinutes: 2,
+  // While the page is open, changes are saved ahead of that timer, this often (seconds);
+  // every 15 seconds while getting ready to suspend or handing over.
+  statusSaveSeconds: 60,
 
   // On the laptop: the address of the same app on the Raspberry Pi, for example
   // "https://pi.tail1234.ts.net". The laptop does the work; the app then has a switch

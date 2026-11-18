@@ -164,12 +164,18 @@ app.get('/api/status', async (req, res) => {
   // While getting ready: save as soon as the last turn ends, so "safe" is true when it is.
   if (l.finalizing && !busy && saved.enabled && (saved.files || saved.ahead) && !saved.error) datasync.saveNow('getting ready to suspend').catch(() => {});
   const savedAll = !saved.enabled || (saved.files === 0 && saved.ahead === 0);
-  // Changes waiting for the next timed save: saved now, so "saving" means saving.
-  if (!savedAll && !saved.error && Date.now() - lastStatusSave > 15_000) { lastStatusSave = Date.now(); datasync.saveNow('state').catch(() => {}); }
   // Four stages, Florian's words (13-11-2026): locked means the app starts nothing by
   // itself, and anything he sends unlocks it again.
   const locked = Boolean(l.finalizing) || l.active === 'remote';
-  const doing = busy || !savedAll || l.switching;
+  // Changes waiting for the next timed save are saved ahead of it: at once while he is
+  // leaving this computer, so "saving" means saving, and otherwise once a minute. It used
+  // to be every 15 seconds whenever the page was open, which made up to 370 saves an hour
+  // on GitHub, each of which the Pi took in by reading all its threads again (18-11-2026).
+  const saveEvery = locked || l.switching ? 15_000 : Math.max(5, Number(config.statusSaveSeconds) || 60) * 1000;
+  if (!savedAll && !saved.error && Date.now() - lastStatusSave > saveEvery) { lastStatusSave = Date.now(); datasync.saveNow('state').catch(() => {}); }
+  // Unsaved changes only count as "still doing something" while he is leaving: otherwise
+  // they are the ordinary state between two saves.
+  const doing = busy || l.switching || (locked && !savedAll);
   res.json({
     show: laptopHere,
     link: l,

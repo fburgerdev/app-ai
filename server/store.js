@@ -85,6 +85,7 @@ export function loadThreads() {
 
 // After the data folder took in what the other computer saved: threads are read from
 // disk again. A thread Claude is working on right here keeps what is in memory.
+const sizeSeen = new Map(); // thread id -> size of its conversation file when last read
 export function reloadThreads() {
   const seen = new Set();
   if (fs.existsSync(THREADS_DIR)) {
@@ -101,6 +102,12 @@ export function reloadThreads() {
       if (cur?.state === 'working' && !cur.held && mine(cur)) continue;
       threads.set(id, meta);
       // A conversation continued on both computers has more lines than either counted.
+      // Only looked at when the conversation's file changed since the last time: this runs
+      // for every thread whenever the other computer saved.
+      let size = -1;
+      try { size = fs.statSync(messagesFile(id)).size; } catch { /* no conversation yet */ }
+      if (sizeSeen.get(id) === size) continue;
+      sizeSeen.set(id, size);
       const all = readMessages(id);
       const count = all.length;
       if (count > (meta.messageCount || 0)) {

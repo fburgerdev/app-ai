@@ -39,10 +39,40 @@ let lastLook = 0; // when the calendar was last looked at
 let lastMade = -1;
 let lastError = '';
 
+// When the last run and the last look at the calendar were, and which calendar entries
+// a run has already looked at. Kept across restarts (this computer's only): the app
+// starts again after every update of itself, and each start used to bring a run with it.
+const STATE = path.join(DIR, 'state.json');
+let seenEntries = []; // `id start` of the calendar entries a run has looked at
+function saveRunState() {
+  try { fs.writeFileSync(STATE, JSON.stringify({ lastRun, lastLook, lastMade, seenEntries })); } catch { /* never in the way */ }
+}
+
 export function initCards(cfg) {
   config = cfg;
   fs.mkdirSync(RUNS, { recursive: true });
+  try {
+    const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
+    lastRun = Number(s.lastRun) || 0;
+    lastLook = Number(s.lastLook) || 0;
+    if (Number.isInteger(s.lastMade)) lastMade = s.lastMade;
+    if (Array.isArray(s.seenEntries)) seenEntries = s.seenEntries.map(String);
+  } catch { /* the first start */ }
 }
+
+// The calendar, read by the app itself before it spends a run on it: from now until the
+// end of the day after tomorrow, as the run would. Half of all runs were only for the
+// calendar (every three hours), and most of those found the same entries as the time
+// before (measured 13 to 18-11-2026: 21 of 43 runs made nothing, at a full run's price).
+const entryKey = (e) => `${e.id} ${e.start}`;
+async function upcomingEntries() {
+  const to = new Date();
+  to.setDate(to.getDate() + 2);
+  to.setHours(23, 59, 59, 0);
+  return (await google.calendarList({ from: new Date().toISOString(), to: to.toISOString(), max: 100 })).map(entryKey);
+}
+// The entries no run has looked at yet (new ones, and ones that moved).
+export const unseenEntries = (now, seen) => now.filter((k) => !seen.includes(k));
 
 // A preparation made before 12-11-2026 was a plain thread in the inbox, not an event.
 // Those do not count as made: the entry gets its event thread like any other.
@@ -115,7 +145,14 @@ export function maybeMakeCards() {
   const wantCards = !inFocus() && !enoughCards() && Date.now() - lastRun >= pause;
   const wantCalendar = calendarOn() && Date.now() - lastLook >= (Number(config.cards.calendarHours) || 3) * 3600_000;
   if (!wantCards && !wantCalendar) return false;
-  makeCards({ cards: wantCards }).catch(() => {});
+  if (wantCards || config.fake) { makeCards({ cards: wantCards }).catch(() => {}); return true; }
+  // Only the calendar is due: a run is started only when it holds an entry no run has seen.
+  lastLook = Date.now();
+  upcomingEntries().then((now) => {
+    if (unseenEntries(now, seenEntries).length) return makeCards({ cards: false });
+    saveRunState();
+    return null;
+  }, () => makeCards({ cards: false })).catch(() => {}); // the calendar did not answer: the run looks itself
   return true;
 }
 
@@ -191,6 +228,8 @@ export async function makeCards({ cards: wantCards = true } = {}) {
       count += 1;
     }
     if (wantCards) lastMade = count;
+    // What the run has looked at in the calendar is not looked at again.
+    if (!config.fake && google.googleConnected()) seenEntries = await upcomingEntries().catch(() => seenEntries);
     log(`cards: made ${count}${preps ? `, ${preps} event${preps === 1 ? '' : 's'} to prepare` : ''}`);
   } catch (err) {
     lastError = isNetworkError(err.message) ? '' : err.message;
@@ -199,6 +238,7 @@ export async function makeCards({ cards: wantCards = true } = {}) {
     log(`cards: run failed: ${err.message}`);
   } finally {
     running = false;
+    saveRunState();
     fs.rmSync(outDir, { recursive: true, force: true });
     store.events.emit('cards', cardsStatus());
   }
