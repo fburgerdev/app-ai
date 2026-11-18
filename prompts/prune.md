@@ -27,6 +27,8 @@ Florian chose (16-11-2026) that the questions a prune would ask him wait for the
 - **Anything you would have to guess** (a date, whose view a line is, whether something still holds): leave it, and ask under Questions.
 - Never create a project file, folder or area, and never restructure an index.
 
+**Few questions.** After the first night's prune Florian answered about 70 questions and then said (18-11-2026): "i dont want anymore, for the rest just decide yourself, i dont care". So this part asks at most **two** questions: the two whose answer changes the most (a line in an action file he would otherwise act on wrongly, the state of a person or project he is working with right now). Everything else you would have asked is left exactly as it is, without a question and without a mention; the next prune or an ordinary thread meets it again. Two is a ceiling, not a target: most parts need none.
+
 ## Tools
 
 - Delete a file with plain `rm "<path>"`, move one with `mv` or `git mv`. Do not use other git commands: the app commits and pushes.
@@ -47,6 +49,8 @@ STATUS: pruned | nothing | questions
 **<person, organisation or project>**
 1. <closed question he can answer in a few words, with the file and the date it rests on>
 ```
+
+- At most two questions, as said above.
 
 - `STATUS: nothing` when no file changed; leave out "Written".
 - `STATUS: questions` when there is at least one question, whether or not files changed. Leave out any section that would be empty.
