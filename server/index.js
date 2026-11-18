@@ -26,7 +26,7 @@ import { initRepair, report } from './repair.js';
 import { createPruner } from './prune.js';
 import { buildPolicy, runAgent } from './agent.js';
 import { git as runGit } from './git.js';
-import { initShip } from './ship.js';
+import { initShip, isShipping } from './ship.js';
 import { initPi } from './pi.js';
 import { stats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
@@ -159,7 +159,7 @@ app.get('/api/status', async (req, res) => {
   const threads = store.listThreads().filter((t) => t.state === 'working' && !t.held).map((t) => ({ id: t.id, title: t.title }));
   const extracting = extraction.extractionStatus().running;
   const carding = cards.cardsStatus().running;
-  const [saved, unpushed] = await Promise.all([datasync.unsaved(), repos.unpushed().catch(() => [])]);
+  const [saved, unpushed] = await Promise.all([datasync.unsaved(), repos.unpushed({ busy: isShipping }).catch(() => [])]);
   const busy = threads.length > 0 || extracting || carding;
   // While getting ready: save as soon as the last turn ends, so "safe" is true when it is.
   if (l.finalizing && !busy && saved.enabled && (saved.files || saved.ahead) && !saved.error) datasync.saveNow('getting ready to suspend').catch(() => {});

@@ -2527,14 +2527,21 @@ function renderStatus() {
       `${plural(st.unpushed.length, 'repo branch', 'repo branches')} only on the ${lap}`)
     : null;
   // Quiet by default: a small item in the top bar, with this in a panel when clicked.
-  // The full row under the top bar only when it asks for something: while getting ready
-  // to suspend or handing over (until it is safe), when saving to GitHub fails, or when
-  // repo work is only on this computer. Colour only then, and nothing moves.
+  // The full row under the top bar only when something bigger is going on: while getting
+  // ready to suspend or handing over (until it is safe), when saving to GitHub fails, or
+  // when the server stops answering. Colour only then, and nothing moves.
+  // Repo work only on this computer is not one of those by itself: an unmerged or unpushed
+  // branch is the usual state of a thread that works in a repo, so it is in the panel and
+  // nothing else. It only comes out when he is leaving this computer, because that is
+  // when it would be left behind (Florian, 18-11-2026: the row was interrupting, the
+  // laptop item had been made quiet on purpose).
   const failing = Boolean(st.saved.error);
   const steps = Boolean(l.enabled && l.step);
   const piGone = onPi && !l.online;
-  const loud = Boolean(l.finalizing) || steps || failing || piGone || Boolean(warn);
-  const mark = failing || warn || piGone ? 'warn' : (stage === 'safe' && l.finalizing) || onPi ? 'safe' : steps || (l.finalizing && stage !== 'safe') ? 'ready' : 'calm';
+  const leaving = Boolean(l.finalizing) || steps || onPi;
+  const leftBehind = Boolean(warn) && leaving;
+  const loud = Boolean(l.finalizing) || steps || failing || piGone || leftBehind;
+  const mark = failing || leftBehind || piGone ? 'warn' : (stage === 'safe' && l.finalizing) || onPi ? 'safe' : steps || (l.finalizing && stage !== 'safe') ? 'ready' : 'calm';
   const side = () => h('span', { class: 'status-side' }, h('span', { class: `status-dot is-${mark}`, 'aria-hidden': 'true' }), onPi ? h('span', { class: 'pi-name' }, svg(BOARD), pi) : lap);
   const parts = () => [h('span', { class: 'status-text', role: 'status' }, text), warn, h('span', { class: 'status-actions' }, buttons)].filter(Boolean);
   // The buttons are one set of elements: in the panel while it is open, else in the row.

@@ -337,6 +337,12 @@ itself; anything you send unlocks it again.
 events, no sorting), everything is saved to GitHub, and the line turns green. It works whether
 or not the server is reachable. **Handover** gives everything to the server (see above).
 
+Most of the time the status is only the small item in the top bar. The row under it opens only
+when something bigger is going on: getting ready to suspend, a handover, saving to GitHub
+failing, or the server not answering. Repo branches that are only on this computer (a turn
+still working on one counts as neither) are in the item's panel, and open the row only while
+you are getting ready to suspend or handing over, when they would be left behind.
+
 ## Updating now
 
 The app updates itself every ten minutes. For something urgent, **Settings → Connections →
