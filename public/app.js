@@ -3073,4 +3073,13 @@ function boot() {
   }, 4000);
 }
 
+// Video Kit runs beside the app on this computer (server/videokit.js); the link is only
+// useful in this computer's own browser.
+if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+  fetch('/api/videokit').then((r) => (r.ok ? r.json() : null)).then((v) => {
+    const a = document.getElementById('videokit-link');
+    if (v?.url && a) { a.href = v.url; a.hidden = false; }
+  }).catch(() => {});
+}
+
 boot();

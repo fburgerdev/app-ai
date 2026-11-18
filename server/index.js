@@ -17,6 +17,7 @@ import * as cards from './cards.js';
 import * as projects from './projects.js';
 import * as checkins from './checkins.js';
 import * as repos from './repos.js';
+import * as videokit from './videokit.js';
 import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
@@ -190,6 +191,15 @@ app.post('/api/sync/push', async (req, res) => {
   const out = await datasync.saveNow('handover');
   if (out.error) return res.status(502).json({ error: out.error });
   res.json({ ok: true });
+});
+// Video Kit (server/videokit.js) runs on this computer and saves into the video repos here,
+// so these stay this computer's own even while the page talks to the Pi.
+app.get('/api/videokit', (req, res) => res.json({ url: videokit.videoKitUrl() }));
+app.post('/api/videokit/refresh', express.json(), async (req, res) => {
+  try { res.json(await videokit.refresh(repos.repoName(req.body?.repo))); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/videokit/save', express.json({ limit: '5mb' }), async (req, res) => {
+  try { res.json(await videokit.save(repos.repoName(req.body?.repo), req.body?.files, String(req.body?.message || '').slice(0, 200))); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.use('/api', (req, res, next) => (link.isRemote() ? link.passOn(req, res) : next()));
 
@@ -909,6 +919,7 @@ datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
 initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground });
 initShip(config);
+videokit.initVideoKit(config);
 initPi(config);
 initLabels(config);
 brain.onBrainRetried(() => store.events.emit('brain', extraction.extractionStatus()));
