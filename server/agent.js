@@ -356,6 +356,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let raw = ''; // the error as Claude Code worded it
   let code = ''; // its kind, e.g. 'rate_limit'
   let rejected = null; // the last limit Claude Code reported as reached
+  let context = 0; // how many tokens the conversation held at Claude's last step
 
   for await (const msg of query({ prompt: input(), options })) {
     if (msg.session_id && msg.session_id !== sessionId) {
@@ -387,6 +388,9 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       } else if (!msg.parent_tool_use_id) {
         code = '';
       }
+      // What Claude read for this step plus what it wrote: the size of the conversation now.
+      const u = !msg.parent_tool_use_id && msg.message?.usage;
+      if (u) context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           const summary = describeTool(block.name, block.input, cwd);
@@ -417,7 +421,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     }
   }
   const limit = error ? limitOf({ error: raw, code, seen: rejected }) : null;
-  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit };
+  return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit, context };
 }
 
 // ---------- a stand-in for Claude, for trying the app without an account ----------

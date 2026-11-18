@@ -489,6 +489,9 @@ async function runTurn(threadId, prompt) {
       result = await runAgent({ ...base, prompt: recap(threadId, prompt), resume: undefined });
     }
 
+    // How big the conversation is now and when it was last read: Claude keeps what it
+    // has read ready for an hour, per model (stickyTier below).
+    store.updateThread(threadId, { turnEndedAt: Date.now(), ...(result.context ? { contextTokens: result.context } : {}) }, { quiet: true });
     recordArtifacts();
     // What was never shown leaves the artifacts folder for the workbench.
     try { store.tidyArtifacts(threadId); } catch { /* next turn */ }
@@ -746,6 +749,27 @@ export async function backfillSignatures() {
 
 function tierOf(name) { return { name, ...TIERS[name] }; }
 
+// Auto picks a tier per message, but changing the model in the middle of a conversation
+// has a price of its own. Claude keeps what it has read ready for an hour, per model, and
+// reading it from there costs a twentieth (Opus) or a fortieth (Fable) of reading it fresh. A turn on the other model
+// finds nothing ready and reads the whole conversation again, at full price, and writes it
+// down once more. Measured over 13 to 18-11-2026: 18 of 21 such turns did, about an eighth
+// of everything threads used; stepping down from Fable to Opus for an easy message cost
+// more than the easy message saved. The effort can change freely (3 of 36 did).
+// So while a conversation of some size is still ready, Auto does not step down to the
+// cheaper model: it takes the current model's lowest tier instead. Stepping up stays, since
+// that is asked for by what the message needs. His own choice (quick select, "Again,
+// higher") is never touched.
+const READY_MS = 55 * 60_000;
+const WORTH_KEEPING = 30_000; // tokens
+export function stickyTier(pick, thread, now = Date.now()) {
+  const last = thread?.lastTier;
+  if (!TIER_NAMES.includes(pick) || !TIER_NAMES.includes(last) || !thread.sessionId) return pick;
+  if (TIERS[pick].model === TIERS[last].model || TIER_NAMES.indexOf(pick) > TIER_NAMES.indexOf(last)) return pick;
+  if (now - (thread.turnEndedAt || 0) > READY_MS || (thread.contextTokens || 0) < WORTH_KEEPING) return pick;
+  return TIER_NAMES.find((n) => TIERS[n].model === TIERS[last].model);
+}
+
 export async function tierFor(threadId, prompt) {
   const thread = store.getThread(threadId);
   // Chosen for this one message when sending (quick select), then forgotten.
@@ -782,7 +806,10 @@ export async function tierFor(threadId, prompt) {
       answer = String(result.finalText || result.text || '').trim().toLowerCase().replace(/[^a-z]/g, '');
     }
   } catch { /* the default carries the turn */ }
-  return tierOf(TIER_NAMES.includes(answer) ? answer : 'default');
+  const pick = TIER_NAMES.includes(answer) ? answer : 'default';
+  const kept = stickyTier(pick, thread);
+  if (kept !== pick) log(`thread "${thread?.title}": stays on ${TIERS[kept].model} (${Math.round((thread.contextTokens || 0) / 1000)}k tokens still ready); Auto had picked ${pick}`);
+  return tierOf(kept);
 }
 
 // The same message again, one tier higher, pinned on the thread from now on.

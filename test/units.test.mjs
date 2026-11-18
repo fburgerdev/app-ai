@@ -300,3 +300,21 @@ test('a message no turn took up is found, whatever order the two computers\' lin
   // Clocks a few seconds apart do not make an answered message look unanswered.
   assert.deepEqual(leftOver([user(t0 + 3000), claude(t0 + 60_000, 60_000)]), []);
 });
+
+test('Auto does not step down to the cheaper model while a big conversation is still ready', async () => {
+  const { stickyTier } = await import('../server/runner.js');
+  const now = 1_800_000_000_000;
+  const warm = { sessionId: 's', lastTier: 'extra', turnEndedAt: now - 10 * 60_000, contextTokens: 300_000 };
+  // Fable to Opus would read the whole conversation again: Fable's lowest tier instead.
+  assert.equal(stickyTier('cheap', warm, now), 'high');
+  assert.equal(stickyTier('default', warm, now), 'high');
+  // The effort moves freely, and stepping up is what the message asks for.
+  assert.equal(stickyTier('high', warm, now), 'high');
+  assert.equal(stickyTier('extra', { ...warm, lastTier: 'low' }, now), 'extra');
+  assert.equal(stickyTier('cheap', { ...warm, lastTier: 'default' }, now), 'cheap');
+  // Nothing to keep: after an hour, in a short conversation, or in a new one.
+  assert.equal(stickyTier('cheap', { ...warm, turnEndedAt: now - 70 * 60_000 }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { ...warm, contextTokens: 8000 }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { ...warm, sessionId: null }, now), 'cheap');
+  assert.equal(stickyTier('cheap', { lastTier: 'extra', sessionId: 's' }, now), 'cheap', 'a thread from before this was measured');
+});
