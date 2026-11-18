@@ -462,10 +462,14 @@ function fakeGithub(method, url, body) {
 }
 
 // Threads whose branch has commits that are not on GitHub: work that stays on this computer.
-export async function unpushed() {
+// A thread still working, or whose branch is being tested and merged (`busy`), is not
+// counted: the end of its turn pushes the branch by itself, so that work is only here for
+// a moment, not left behind.
+export async function unpushed({ busy = () => false } = {}) {
   const out = [];
   for (const t of store.listThreads()) {
     if (!t.repo || !t.repoBranch || t.archived) continue;
+    if (t.state === 'working' || busy(t.id)) continue;
     const dir = dirOf(t.repo);
     if (!fs.existsSync(path.join(dir, '.git'))) continue;
     const onGithub = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${t.repoBranch}`]).then(() => true, () => false);
