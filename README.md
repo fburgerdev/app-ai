@@ -160,6 +160,17 @@ branch on GitHub, and the note says why. The panel's buttons are still there for
 hand. Claude can rename and create repos when you ask. Detail, and the token for renaming, in
 [docs/repos.md](docs/repos.md).
 
+## Video Kit
+
+Video Kit, the player for your videos' scripts, versions and comments (repo `app-ytvideo-kit`),
+starts with the app on http://localhost:4400 and starts again if it stops; **Video Kit** in the
+top bar opens it. It shows every `ytvideo-*` repo of yours: the app clones the ones not here
+yet, and keeps the copies no thread is working in on main and up to date (every ten minutes,
+and when Video Kit opens a video). What you type there (scripts, comments) is saved through the
+app: committed onto main and pushed, after the thread working in that repo, if any, is done.
+Renders and recordings are not in git; they stay in the copy on this computer. Turned off with
+`"videoKit": { "enabled": false }` in config.json; another port with `"port"`.
+
 ## Sleep time
 
 From 00:00 to 08:00 the app shows a go-to-sleep screen instead of the queue. **Let me in anyway**
