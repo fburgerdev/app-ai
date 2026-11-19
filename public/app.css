@@ -431,6 +431,8 @@ input.thread-title:hover { background: var(--panel); }
 .head-actions { display: flex; gap: 2px; margin-left: auto; }
 
 .scroller { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: auto; }
+/* What runs on below the reply box fades out instead of being cut by its edge. */
+.scroller { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
 .messages {
   max-width: 46rem;
   margin: 0 auto;
@@ -517,6 +519,8 @@ input.thread-title:hover { background: var(--panel); }
 .hint { color: var(--faint); font-size: 12.5px; }
 .foot-space { flex: 1; }
 .btn-spin[hidden] { display: none; }
+.spin-short { display: none; }
+.composer-foot .btn-send { flex: none; max-width: none; }
 .btn-send {
   background: var(--you);
   border-color: var(--you);
@@ -1223,6 +1227,11 @@ a.chip:hover { border-color: var(--muted); }
   .topbar { gap: 6px; padding-left: 10px; padding-right: 10px; }
   .top-btn { height: 40px; padding: 0 10px; }
   .top-btn .top-label { display: none; }
+  /* The amount is what the button says; "today" alone says nothing. */
+  .usage-btn .top-label { display: inline; }
+  .usage-btn .events-when { display: none; }
+  .spin-long { display: none; }
+  .spin-short { display: inline; }
   .top-btn svg { width: 20px; height: 20px; }
   .mood { height: 40px; font-size: 16px; }
   .top-space { display: none; }
@@ -1284,6 +1293,21 @@ a.chip:hover { border-color: var(--muted); }
 .card[data-swipe=decline] { box-shadow: inset -4px 0 0 var(--bad); }
 @keyframes fade { from { opacity: 0; } }
 
+/* The thread's own column can be narrow on a wide screen: the side panel is open. Then
+   the header stacks as on the phone and the reply buttons wrap instead of being cut. */
+.stage { container: stage / inline-size; }
+@container stage (max-width: 640px) {
+  .thread-head { padding-left: 18px; padding-right: 18px; gap: 2px 10px; }
+  .thread-title { flex-basis: 100%; }
+  .thread-path { order: 2; }
+  .status { order: 3; }
+  .head-actions { order: 4; margin-left: -8px; flex: 1 1 100%; flex-wrap: wrap; }
+  .messages, .composer { padding-left: 18px; padding-right: 18px; }
+  .composer-foot { flex-wrap: wrap; row-gap: 6px; }
+  .spin-long { display: none; }
+  .spin-short { display: inline; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
@@ -1324,6 +1348,9 @@ a.chip:hover { border-color: var(--muted); }
   animation: sleep-in 0.6s ease;
 }
 .sleep[hidden] { display: none; }
+/* The night screen is dark in the light look too, so it carries its own colours. */
+.sleep { --text: #dfe1ee; --muted: #a9adc4; --faint: #7d819b; color: #dfe1ee; }
+.sleep .link { color: #a9adc4; }
 @keyframes sleep-in { from { opacity: 0; } }
 .sleep-inner { max-width: 380px; padding: 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .sleep-moon {
