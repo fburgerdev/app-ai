@@ -88,6 +88,41 @@ test('a script edit from Video Kit lands on main on GitHub, and nothing outside 
   assert.equal(notVideo.status, 400);
 });
 
+test('a save typed against an older script is not written over what a thread merged meanwhile', async () => {
+  await until(async () => { try { return (await fetch(`${base}/api/videokit`)).ok; } catch { return false; } }, 'server up');
+  const file = 'writing/script/1 Start.md';
+  const ok = await post('/api/videokit/save', { repo: 'ytvideo-demo', message: 'script', files: [{ path: file, content: '# Start\n\nTyped in Video Kit.\n' }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  const read = execFileSync('git', ['--git-dir', video, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();   // what Video Kit had open
+
+  // 19-11-2026: a thread's work on the script reaches main while Video Kit's save is on its way
+  const thread = path.join(dir, 'thread');
+  git(dir, 'clone', video, thread);
+  fs.writeFileSync(path.join(thread, file), '# Start\n\n> Outcome: the thread wrote this.\n\nTyped in Video Kit.\n');
+  git(thread, 'commit', '-qam', 'thread: goals'); git(thread, 'push', '-q', 'origin', 'main');
+
+  const stale = await post('/api/videokit/save', { repo: 'ytvideo-demo', from: read, files: [{ path: file, content: '# Start\n\nTyped in Video Kit, again.\n' }] });
+  assert.equal(stale.status, 409, JSON.stringify(stale.data));
+  assert.equal(stale.data.stale, true);
+  assert.deepEqual(stale.data.paths, [file]);
+  assert.match(onMain(file), /the thread wrote this/);              // nothing was taken out
+
+  // a file the thread did not touch still goes through from the same point
+  const other = await post('/api/videokit/save', { repo: 'ytvideo-demo', from: read, files: [{ path: 'writing/notes.md', content: 'notes\n' }] });
+  assert.equal(other.status, 200, JSON.stringify(other.data));
+  assert.equal(onMain('writing/notes.md'), 'notes\n');
+  assert.match(onMain(file), /the thread wrote this/);
+
+  // once Video Kit has put the two together against the new main, it is saved
+  const now = execFileSync('git', ['--git-dir', video, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+  const merged = await post('/api/videokit/save', { repo: 'ytvideo-demo', from: now, files: [{ path: file, content: '# Start\n\n> Outcome: the thread wrote this.\n\nTyped in Video Kit, again.\n' }] });
+  assert.equal(merged.status, 200, JSON.stringify(merged.data));
+  assert.match(onMain(file), /the thread wrote this\.\n\nTyped in Video Kit, again/);
+
+  const bad = await post('/api/videokit/save', { repo: 'ytvideo-demo', from: 'not a commit', files: [{ path: file, content: 'x' }] });
+  assert.equal(bad.status, 400);
+});
+
 test('Video Kit runs from its own copy of main, which follows GitHub', async () => {
   const remote = bare('app-ytvideo-kit', { 'server.mjs': '// v1\n' });
   const seed = path.join(dir, 'seed-app-ytvideo-kit');
