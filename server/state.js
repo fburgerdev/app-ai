@@ -31,7 +31,9 @@ const DEFAULTS = {
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
   focus: { on: false, until: 0 }, // only his own threads in the queue, until his sleep time
+  hidden: [], // parts of the page he switched off in Settings → Layout (keys the page defines)
 };
+const PART = /^[a-z][a-z0-9-]{0,39}$/;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 let state = null;
@@ -51,6 +53,7 @@ function load() {
   if (state.tier !== 'ask') state.tier = 'auto';
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   state.focus = { ...DEFAULTS.focus, ...(state.focus || {}) };
+  state.hidden = Array.isArray(state.hidden) ? state.hidden.filter((k) => PART.test(k)) : [];
   return state;
 }
 
@@ -89,6 +92,7 @@ export function setState(patch) {
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   // A brain update held by the usage limit: { until, type, only } (extract.js), or null.
   if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '' } : null;
+  if (Array.isArray(patch.hidden)) next.hidden = [...new Set(patch.hidden.filter((k) => typeof k === 'string' && PART.test(k)))].slice(0, 100);
   if (typeof patch.focus === 'boolean') next.focus = patch.focus ? { on: true, until: focusEnd(Date.now(), next.sleep) } : { on: false, until: 0 };
   if (patch.sleep && typeof patch.sleep === 'object') {
     const sl = { ...DEFAULTS.sleep, ...next.sleep };

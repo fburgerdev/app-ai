@@ -29,7 +29,8 @@ To look at the app without your account or your brain: `npm run demo`. It uses a
 - **The top bar** is always there: the inbox button with the number waiting, this computer's status, the cost of today, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **Projects and areas** on the right, most recently dealt with first (see below).
-- **Settings** opens as a window: Connections, Queue (what the queue has learned), Keys.
+- **Settings** opens as a window: Connections, General (look, sleep time, what the queue has learned), Layout, Keys, Stats.
+- **Layout** (in Settings) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
 
 ## The queue
 
@@ -146,8 +147,8 @@ The outline on the right is an overview of projects and areas, read from the vau
 - **Areas** the same way; an area with no project right now is grey.
 - A dot after a name means it has open threads. The project of the open thread is highlighted. A long name runs onto a second line; the full name is in the tooltip.
 - Hover a row for **+**: a new thread on that project or area, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
-- Next to the headings: **+ active** and **+ paused** start one thread on every active or paused project. **+ project ideas** starts one per area about which project to start there. Each asks once more, and skips what already has an open thread.
-- When the window is too narrow for the outline (and on the phone), it is the **Folders** tab in the inbox.
+- At the foot: **Start a thread on every** active or paused project, or area (about which project to start there). Each asks once more, and skips what already has an open thread.
+- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Folders** tab in the inbox.
 
 ## Repos
 
@@ -239,14 +240,16 @@ Events only come while the calendar is connected (Settings → Connections → G
 
 ## The outline's slides
 
-The outline on the right has two slides; scroll sideways (it snaps) or click the words on top.
+The outline on the right has three slides; scroll sideways (it snaps) or click the switch on
+top. People and Someday can be switched off in Settings → Layout.
 
-- **Projects**: the active projects, the paused ones folded away (they unfold on hover: paused
-  means you are waiting on something), then the **areas** in the order of
-  `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`;
-  areas not in it follow by recency, and the line above them opens that file), then **Someday**
-  (each item newest first, the parked old actions grey; **+** starts a thread on the item: do
-  it now, keep it, or fold it).
+- **Projects**: the **areas** in the order of `Core/Horizons/30,000 ft Goals.md` (a numbered
+  list, `1. [[Area]] — where it should stand`; areas not in it follow alphabetically, and the
+  line at the foot opens that file), each with its active projects below it, most recently
+  dealt with first; then the paused ones folded away (they unfold on hover: paused means you
+  are waiting on something).
+- **Someday**: each item newest first, the parked old actions under their own heading; **+**
+  starts a thread on the item: do it now, keep it, or fold it.
 - **People**: everyone in `Core/People/`, in four groups from the `Status:` line in each
   person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**.
   Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
