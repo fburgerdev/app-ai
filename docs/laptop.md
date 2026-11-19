@@ -61,7 +61,7 @@ the moment it has saved. A handover does the same at once, in both directions. S
   minutes, and the other way round.
 - Threads are separate folders, so work on different threads never collides. If the same
   thread got messages on both sides, the conversation keeps both. For any other file changed
-  on both sides (a thread's status, the mood line), the version saved to GitHub first wins.
+  on both sides (a thread's status, a setting), the version saved to GitHub first wins.
 - With the Pi off, the laptop just works; nothing can sync to the Pi until it is back, and
   when it is, it catches up by itself.
 - If the Pi goes off without warning while it has everything, the laptop stays handed over
