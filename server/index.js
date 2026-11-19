@@ -225,7 +225,7 @@ vendor('/vendor/fonts/literata', '@fontsource-variable/literata');
 vendor('/vendor/fonts/instrument-sans', '@fontsource-variable/instrument-sans');
 vendor('/vendor/fonts/jetbrains-mono', '@fontsource-variable/jetbrains-mono');
 // The mail file format is the same code on both sides.
-app.get('/mail.js', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.type('text/javascript').sendFile(path.join(ROOT, 'server', 'mail.js')); });
+app.get('/mail.js', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.type('text/javascript').sendFile(path.join(ROOT, 'server', 'mail.js'), { dotfiles: 'allow' }); // the app may live under a folder like ~/.local });
 // The page and its modules are always checked against the server (a 304 when unchanged),
 // never taken from the browser's cache on trust: after the app updates itself, a cached
 // old module next to a new one stops the whole page (17-11-2026).
