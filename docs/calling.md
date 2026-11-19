@@ -2,14 +2,14 @@
 
 You call a phone number; the app reads you the thread that has waited longest; you answer out loud; it moves to the next one. Claude starts working on your answer while the call goes on.
 
-**There is a free alternative: the Talk page.** It is the same conversation from your phone's browser, with the phone's own speech recognition and voice (see the README). What follows is for a real phone number, which costs about $0.08 a minute at Twilio.
+**There is a free alternative: the Talk page.** It is the same conversation from your phone's browser, with the phone's own speech recognition and voice (see "Talk" in the [manual](manual.md#talk-the-host)). What follows is for a real phone number, which costs about $0.08 a minute at Twilio.
 
 This part is built and tested against a simulated call, but it has never taken a real one: a Twilio account is needed for that, and only you can open one. Expect to adjust a detail or two on the first try.
 
 ## What a call is like
 
 - The app says how many threads are waiting, then the first one's name and a spoken summary of Claude's reply (prepared when the thread became ready, so there is no waiting).
-- Speak your reply. The host (see "Talk" in the README) decides where it goes: to the thread you just heard, to a new thread, or it answers you itself. Twilio hands over what you said after a pause of 2.5 seconds (`speechTimeoutMs`).
+- Speak your reply. The host (see "Talk" in the manual) decides where it goes: to the thread you just heard, to a new thread, or it answers you itself. Twilio hands over what you said after a pause of 2.5 seconds (`speechTimeoutMs`).
 - When nothing is waiting, the app stays on the line and tells you when Claude finishes a thread.
 
 | Say | or press | |

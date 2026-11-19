@@ -27,8 +27,8 @@ about how it behaves, and about the one extra for renaming and creating repos.
   commands.
 - Shell commands on code (tests, builds, git commits) are allowed only while a thread holds a
   repo, and file writes only inside it. The app's clone of the vault stays read-only. (A thread
-  without a repo can run scripts in its own artifacts folder, for PDF forms and Word files; see
-  the README.)
+  without a repo can run scripts on its own workbench, for PDF forms and Word files; see
+  "Scripts on files" in the [manual](manual.md#scripts-on-files).)
 - **The vault is a repo too.** A thread that changes the vault's structure or rules opens
   `brain` and works there like anywhere else. Facts stay with the brain update. The two take
   turns: the brain update holds the vault's repo while it runs, so a thread opening it waits

@@ -2,9 +2,7 @@
 
 On the laptop, threads only make progress while the laptop is awake. On a Pi the app is always on: threads keep working with the laptop closed, and you reach the inbox from the laptop and the phone.
 
-Nothing changes until you do this. The app on the laptop keeps working as it is.
-
-These steps were written without a Pi to test on. The app's side (reaching it under another address, signing in without a screen, files that download instead of opening) is tested; the commands for the Pi itself are standard but unverified here.
+Nothing changes until you do this. The app on the laptop keeps working as it is. Once the Pi runs, the laptop still does the work while it is awake and hands over to the Pi when it sleeps: [laptop.md](laptop.md).
 
 ## What you need
 
@@ -106,8 +104,8 @@ The Talk page needs the app reachable from your phone over https. The Tailscale 
 
 - **Files open by download.** "Open in app" would start a program on the Pi, so it is not offered; use Download.
 - **Gmail and Calendar** need the Pi's address as a second redirect URI and one more "Connect Google", done from the Pi's address (docs/google.md, step 5).
-- **Your threads so far stay on the laptop.** To take them along, copy the `threads` and `extractions` folders from the laptop's data folder (`%LOCALAPPDATA%\app-ai`) to `~/.local/share/app-ai/` before the first start. Claude's own session files do not move with them; each thread then carries on from the app's transcript the first time you reply.
-- **Run it in one place.** Stop using the laptop's copy once the Pi runs, or the two will hold different threads. The brain itself is safe either way, since both only push through GitHub.
+- **Your threads come along by themselves.** With the same `dataRepo` on both, the Pi takes over the saved state on its first start. Claude's own session files do not move; a thread continued on the other side carries on from the app's transcript.
+- **Laptop and Pi together** work through the handover in [laptop.md](laptop.md): set `remote` on the laptop. Without it, run the app in one place at a time, or the two will hold different threads. The brain itself is safe either way, since both only push through GitHub.
 - **Updating the app:** by itself, once step 6 is done. By hand: `cd ~/app-ai && git pull && npm install && systemctl --user restart app-ai`.
 
 ## Claude runs the Pi
