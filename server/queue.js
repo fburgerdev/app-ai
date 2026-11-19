@@ -56,8 +56,9 @@ export function reloadQueue() {
 }
 
 // Pinned threads (events, and what he pinned himself) are not part of the queue.
-// In focus, what the app started waits outside the queue (store.isAppThread).
-const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t) && !(inFocus() && store.isAppThread(t))).sort((a, b) => a.queuedAt - b.queuedAt);
+// In focus, what the app started, or what he marked "Later", waits outside the queue
+// (store.isLater).
+const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t) && !(inFocus() && store.isLater(t))).sort((a, b) => a.queuedAt - b.queuedAt);
 
 const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
 

@@ -75,6 +75,8 @@ The top of the inbox is **Pinned**. Events from the calendar are there from the 
 
 The switch in the top bar ("Everything" / "Focus") is for working through your own threads only. In Focus, what the app started by itself and you have not answered yet waits under one folded line in the inbox ("3 waiting for later"): opportunity and chase cards, proposals, the brain update's questions, mail to answer, check-ins, repairs. The card run makes no new cards; "Look for opportunities" still works when you click it. Events stay pinned, and your own threads, next actions you woke and spin-offs stay in the queue. Focus ends by itself at your sleep time (midnight if the sleep screen is off), so a day never starts in it by accident.
 
+When the app sorts a thread wrongly, correct it with **Later** in the thread's header: in Focus the thread then waits under "waiting for later", even if it is your own and you keep writing in it. On a thread that waits there, the same button says **Back to focus** and keeps it in your queue, even a card. Dragging a thread onto the "waiting for later" line marks it Later, and dragging one out of it into the queue brings it back to focus. Your mark stays until you flip it. In "Everything" it changes nothing; threads you marked Later are only shown dimmed.
+
 ## Next actions, Done and Defer
 
 A line in `Core/Next Actions.md` and a thread in the inbox are two states of the same to-do.

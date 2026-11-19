@@ -73,6 +73,7 @@ const PARTS = [
   { group: 'Thread header', key: 'tier-again', label: 'Tier of the last turn, and one up', sel: '.btn-tier' },
   { group: 'Thread header', key: 'requeue', label: 'Requeue (Alt S still works)', sel: '.btn-requeue' },
   { group: 'Thread header', key: 'pin', label: 'Pin', sel: '.pin-btn' },
+  { group: 'Thread header', key: 'later', label: 'Later / Back to focus (dragging onto "waiting for later" still works)', sel: '.later-btn' },
   { group: 'Reply box', key: 'attach', label: 'Attach files (dropping and pasting still work)', sel: '#attach' },
   { group: 'Reply box', key: 'effort', label: 'Effort', sel: '#tier' },
   { group: 'Reply box', key: 'spin', label: 'Send into spin-off (Alt Enter still works)', sel: '#spin' },
@@ -241,13 +242,24 @@ const pinnedThreads = () => all().filter((t) => isPinned(t) && !t.event && t.sta
 const pinned = () => [...pinnedEvents(), ...pinnedThreads()];
 // Focus: only his own threads in the queue. What the app started and he has not
 // answered (cards, proposals, the brain update's questions, mail to answer, check-ins,
-// repairs) waits under "waiting for later". The same rule as the server's.
+// repairs) waits under "waiting for later". His "Later" mark corrects that both ways:
+// `later` true sends any thread there, false keeps any in the queue. The same rule as
+// the server's (store.isLater).
 const APP_KINDS = new Set(['card', 'brain-update', 'mail-reply', 'checkin-active', 'checkin-paused', 'checkin-areas', 'repair', 'prep']);
 const isAppThread = (t) => APP_KINDS.has(t.kind) && !(t.lastUserAt > 0);
+const isLater = (t) => (typeof t.later === 'boolean' ? t.later : isAppThread(t));
 const focusOn = () => Boolean(S.settings.focus?.on) && (!S.settings.focus.until || Date.now() < S.settings.focus.until);
-const later = () => (focusOn() ? all().filter((t) => t.state === 'ready' && !isPinned(t) && isAppThread(t)).sort((a, b) => a.queuedAt - b.queuedAt) : []);
+const later = () => (focusOn() ? all().filter((t) => t.state === 'ready' && !isPinned(t) && isLater(t)).sort((a, b) => a.queuedAt - b.queuedAt) : []);
+// Mark a thread "Later" (true) or "keep in focus" (false). The mark stays, also once he
+// writes in the thread, until he flips it.
+async function setLater(t, value) {
+  try {
+    S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/later`, { later: Boolean(value) })).thread);
+    renderRail(); renderHead();
+  } catch (err) { toast(err.message); }
+}
 function inbox() {
-  const ready = all().filter((t) => t.state === 'ready' && !isPinned(t) && !(focusOn() && isAppThread(t))).sort((a, b) => a.queuedAt - b.queuedAt);
+  const ready = all().filter((t) => t.state === 'ready' && !isPinned(t) && !(focusOn() && isLater(t))).sort((a, b) => a.queuedAt - b.queuedAt);
   const pos = new Map(S.queue.order.map((id, i) => [id, i]));
   return ready.sort((a, b) => (pos.get(a.id) ?? 1e6) - (pos.get(b.id) ?? 1e6));
 }
@@ -281,7 +293,7 @@ function railItem(t) {
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
   return h('button', {
-    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}`,
+    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}${t.later === true ? ' is-later' : ''}`,
     type: 'button',
     title: t.title,
     dataset: { id: t.id },
@@ -324,8 +336,10 @@ function queueLists() {
   const note = S.queue.ranking ? 'ordering…' : S.queue.why && ready.length > 1 ? `first because: ${S.queue.why}` : '';
   // In focus: what the app made waits here, folded, until focus ends or he opens it.
   const waits = later();
-  const laterLine = waits.length ? h('div', { class: `coming later${laterOpen ? ' is-open' : ''}` },
-    h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Started by the app: cards, proposals, questions, mail to answer, check-ins. They come back into the queue when focus ends.', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
+  // Dropping a thread on this line marks it "Later"; dragging one out into the queue
+  // keeps it in focus.
+  const laterLine = waits.length ? h('div', { class: `coming later${laterOpen ? ' is-open' : ''}`, dataset: { drop: 'later' } },
+    h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Started by the app (cards, proposals, questions, mail to answer, check-ins) or marked "Later" by you. They come back into the queue when focus ends. Drop a thread here to mark it "Later".', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
       `${waits.length} waiting for later`, h('span', { class: 'coming-next' }, ' · focus')),
     h('div', { class: 'coming-list' }, ...waits.map(railItem))) : null;
   parts.push(section('Next up', ready.length, [
@@ -823,11 +837,12 @@ function dropAt(x, y) {
   if (kind === 'queue') {
     // A pinned thread dropped on the queue is unpinned; only a waiting one has a place there.
     if (t.state === 'working' && !isPinned(t)) return null;
-    const others = [...zone.querySelectorAll('.item[data-id]')].filter((el) => el.dataset.id !== drag.id);
+    const others = [...zone.querySelectorAll('.item[data-id]')].filter((el) => el.dataset.id !== drag.id && !el.closest('.later'));
     let index = others.findIndex((el) => { const r = el.getBoundingClientRect(); return y < r.top + r.height / 2; });
     if (index < 0) index = others.length;
     return { kind, zone, index, others };
   }
+  if (kind === 'later') return t.state !== 'done' && !isLater(t) ? { kind, zone } : null;
   if (kind === 'done') return t.state === 'ready' && t.kind !== 'card' ? { kind, zone } : null;
   if (kind === 'folder') return t.kind !== 'card' && (t.project || '') !== zone.dataset.project ? { kind, zone, project: zone.dataset.project } : null;
   return null;
@@ -890,6 +905,8 @@ async function endDrag(drop) {
         }
       } else if (target.kind === 'queue') {
         if (isPinned(t)) S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/pin`, { pinned: false })).thread);
+        // Out of "waiting for later" into the queue: keep it in focus from now on.
+        if (focusOn() && isLater(t)) S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/later`, { later: false })).thread);
         if (t.state === 'done') S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/state`, { state: 'ready' })).thread);
         if (S.threads.get(t.id)?.state === 'ready') {
           // Shown at once; the server's order follows a moment later.
@@ -898,6 +915,10 @@ async function endDrag(drop) {
           S.queue = { ...S.queue, order: ids };
           S.queue = await api('POST', '/api/queue/move', { id: d.id, index: target.index });
         }
+      } else if (target.kind === 'later') {
+        // A pinned thread dropped here leaves the top too, or the mark would show nothing.
+        if (isPinned(t)) S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/pin`, { pinned: false })).thread);
+        S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/later`, { later: true })).thread);
       } else if (target.kind === 'done') {
         S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/state`, { state: 'done' })).thread);
       } else if (target.kind === 'folder') {
@@ -1415,6 +1436,19 @@ function renderHead() {
         } catch (err) { toast(err.message); }
       },
     }, on ? 'Unpin' : 'Pin'));
+  }
+  // His correction of the app's sorting for Focus: "Later" sends a thread under "waiting
+  // for later", "Back to focus" keeps one in the queue. It only changes things in Focus.
+  if (t.state !== 'done') {
+    const on = isLater(t);
+    const mine = typeof t.later === 'boolean';
+    actions.push(h('button', {
+      class: `btn btn-quiet later-btn${on ? ' is-on' : ''}`, type: 'button', 'aria-pressed': String(on),
+      title: on
+        ? `${mine ? 'You marked this "Later"' : 'Started by the app'}: in Focus it waits under "waiting for later". Click to keep it in your Focus queue.`
+        : `In your Focus queue${mine ? ', as you marked it' : ''}. Click to mark it "Later": in Focus it waits under "waiting for later". In Everything nothing changes.`,
+      onclick: () => setLater(t, !on),
+    }, on ? 'Back to focus' : 'Later'));
   }
   if (t.state !== 'working') actions.push(deleteButton(t));
   els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, actions), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
