@@ -274,10 +274,11 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-// The mood line, the model, the effort and the sleep time. Saved as you change them; nothing is sent.
+// The mood line, the model, the effort, the sleep time and the parts of the page switched
+// off. Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, tier, sleep, focus } = req.body || {};
-  res.json(setState({ mood, model, effort, tier, sleep, focus }));
+  const { mood, model, effort, tier, sleep, focus, hidden } = req.body || {};
+  res.json(setState({ mood, model, effort, tier, sleep, focus, hidden }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.

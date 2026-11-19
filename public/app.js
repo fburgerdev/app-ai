@@ -45,6 +45,72 @@ let tierAsk = null; // the quick-select row over the reply box, while it asks
 let armedDefer = ''; // the thread whose Defer button was clicked once
 let armedDeferTimer = 0;
 
+// ---------- parts of the page he can switch off ----------
+//
+// Settings → Layout lists them; "Pick on the page" lets him click them away instead.
+// Hidden parts are hidden by CSS, so anything drawn later is hidden too; their keys
+// still work. Saved with the app's state, so laptop, Pi and phone look the same; a copy
+// in this browser hides them before the page has loaded.
+const PARTS = [
+  { group: 'Top bar', key: 'focus', label: 'Focus switch (Everything / Focus)', sel: '#focus-toggle' },
+  { group: 'Top bar', key: 'computer', label: 'Which computer works (Laptop / Pi)', sel: '.laptop-wrap' },
+  { group: 'Top bar', key: 'usage', label: 'What Claude used today', sel: '#usage' },
+  { group: 'Top bar', key: 'videokit', label: 'Video Kit', sel: '#videokit-link' },
+  { group: 'Top bar', key: 'talk', label: 'Talk', sel: '#talk-link' },
+  { group: 'Inbox drawer', key: 'new-thread', label: 'New thread button (Alt N still works)', sel: '#new-thread' },
+  { group: 'Inbox drawer', key: 'coming', label: 'Events coming later', sel: '[data-part="coming"]' },
+  { group: 'Inbox drawer', key: 'opportunities', label: 'Look for opportunities', sel: '.group-foot' },
+  { group: 'Inbox drawer', key: 'done-list', label: 'Done', sel: '.group[data-drop="done"]' },
+  { group: 'Inbox drawer', key: 'next-actions', label: 'Next actions, asleep', sel: '[data-part="next-actions"]' },
+  { group: 'Inbox drawer', key: 'gmail', label: 'Update Gmail', sel: '.brain-gmail, .brain-sub.is-mail' },
+  { group: 'Right bar', key: 'tree', label: 'The right bar (Folders moves into the inbox drawer)', sel: '' },
+  { group: 'Right bar', key: 'tree-people', label: 'People', sel: '.slide-tab[data-part="tree-people"]', redraw: true },
+  { group: 'Right bar', key: 'tree-someday', label: 'Someday', sel: '.slide-tab[data-part="tree-someday"]', redraw: true },
+  { group: 'Right bar', key: 'tree-paused', label: 'Paused projects', sel: '[data-part="tree-paused"]' },
+  { group: 'Right bar', key: 'tree-bulk', label: 'A thread on every active / paused / area', sel: '[data-part="tree-bulk"]' },
+  { group: 'Right bar', key: 'tree-times', label: 'How long ago, beside each row', sel: '.tree .out-when' },
+  { group: 'Right bar', key: 'tree-ranks', label: 'Rank numbers of the areas', sel: '.tree .out-rank' },
+  { group: 'Thread header', key: 'tier-again', label: 'Tier of the last turn, and one up', sel: '.btn-tier' },
+  { group: 'Thread header', key: 'requeue', label: 'Requeue (Alt S still works)', sel: '.btn-requeue' },
+  { group: 'Thread header', key: 'pin', label: 'Pin', sel: '.pin-btn' },
+  { group: 'Reply box', key: 'attach', label: 'Attach files (dropping and pasting still work)', sel: '#attach' },
+  { group: 'Reply box', key: 'effort', label: 'Effort', sel: '#tier' },
+  { group: 'Reply box', key: 'spin', label: 'Send into spin-off (Alt Enter still works)', sel: '#spin' },
+  { group: 'Reply box', key: 'defer', label: 'Defer', sel: '#defer' },
+  { group: 'Reply box', key: 'done-btn', label: 'Done (Ctrl Enter and Alt X still work)', sel: '#send-done' },
+  { group: 'Everywhere', key: 'kbd', label: 'Key hints on buttons (Alt S, Alt N …)', sel: '.btn kbd, .btn-new kbd, .tier-ask-btn kbd' },
+];
+const HIDDEN_SAVED = 'app-ai-hidden';
+let arranging = false; // "Pick on the page": click a part to hide or show it
+const hiddenParts = () => new Set(S.settings?.hidden || []);
+const partHidden = (key) => hiddenParts().has(key);
+const partStyle = document.createElement('style');
+partStyle.id = 'parts';
+document.head.append(partStyle);
+
+// The CSS for what is hidden. While picking, hidden parts show faded instead.
+function partCss(hidden) {
+  const list = PARTS.filter((p) => p.sel && hidden.has(p.key)).map((p) => p.sel).join(', ');
+  return list ? `html:not(.is-arranging) :is(${list}) { display: none !important; }\nhtml.is-arranging :is(${list}) { opacity: 0.38; }` : '';
+}
+function applyParts() {
+  const hidden = hiddenParts();
+  partStyle.textContent = partCss(hidden);
+  try { localStorage.setItem(HIDDEN_SAVED, JSON.stringify([...hidden])); } catch { /* private mode */ }
+  els.app.classList.toggle('no-tree', hidden.has('tree'));
+}
+async function setPart(key, show) {
+  const hidden = hiddenParts();
+  if (show) hidden.delete(key); else hidden.add(key);
+  S.settings = { ...S.settings, hidden: [...hidden] };
+  applyParts();
+  renderRail(); renderTree();
+  try { await api('PUT', '/api/settings', { hidden: [...hidden] }); } catch (err) { toast(err.message); }
+}
+// Before the app's state has come: what this browser saw last time.
+try { S.settings.hidden = JSON.parse(localStorage.getItem(HIDDEN_SAVED) || '[]'); } catch { S.settings.hidden = []; }
+applyParts();
+
 // ---------- small helpers ----------
 
 function h(tag, attrs = {}, ...children) {
@@ -110,6 +176,8 @@ function stamp(ts) {
 }
 
 const kbd = (text) => h('kbd', {}, text);
+// "9h", "3d": for the right bar, where every row carries one.
+const agoShort = (ts) => ago(ts).replace('just now', 'now').replace(/ (min|h|d)$/, (m, u) => (u === 'min' ? 'm' : u));
 const clip = (s, n = 34) => (s.length > n ? `${s.slice(0, n - 1).trim()}…` : s);
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const debounce = (fn, ms) => { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; };
@@ -226,7 +294,7 @@ function withDeepLabels(ready) {
 }
 
 // `drop` names what dropping a thread on the section does: "queue" or "done".
-const section = (label, count, items, extra, drop) => h('section', { class: 'group', dataset: drop ? { drop } : {} },
+const section = (label, count, items, extra, drop, part) => h('section', { class: 'group', dataset: { ...(drop ? { drop } : {}), ...(part ? { part } : {}) } },
   h('h2', { class: 'group-head' }, label, count ? h('span', { class: 'count' }, String(count)) : null, extra),
   ...items,
 );
@@ -321,7 +389,7 @@ function sleepingSection() {
       ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: { id: d.id }, title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
         h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
-    ])];
+    ], null, null, 'next-actions')];
   }
   return [];
 }
@@ -375,7 +443,7 @@ function pinnedSection() {
   soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event))));
   return [section('Pinned', events.length + mine.length, [
     ...events.map((t) => item(t, false)),
-    coming.length ? h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}` },
+    coming.length ? h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}`, dataset: { part: 'coming' } },
       h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(comingOpen), title: 'Events from your calendar that open by themselves later. Hover or click to see them.', onclick: () => { comingOpen = !comingOpen; renderRail(); } },
         `${coming.length} coming`, h('span', { class: 'coming-next' }, ` · next ${eventWhen(coming[0].event).toLowerCase()}`)),
       h('div', { class: 'coming-list' }, ...coming.map((t) => item(t, true)))) : null,
@@ -424,7 +492,7 @@ function outlineRow({ name, sub, project, about, touched, open, grey, isArea, he
     // alone on a line of its own.
     h('span', { class: 'out-name' }, ...(open ? [String(name).replace(/\S+$/, ''), h('span', { class: 'out-last' }, /\S+$/.exec(String(name))?.[0] || '', h('span', { class: 'out-mark', 'aria-label': 'has open threads' }))] : [name]),
       sub ? h('span', { class: 'out-sub' }, sub) : null),
-    touched ? h('span', { class: 'out-when' }, ago(touched).replace(' ago', '')) : null),
+    touched ? h('span', { class: 'out-when' }, agoShort(touched)) : null),
     h('button', { class: 'out-plus', type: 'button', title: `New thread ${isArea ? 'in' : 'on'} ${name}`, 'aria-label': `New thread on ${name}`, onclick: () => openNew(project) }, '+'));
 }
 
@@ -474,9 +542,10 @@ function treeNodes() {
   // number; then a quiet divider; then the ones left out of the ranking, alphabetically
   // and looking the same, since they are outside the ranking, not below it.
   const rankOf = new Map(t.groups.filter((g) => g.isArea && g.rank).map((g) => [g.name, g]));
-  const areaRow = (a) => {
+  // An area with no active project under it is grey: a caption with nothing below.
+  const areaRow = (a, bare) => {
     const r = rankOf.get(a.name);
-    return row({ ...a, rank: r?.rank || 0, about: `${r ? `${r.rank}. ${r.goal || 'no goal line yet'}\n` : 'Not in the ranking of 30,000 ft Goals.\n'}${a.about}` }, false);
+    return row({ ...a, rank: r?.rank || 0, about: `${r ? `${r.rank}. ${r.goal || 'no goal line yet'}\n` : 'Not in the ranking of 30,000 ft Goals.\n'}${a.about}` }, bare);
   };
   const rankedAreas = areas.filter((a) => rankOf.has(a.name)).sort((a, b) => rankOf.get(a.name).rank - rankOf.get(b.name).rank);
   const unrankedAreas = areas.filter((a) => !rankOf.has(a.name)).sort((a, b) => a.name.localeCompare(b.name));
@@ -487,18 +556,12 @@ function treeNodes() {
   const areaOf = new Map(t.groups.flatMap((g) => g.projects.map((p) => [p.name, g.isArea ? g.name : ''])));
   const group = (a) => {
     const mine = active.filter((p) => areaOf.get(p.name) === a.name);
-    return h('div', { class: 'area-group' },
-      h('div', { class: 'out-list is-flat is-area' }, areaRow(a)),
+    return h('div', { class: `area-group${mine.length ? '' : ' is-bare'}` },
+      h('div', { class: 'out-list is-flat is-area' }, areaRow(a, !mine.length)),
       mine.length ? h('div', { class: 'out-list' }, ...mine.map((p) => row(p, false))) : null);
   };
   const loose = active.filter((p) => !areaOf.get(p.name));
   const first = [
-    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Projects'),
-      bulkButton('active', '+ active', active.length, `Start a check-in thread on every active project. ${each}.`),
-      bulkButton('paused', '+ paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`),
-      bulkButton('areas', '+ ideas', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
-    h('button', { class: 'tree-sub', type: 'button', title: 'The order of the areas and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
-      rankedAreas.length ? `By area, in the order of 30,000 ft` : 'By area · no order in 30,000 ft yet'),
     ...rankedAreas.map(group),
     rankedAreas.length && unrankedAreas.length ? h('div', { class: 'out-divide', role: 'separator', 'aria-label': 'Not ranked' }) : null,
     ...unrankedAreas.map(group),
@@ -507,13 +570,23 @@ function treeNodes() {
       h('div', { class: 'out-list' }, ...loose.map((p) => row(p, false)))) : null,
     !projects.length && !areas.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
     // Paused means he is waiting on something, so they are folded away and unfold on hover.
-    paused.length ? h('div', { class: 'out-folded' },
+    paused.length ? h('div', { class: 'out-folded', dataset: { part: 'tree-paused' } },
       h('div', { class: 'out-folded-head' }, `${paused.length} paused`),
       h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row({ ...p, sub: areaOf.get(p.name) || '' }, true)))) : null,
-    ...somedayNodes(t.someday || []),
+    // Starting many threads at once, and where the order of the areas comes from: at the
+    // foot, out of the way of the list itself.
+    h('div', { class: 'tree-foot' },
+      h('div', { class: 'tree-bulk', dataset: { part: 'tree-bulk' } },
+        h('span', { class: 'tree-foot-label', title: each }, 'Start a thread on every'),
+        bulkButton('active', 'active', active.length, `Start a check-in thread on every active project. ${each}.`),
+        bulkButton('paused', 'paused', paused.length, `Start a thread on every paused project: has what it waits for happened? ${each}.`),
+        bulkButton('areas', 'area', areas.length, `Start a thread per area about which new project to start there. ${each}.`)),
+      h('button', { class: 'tree-sub', type: 'button', title: 'The order of the areas and each area\'s one- to two-year line come from this file. Click to read it.', onclick: () => openPanel({ kind: 'note', link: '30,000 ft Goals' }) },
+        rankedAreas.length ? 'Areas in the order of 30,000 ft Goals' : 'No order in 30,000 ft Goals yet')),
   ].filter(Boolean);
   const second = peopleNodes(t.people || [], row, dealt);
-  return { first, second };
+  const third = somedayNodes(t.someday || []);
+  return { first, second, third };
 }
 
 // People, on a slide of their own, in four groups. The group comes from the `Status:`
@@ -541,12 +614,12 @@ function peopleNodes(people, row, dealt) {
 
 // Someday, item by item, newest first; the parked old actions grey at the bottom. + starts
 // a thread on the item: do it now, keep it, or fold it.
-function somedayNodes(items) {
-  if (!items.length) return [];
+function somedayNodes(items, withHead = false) {
+  if (!items.length) return withHead ? [] : [h('p', { class: 'tree-note' }, 'Nothing in Someday.')];
   const item = (x) => h('div', { class: `out${x.parked ? ' is-grey' : ''}` },
     h('button', { class: 'out-row', type: 'button', title: `${x.text}\n${x.parked ? 'Parked: an old action, never confirmed.\n' : ''}Click to read Someday`, onclick: () => openPanel({ kind: 'note', link: 'Someday' }) },
       h('span', { class: `out-name${x.label ? '' : ' is-long'}` }, x.label || x.short),
-      x.touched ? h('span', { class: 'out-when' }, ago(x.touched).replace(' ago', '')) : null),
+      x.touched ? h('span', { class: 'out-when' }, agoShort(x.touched)) : null),
     h('button', { class: 'out-plus', type: 'button', title: 'New thread on this: do it now, keep it, or fold it', 'aria-label': 'New thread on this Someday item', onclick: () => {
       openNew('Someday');
       els.input.value = `From Someday: "${x.text}"\n\n`;
@@ -554,38 +627,59 @@ function somedayNodes(items) {
       els.input.setSelectionRange(els.input.value.length, els.input.value.length);
     } }, '+'));
   const byNew = (a, b) => b.touched - a.touched;
+  const parked = items.filter((x) => x.parked).sort(byNew);
   return [
-    h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Someday')),
-    h('div', { class: 'out-list' }, ...items.filter((x) => !x.parked).sort(byNew).map(item), ...items.filter((x) => x.parked).sort(byNew).map(item)),
-  ];
+    withHead ? h('div', { class: 'tree-head' }, h('span', { class: 'tree-label' }, 'Someday'), h('span', { class: 'tree-n' }, String(items.length))) : null,
+    h('div', { class: 'out-list' }, ...items.filter((x) => !x.parked).sort(byNew).map(item)),
+    parked.length ? h('div', { class: 'tree-head', title: 'Old actions that were parked here and never confirmed' }, h('span', { class: 'tree-label' }, 'Parked'), h('span', { class: 'tree-n' }, String(parked.length))) : null,
+    parked.length ? h('div', { class: 'out-list' }, ...parked.map(item)) : null,
+  ].filter(Boolean);
 }
 
-// The outline is two slides side by side: projects, Someday and areas; and people. Swipe
-// or scroll sideways and it snaps; the two words on top jump.
-const SLIDES = ['Projects', 'People'];
+// The outline is up to three slides side by side: projects under their areas; people;
+// Someday. Swipe or scroll sideways and it snaps; the words on top jump. People and
+// Someday can be switched off in Settings → Layout.
+const SLIDES = [
+  { key: 'projects', label: 'Projects' },
+  { key: 'people', label: 'People', part: 'tree-people' },
+  { key: 'someday', label: 'Someday', part: 'tree-someday' },
+];
+const shownSlides = () => SLIDES.filter((s) => !s.part || arranging || !partHidden(s.part));
+const slideIndex = () => Math.max(0, shownSlides().findIndex((s) => s.key === (tree.slide || 'projects')));
 function slideNodes() {
   const nodes = treeNodes();
   if (Array.isArray(nodes)) return nodes;
-  const go = (i) => { tree.slide = i; const box = els.tree.querySelector('.slides'); box?.scrollTo({ left: i * box.clientWidth, behavior: reducedMotion.matches ? 'auto' : 'smooth' }); markSlide(); };
-  const nav = h('div', { class: 'slide-nav' }, ...SLIDES.map((label, i) => h('button', { class: `slide-tab${(tree.slide || 0) === i ? ' is-on' : ''}`, type: 'button', onclick: () => go(i) }, label)));
-  const box = h('div', { class: 'slides' }, h('div', { class: 'slide' }, ...nodes.first), h('div', { class: 'slide' }, ...nodes.second));
+  const slides = shownSlides();
+  if (!slides.some((s) => s.key === tree.slide)) tree.slide = 'projects';
+  const content = { projects: nodes.first, people: nodes.second, someday: nodes.third };
+  const go = (i) => { tree.slide = slides[i].key; const box = els.tree.querySelector('.slides'); box?.scrollTo({ left: i * box.clientWidth, behavior: reducedMotion.matches ? 'auto' : 'smooth' }); markSlide(); };
+  const nav = slides.length > 1
+    ? h('div', { class: 'slide-nav', role: 'tablist' }, ...slides.map((s, i) => h('button', {
+      class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
+    }, s.label)))
+    : h('div', { class: 'slide-nav is-single' }, h('span', { class: 'slide-title' }, slides[0].label));
+  const box = h('div', { class: 'slides' }, ...slides.map((s) => h('div', { class: 'slide' }, ...content[s.key])));
   box.addEventListener('scroll', () => {
     const i = Math.round(box.scrollLeft / Math.max(1, box.clientWidth));
-    if (i !== (tree.slide || 0)) { tree.slide = i; markSlide(); }
+    if (slides[i] && slides[i].key !== tree.slide) { tree.slide = slides[i].key; markSlide(); }
   }, { passive: true });
   return [nav, box];
 }
-function markSlide() { els.tree.querySelectorAll('.slide-tab').forEach((b, i) => b.classList.toggle('is-on', i === (tree.slide || 0))); }
+function markSlide() { els.tree.querySelectorAll('.slide-tab').forEach((b, i) => b.classList.toggle('is-on', i === slideIndex())); }
+
+// The right bar is there on a wide window, unless he switched it off; then the outline
+// is under "Folders" in the inbox drawer, as on a narrower window.
+const treeShown = () => wide.matches && !partHidden('tree');
 
 function renderTree(force = false) {
   if (drag?.active && !force) { drag.stale = true; return; }
-  if (wide.matches) {
+  if (treeShown()) {
     // Drawn afresh, but where he was (which slide, how far down) stays.
     const tops = [...els.tree.querySelectorAll('.slide')].map((el) => el.scrollTop);
     els.tree.replaceChildren(...slideNodes());
     const box = els.tree.querySelector('.slides');
     if (box) {
-      box.scrollLeft = (tree.slide || 0) * box.clientWidth;
+      box.scrollLeft = slideIndex() * box.clientWidth;
       box.querySelectorAll('.slide').forEach((el, i) => { el.scrollTop = tops[i] || 0; });
     }
   } else if (S.tab === 'projects') renderRail();
@@ -602,9 +696,16 @@ async function moveToProject(id, project) {
 function renderRail() {
   // While a thread is being dragged the lists stay as they are; they are drawn afresh on the drop.
   if (drag?.active) { drag.stale = true; return; }
-  const folders = S.tab === 'projects' && !wide.matches;
+  const folders = S.tab === 'projects' && !treeShown();
   const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...(() => { const n = treeNodes(); return Array.isArray(n) ? n : [...n.first, ...n.second]; })())] : queueLists()));
+  const drawerTree = () => {
+    const n = treeNodes();
+    if (Array.isArray(n)) return n;
+    return [...n.first,
+      ...(partHidden('tree-people') ? [] : n.second),
+      ...(partHidden('tree-someday') ? [] : somedayNodes(S.projects?.someday || [], true))];
+  };
+  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...drawerTree())] : queueLists()));
   els.tabQueue.classList.toggle('is-on', !folders);
   els.tabProjects.classList.toggle('is-on', folders);
   if (!reducedMotion.matches && before.size) {
@@ -671,7 +772,7 @@ els.openInbox.addEventListener('click', () => {
   }
 });
 try { setPinned(localStorage.getItem('rail-pinned') === '1'); } catch { setPinned(false); }
-wide.addEventListener('change', () => { if (wide.matches) S.tab = 'queue'; renderRail(); renderTree(); });
+wide.addEventListener('change', () => { if (treeShown()) S.tab = 'queue'; renderRail(); renderTree(); });
 
 // ---------- dragging a thread ----------
 //
@@ -853,9 +954,9 @@ function renderBrain() {
     rows.push(h('div', { class: 'brain-btns' },
       h('button', { class: 'brain-go', type: 'button', disabled: !bits.length && !b.mail && !clean, title: 'Files what is new in the threads, the cards you decided and new mail, and clears Done of what is already in the brain (Alt U)', onclick: () => updateBrain() },
         svg(MARK), h('span', { class: 'brain-go-text' }, 'Update brain')),
-      h('button', { class: 'btn', type: 'button', disabled: !b.mail, title: b.mail ? 'Takes in the mail that arrived and went out since the last time, and nothing else' : 'Connect Gmail in the settings first', onclick: () => updateBrain('mail') }, 'Update Gmail'),
+      h('button', { class: 'btn brain-gmail', type: 'button', disabled: !b.mail, title: b.mail ? 'Takes in the mail that arrived and went out since the last time, and nothing else' : 'Connect Gmail in the settings first', onclick: () => updateBrain('mail') }, 'Update Gmail'),
     ));
-    if (b.mail) rows.push(h('p', { class: 'brain-sub' }, b.mailLevel ? `Mail is taken in up to ${stamp(b.mailLevel)}` : 'No mail taken in yet; the first time looks back one day'));
+    if (b.mail) rows.push(h('p', { class: 'brain-sub is-mail' }, b.mailLevel ? `Mail is taken in up to ${stamp(b.mailLevel)}` : 'No mail taken in yet; the first time looks back one day'));
     if (b.brain.error) rows.push(h('p', { class: 'brain-sub is-error' }, b.brain.error));
   }
   if (b.last && !b.running) {
@@ -1244,7 +1345,7 @@ function renderHead() {
         },
       }, label, top ? null : h('span', { class: 'tier-up', 'aria-hidden': 'true' }, '↑')));
     }
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
+    actions.push(h('button', { class: 'btn btn-quiet btn-requeue', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
@@ -2221,6 +2322,7 @@ function openSettings(tab = S.settingsTab) {
   if (tab === 'queue') return fillQueue(els.settingsBody, token);
   if (tab === 'keys') return fillKeys(els.settingsBody);
   if (tab === 'stats') return fillStats(els.settingsBody, token);
+  if (tab === 'layout') return fillLayout(els.settingsBody);
   return fillConnections(els.settingsBody, token);
 }
 
@@ -2360,6 +2462,79 @@ async function fillQueue(body, token) {
   area.addEventListener('input', () => { state.textContent = ''; save(); });
   body.append(area);
 }
+
+// Layout: which parts of the page are there. Each change shows at once, behind this window.
+function fillLayout(body) {
+  const hidden = hiddenParts();
+  const groups = [...new Set(PARTS.map((p) => p.group))];
+  body.append(
+    h('h3', { class: 'window-head' }, 'Layout'),
+    h('p', { class: 'panel-note' }, 'Switch off what you do not use. It changes on the laptop, the Pi and your phone alike, and the keys keep working.'),
+    h('div', { class: 'layout-btns' },
+      h('button', { class: 'btn btn-brain', type: 'button', onclick: () => { els.settings.close(); startArranging(); } }, 'Pick on the page'),
+      hidden.size ? h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => {
+        S.settings = { ...S.settings, hidden: [] }; applyParts(); renderRail(); renderTree();
+        try { await api('PUT', '/api/settings', { hidden: [] }); } catch (err) { toast(err.message); }
+        openSettings('layout');
+      } }, `Show all ${hidden.size} again`) : null),
+    h('div', { class: 'layout' }, ...groups.map((g) => h('section', { class: 'layout-group' },
+      h('h4', { class: 'layout-head' }, g),
+      ...PARTS.filter((p) => p.group === g).map((p) => h('label', { class: 'check layout-row' },
+        h('input', { type: 'checkbox', checked: !hidden.has(p.key), onchange: (e) => setPart(p.key, e.target.checked) }), ` ${p.label}`))))),
+    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Folders in the inbox drawer.'));
+}
+
+// "Pick on the page": everything that can go is outlined; a click hides it, or brings a
+// faded one back. Nothing else reacts to clicks until Done (or Escape).
+let arrangeWasPinned = false;
+const arrangeBar = h('div', { class: 'arrange-bar', role: 'dialog', 'aria-label': 'Pick what to hide', hidden: true });
+document.body.append(arrangeBar);
+const arrangeCss = h('style', {});
+document.head.append(arrangeCss);
+function partAt(el) {
+  for (let x = el; x && x !== document.body; x = x.parentElement) {
+    const p = PARTS.find((q) => q.sel && x.matches(q.sel));
+    if (p) return p;
+  }
+  return null;
+}
+function renderArrangeBar() {
+  const n = hiddenParts().size;
+  arrangeBar.replaceChildren(
+    h('span', { class: 'arrange-text' }, 'Click a part to hide it; click a faded one to bring it back.', n ? h('span', { class: 'arrange-n' }, ` ${n} hidden`) : null),
+    h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => setPart('tree', partHidden('tree')).then(renderArrangeBar) }, partHidden('tree') ? 'Show the right bar' : 'Hide the right bar'),
+    h('button', { class: 'btn btn-send', type: 'button', onclick: stopArranging }, 'Done'));
+}
+function startArranging() {
+  arranging = true;
+  document.documentElement.classList.add('is-arranging');
+  arrangeCss.textContent = `html.is-arranging :is(${PARTS.filter((p) => p.sel).map((p) => p.sel).join(', ')}) { outline: 1.5px dashed var(--you); outline-offset: 2px; cursor: pointer !important; }`;
+  // The drawer stays open meanwhile, so its parts can be picked too.
+  arrangeWasPinned = els.app.classList.contains('rail-pinned');
+  if (!phone.matches) setPinned(true); else setRail(true);
+  arrangeBar.hidden = false;
+  renderArrangeBar();
+  renderRail(); renderTree();
+}
+function stopArranging() {
+  arranging = false;
+  document.documentElement.classList.remove('is-arranging');
+  arrangeCss.textContent = '';
+  arrangeBar.hidden = true;
+  if (!phone.matches) setPinned(arrangeWasPinned); else setRail(false);
+  renderRail(); renderTree();
+}
+for (const type of ['pointerdown', 'mousedown', 'click']) {
+  document.addEventListener(type, (e) => {
+    if (!arranging || e.target.closest?.('.arrange-bar')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (type !== 'click') return;
+    const p = partAt(e.target);
+    if (p) setPart(p.key, partHidden(p.key)).then(renderArrangeBar);
+  }, true);
+}
+document.addEventListener('keydown', (e) => { if (arranging && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stopArranging(); } }, true);
 
 function fillKeys(body) {
   const rows = [
@@ -3033,7 +3208,7 @@ function connect() {
   on('artifacts', onArtifacts);
   on('brain', setBrain);
   on('projects', () => loadProjects()); // e.g. the Someday labels are ready
-  on('state', (s) => { S.settings = { ...S.settings, ...s }; renderSettings(); renderFocus(); renderRail(); checkSleep(); });
+  on('state', (s) => { S.settings = { ...S.settings, ...s }; applyParts(); renderSettings(); renderFocus(); renderRail(); renderTree(); checkSleep(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
@@ -3078,6 +3253,7 @@ async function load() {
   S.config = state.config;
   S.connections = state.connections;
   S.settings = state.settings;
+  applyParts();
   checkSleep();
   navigator.clearAppBadge?.().catch(() => {}); // the old count, from before it was taken off
   S.queue = state.queue;
