@@ -163,10 +163,44 @@ export async function refresh(full) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// What Video Kit typed was typed against the copy as it was when the save was asked for. If one of
+// its files changed on main since (a thread merged while this waited, or GitHub moved on before a
+// push went through), writing it whole would take that change out again: on 19-11-2026 a save of
+// the EA video's script, waiting for a thread, landed 11 s after the thread's merge and reverted
+// it. So such a save is refused; Video Kit puts the two together and asks again.
+export class StaleError extends Error {
+  constructor(paths) {
+    super(`changed on main while this save waited (${paths.join(', ')}); Video Kit puts the two together and saves again`);
+    this.code = 409;
+    this.stale = true;
+    this.paths = paths;
+  }
+}
+
+// The commit the copy stood at, which is what Video Kit read: its main, or GitHub's main as last fetched.
+async function standing(dir) {
+  if (!fs.existsSync(path.join(dir, '.git'))) return null;
+  const base = (await git(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).catch(() => 'origin/main')).trim().replace(/^origin\//, '');
+  const onMain = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).then((o) => o.trim() === base, () => false);
+  const ref = onMain ? 'HEAD' : `refs/remotes/origin/${base}`;
+  return (await git(dir, ['rev-parse', '--verify', '--quiet', ref]).catch(() => '')).trim() || null;
+}
+
+// The files of the save that differ between the commit Video Kit read and the one about to be written on.
+async function changedSince(dir, from, to, list) {
+  if (!from) return [];
+  const known = await git(dir, ['cat-file', '-e', `${from}^{commit}`]).then(() => true, () => false);
+  if (!known) return list.map((f) => f.path);          // not a commit of this repo: nothing to go by
+  const out = await git(dir, ['diff', '--name-only', from, to, '--', ...list.map((f) => f.path)]);
+  return out.split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
 // Saves files from Video Kit into a video repo: onto main, one commit, pushed. Waits while a
 // thread works in the repo. `files` are [{ path, content }] relative to the repo; content null
-// deletes the file.
-export async function save(full, files, message, { waitMs = 30 * 60_000 } = {}) {
+// deletes the file. `from` is the commit Video Kit read them against; left out, the commit the
+// copy stood at when the save came in. A file changed on main since then is not written over
+// (StaleError).
+export async function save(full, files, message, { waitMs = 30 * 60_000, from = null } = {}) {
   if (!isVideoRepo(full)) throw new Error(`${full} is not a video repo`);
   const list = (files || []).map((f) => ({ path: String(f?.path || '').replace(/\\/g, '/'), content: f?.content ?? null }));
   for (const f of list) {
@@ -174,6 +208,8 @@ export async function save(full, files, message, { waitMs = 30 * 60_000 } = {}) 
     if (f.content !== null && typeof f.content !== 'string') throw new Error(`no text for ${f.path}`);
   }
   if (!list.length) return { commit: null };
+  if (from !== null && !/^[0-9a-f]{4,40}$/i.test(String(from))) throw new Error('from is not a commit');
+  const seen = from || await standing(repos.dirOf(full)).catch(() => null);
   // A thread's turn can run for a while; its work goes first, then this.
   const until = Date.now() + waitMs;
   while (repos.holder(full)) {
@@ -195,6 +231,12 @@ export async function save(full, files, message, { waitMs = 30 * 60_000 } = {}) 
       && !Number((await git(dir, ['rev-list', '--count', `HEAD..${remote}`]).catch(() => '1')).trim());
     if (!unpushed) await git(dir, ['checkout', '--quiet', '-B', base, remote]);
     for (let attempt = 0; ; attempt++) {
+      // Before every write, also after GitHub moved on: nothing Video Kit did not see is written over.
+      const stale = await changedSince(dir, seen, 'HEAD', list);
+      if (stale.length) {
+        log(`video kit: not saving into ${full}, changed on main meanwhile: ${stale.join(', ')}`);
+        throw new StaleError(stale);
+      }
       for (const f of list) {
         const p = path.join(dir, ...f.path.split('/'));
         if (f.content === null) fs.rmSync(p, { force: true });
