@@ -118,6 +118,11 @@ const DEFAULTS = {
   // vault, search the web and write artifacts, nothing else.
   threadShell: false,
 
+  // The age identity file (made by age-keygen) that decrypts Core/Secrets.md.age and the
+  // .age documents in the vault's Files/ folder. Empty: secrets are off. It must be outside
+  // the data folder, which is pushed to GitHub; a key inside it is refused. See server/secrets.js.
+  secretsKey: '',
+
   // Whether a thread without a repo may run commands in its own artifacts folder: scripts
   // that fill a PDF form, read or edit a Word or Excel file, convert a file. On by default.
   artifactsShell: true,

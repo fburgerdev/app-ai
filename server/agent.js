@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { fromEvent, limitOf, noteLimit } from './limits.js';
+import { withEnv } from './secrets.js';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -61,7 +62,7 @@ function deny(message) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '' }) {
+export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', secretsKey = '' }) {
   const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
@@ -122,6 +123,9 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
         const command = String(input.command || '');
         if (/(^|[\s;&|(])(git|gh)(\.exe)?\s/i.test(command)) return deny('No git here: the vault is the app\'s to manage, and code lives in repos. Call open_repo to work in one.');
         if (!startsIn(command, bench)) return deny(`Without a repo, commands run on this thread's workbench: start the command with cd "${bench}". Keep scripts, libraries and everything made on the way there; write only the finished file into the artifacts folder, or hand it over with show_file. Never write into the vault.`);
+        // Florian's secrets, as APP_SECRET_<NAME> for this command only (a form a script
+        // fills). Only a path to a file holding them goes in front of the command.
+        if (secretsKey) return allow({ ...input, command: withEnv(command, secretsKey, toolName) });
         return allow(input);
       }
       const command = String(input.command || '');
@@ -149,7 +153,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -185,6 +189,9 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
       ...(showFile ? [tool('show_file', 'Show Florian a file a script made: it is copied into this thread\'s artifacts folder and appears in the thread. Files you write into the artifacts folder with Write or Edit are shown already; use this for the finished result of a script (a filled PDF, an edited Word file, a chart). Only for files he should see: never for libraries, scripts or intermediate files.',
         { path: z.string().describe('The file, absolute or relative to the workbench'), name: z.string().optional().describe('The name he sees, if different from the file\'s; a name he would recognise') },
         async (args) => { try { return ok(await showFile(args)); } catch (err) { return fail(err); } })] : []),
+      ...(useDocument ? [tool('use_document', "Decrypt one of Florian's encrypted documents (a file in the vault's Files/ folder whose name ends in .age: a certificate, a contract, his signature) onto this thread's workbench, for a script that needs it (putting his signature into a form, attaching a certificate). Returns the path of the decrypted copy, which is deleted when the turn ends. Hand it to the script; do not read it yourself unless the task needs its content, and never copy what it holds into a reply or a file. To send a document by mail, use an `attach: Files/….age` line instead: the app decrypts it when the mail goes out.",
+        { path: z.string().describe('The document in the vault, like "Files/2026-11-14 Unterschrift Florian Burger.png.age"') },
+        async (args) => { try { return ok(await useDocument(args)); } catch (err) { return fail(err); } })] : []),
       ...(moveEvent ? [tool('move_event', 'Move one of the app\'s events (the threads in Events, made from his calendar) to a new time. Call it as soon as Florian says an entry was postponed, moved or brought forward, in any thread, so Events shows the new time at once and the briefing opens by it. Without `event`, in an event\'s own thread, it moves that one. It changes only the app; it does not change Google Calendar.',
         {
           event: z.string().optional().describe('The event\'s thread id, or words from its title ("Blom"); leave out in the event\'s own thread'),
@@ -293,8 +300,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, secretsKey, useDocument }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -331,7 +338,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, secretsKey: mode === 'thread' ? secretsKey : '' }),
     additionalDirectories: [artifactsDir, workDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
