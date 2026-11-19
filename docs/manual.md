@@ -7,8 +7,8 @@ Everything the app does, feature by feature. What it is, how to install it and w
 - **The top bar** is always there: the inbox button with the number waiting, Focus, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **The outline** on the right: projects and areas, People and Someday (see "The outline" below).
-- **Settings** opens as a window: Connections, General (look, sleep time, what the queue has learned), Layout, Keys, Stats.
-- **Layout** (in Settings) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
+- **Settings** opens as a window: General (sleep time, what the queue has learned), Look (light or dark, and the layout), Keys, Connections (Google, calling by phone, saving the state), Stats, About (the version and where the app runs).
+- **Layout** (Settings → Look) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
 
 ## The queue
 
@@ -40,18 +40,18 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 | Key | What it does |
 |---|---|
 | Enter | Send, then open what the queue puts next |
+| Shift+Enter | New line |
 | Ctrl+Enter | Send and done |
 | Alt+Enter | Send into a spin-off |
-| Shift+Enter | New line |
 | Alt+N | New thread |
 | Alt+S | Requeue |
 | Alt+X | Done: close this thread |
-| Y / N | On a card: accept / decline. While typing in the card: Ctrl+Enter accepts, Alt+N declines |
 | Alt+J / Alt+K | Next / previous thread in the inbox |
-| Alt+A | Show or hide the files Claude made in this thread |
-| Alt+U | Update the brain |
+| Y / N | On a card: accept / decline. While typing in the card: Ctrl+Enter accepts, Alt+N declines |
 | Alt+L | Show or hide the inbox |
+| Alt+A | Show or hide the files Claude made in this thread |
 | Esc | Close the side panel or the settings window |
+| Alt+U | Update the brain |
 
 ## What a message is worth
 
@@ -157,7 +157,7 @@ These two buttons are the only things in the app that file facts into the vault,
 
 ## The outline
 
-The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Layout.
+The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Look.
 
 - **Projects**: the **areas** in the order of `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`; areas not in it follow alphabetically, and the line at the foot opens that file), each with its active projects below it, most recently dealt with first (your latest message in one of its threads, or the last change to its note). Paused projects (`Status: paused` in the project's note) are folded away under their own line and unfold on hover. An area with no project right now is grey.
 - **Someday**: each item newest first, the parked old actions under their own heading; **+** starts a thread on the item: do it now, keep it, or fold it.
@@ -255,7 +255,7 @@ Most of the time the status is only the small item in the top bar. The row under
 
 ## The app looks after itself
 
-- **It updates itself.** On Windows the app looks for a new version every ten minutes, takes it as soon as Claude is not working, restarts, and goes back if the new version does not start; the page reloads by itself. The Pi does the same through `deploy/update.sh` ([pi.md](pi.md)). For something urgent, **Settings → Connections → Check for updates** looks right away; if Claude is working, it offers **Update now anyway**, which cuts that turn off.
+- **It updates itself.** On Windows the app looks for a new version every ten minutes, takes it as soon as Claude is not working, restarts, and goes back if the new version does not start; the page reloads by itself. The Pi does the same through `deploy/update.sh` ([pi.md](pi.md)). For something urgent, **Settings → About → Check for updates** looks right away; if Claude is working, it offers **Update now anyway**, which cuts that turn off.
 - **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
 - **A message nobody answered.** A message sent just as the work moved between the laptop and the Pi could end up in a thread with no turn to take it up. The app looks for such messages every minute (on the computer doing the work, for messages of the last six hours) and starts the turn itself, with a note in the thread. After Stop it does not.
 - **Anything else fails** (a brain update, the card run, saving, updating, a crash): the app opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like any thread's work, the thread closes, and the self-update takes it (and goes back if the new version does not start). If the tests fail, the thread waits in the inbox. One repair thread per kind of error per day. Turn it off with `"repair": { "auto": false }`, or only its merging with `"repair": { "autoMerge": false }`.
