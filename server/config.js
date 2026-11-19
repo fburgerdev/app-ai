@@ -130,6 +130,13 @@ const DEFAULTS = {
   // (npm test), or at once if it has none. Failing tests leave it with a note in the thread.
   autoMerge: true,
 
+  // Where those tests run. A branch with a workflow in .github/workflows is tested by GitHub
+  // Actions, and the app only waits for the result, so the laptop and the Pi stay free. If
+  // no run has started after `startMs` (Actions off, a workflow that does not run on push)
+  // or GitHub cannot be asked, the tests run here as before. `waitMs` is how long a run may
+  // take; `pollMs` how often the app asks. `"ci": { "auto": false }` always tests here.
+  ci: { auto: true, startMs: 4 * 60_000, waitMs: 30 * 60_000, pollMs: 15_000 },
+
   // Claude's usage limits (five-hour, weekly). A turn or brain update they cut off runs
   // again by itself once the limit has lifted: `marginMs` after the time Claude names,
   // or `fallbackMs` later when it names none. `checkMs` is how often the app looks.
@@ -193,7 +200,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver', 'ci']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);

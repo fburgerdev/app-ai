@@ -44,7 +44,11 @@ When a turn that changed a repo ends, the app, in the background:
 
 1. takes the repo, so no other thread changes it meanwhile;
 2. runs the repo's tests on the branch, if it has any (`npm test` in `package.json`, after
-   `npm ci`); what the tests leave behind is thrown away, not merged;
+   `npm ci`); what the tests leave behind is thrown away, not merged. A repo with a workflow
+   in `.github/workflows` (app-ai has `test.yml`) is tested by GitHub Actions instead: the
+   app waits for GitHub's result for the pushed branch, without holding the repo, so the
+   laptop and the Pi do no test work. If no run has started after four minutes, or GitHub
+   cannot be asked, the tests run here as before (`"ci"` in `config.json`);
 3. if they pass, or there are none, merges the branch into main, pushes main and deletes the
    branch;
 4. notes in the thread what it did. If the tests failed, the note has the end of their output,

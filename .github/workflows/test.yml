@@ -1,0 +1,24 @@
+# The whole suite, on GitHub's machines instead of the laptop or the Pi. The app pushes a
+# thread's branch when its turn ends, waits for this run and merges into main if it passed
+# (server/ship.js). Without a run, the app tests on its own computer as before.
+name: tests
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: git config --global user.name "CI" && git config --global user.email "ci@localhost" && git config --global init.defaultBranch main
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+        env:
+          CI: '1'
