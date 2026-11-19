@@ -31,7 +31,7 @@ It is a personal tool, built for one person's way of working (Getting Things Don
 
 **Talk** (left) is for walking. A small "host" model reads threads aloud and sends what you say to the right place: a reply to the open thread, a new thread, a command, or a question it answers itself. On the right is the whole app in a phone's browser.
 
-![Settings → Layout: switch off any part of the page](docs/images/settings-layout.png)
+![Settings → Look: switch off any part of the page](docs/images/settings-layout.png)
 
 **Layout.** Any part of the page can be switched off, either from the list or by clicking it on the page.
 

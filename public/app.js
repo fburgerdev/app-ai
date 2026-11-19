@@ -32,7 +32,7 @@ const S = {
   cards: { running: false, ready: 0 },
   projects: null,
   tab: 'queue',
-  settingsTab: 'connections',
+  settingsTab: 'queue',
   lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
@@ -2402,6 +2402,7 @@ function openSettings(tab = S.settingsTab) {
   if (tab === 'keys') return fillKeys(els.settingsBody);
   if (tab === 'stats') return fillStats(els.settingsBody, token);
   if (tab === 'layout') return fillLayout(els.settingsBody);
+  if (tab === 'about') return fillAbout(els.settingsBody, token);
   return fillConnections(els.settingsBody, token);
 }
 
@@ -2430,20 +2431,30 @@ async function fillStats(body, token) {
     h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
 }
 
-async function fillConnections(body, token) {
-  body.append(h('h3', { class: 'window-head' }, 'Connections'));
+// Connections and About both read /api/connections and show it as blocks.
+async function loadConnections(body, token, title) {
+  body.append(h('h3', { class: 'window-head' }, title));
   let c;
   try {
     c = await api('GET', '/api/connections');
   } catch (err) {
     body.append(h('p', { class: 'panel-note is-error' }, err.message));
-    return;
+    return null;
   }
-  if (token !== settingsToken) return;
+  if (token !== settingsToken) return null;
   S.connections = c;
-  const block = (title, state, ...rest) => h('section', { class: 'conn' },
-    h('h3', { class: 'conn-title' }, title, h('span', { class: `conn-state${state.on ? ' is-on' : ''}${state.bad ? ' is-error' : ''}` }, state.text)), ...rest);
-  const note = (text) => h('p', { class: 'panel-note' }, text);
+  return c;
+}
+const connBlock = (title, state, ...rest) => h('section', { class: 'conn' },
+  h('h3', { class: 'conn-title' }, title, h('span', { class: `conn-state${state.on ? ' is-on' : ''}${state.bad ? ' is-error' : ''}` }, state.text)), ...rest);
+const connNote = (text) => h('p', { class: 'panel-note' }, text);
+
+// What the app is linked to: Google, a phone number, the data repo.
+async function fillConnections(body, token) {
+  const c = await loadConnections(body, token, 'Connections');
+  if (!c) return;
+  const block = connBlock;
+  const note = connNote;
 
   const g = c.google;
   if (g.connected) {
@@ -2461,11 +2472,25 @@ async function fillConnections(body, token) {
       note('This needs a Google client id and secret in config.json first. The steps are in docs/google.md in the app’s folder; they take about ten minutes, once.')));
   }
 
+  const v = c.voice;
+  body.append(block('Calling by phone', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
+    note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
+      : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
+        : 'Off. The Talk page does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
+
   const d = c.data;
   body.append(block('Saving the app’s state', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
     note(d.error || (d.enabled
       ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
       : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
+}
+
+// About: which version runs, and where.
+async function fillAbout(body, token) {
+  const c = await loadConnections(body, token, 'About');
+  if (!c) return;
+  const block = connBlock;
+  const note = connNote;
 
   if (c.app?.commit) {
     const when = (ts) => new Date(ts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -2473,12 +2498,6 @@ async function fillConnections(body, token) {
       note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub every ten minutes${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`),
       c.app.update?.enabled ? updateButton() : null));
   }
-
-  const v = c.voice;
-  body.append(block('Calling by phone', v.ready ? { on: true, text: 'ready' } : { text: v.enabled ? 'incomplete' : 'off' },
-    note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
-      : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
-        : 'Off. The Talk page does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
 
   const r = c.remote;
   body.append(block('Where the app runs', { on: true, text: r.local ? 'this computer' : 'another computer' },
@@ -2525,7 +2544,7 @@ function sleepFields() {
 }
 
 async function fillQueue(body, token) {
-  body.append(...lookFields(), ...sleepFields());
+  body.append(...sleepFields());
   const state = h('span', { class: 'status' });
   body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
     h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));
@@ -2542,11 +2561,13 @@ async function fillQueue(body, token) {
   body.append(area);
 }
 
-// Layout: which parts of the page are there. Each change shows at once, behind this window.
+// Look: light or dark, then which parts of the page are there. Each change shows at once,
+// behind this window.
 function fillLayout(body) {
   const hidden = hiddenParts();
   const groups = [...new Set(PARTS.map((p) => p.group))];
   body.append(
+    ...lookFields(),
     h('h3', { class: 'window-head' }, 'Layout'),
     h('p', { class: 'panel-note' }, 'Switch off what you do not use. It changes on the laptop, the Pi and your phone alike, and the keys keep working.'),
     h('div', { class: 'layout-btns' },
@@ -2616,23 +2637,33 @@ for (const type of ['pointerdown', 'mousedown', 'click']) {
 document.addEventListener('keydown', (e) => { if (arranging && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stopArranging(); } }, true);
 
 function fillKeys(body) {
-  const rows = [
-    ['Enter', 'Send, then open what the queue puts next'],
-    ['Ctrl Enter', 'Send and done: the message is kept for the brain update and the thread closes, with no answer from Claude'],
-    ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
-    ['Shift Enter', 'New line'],
-    ['Alt N', 'New thread'],
-    ['Alt L', 'Show or hide the inbox (or move the pointer to the left edge)'],
-    ['Alt S', 'Requeue: not now, show me the next'],
-    ['Alt X', 'Done: close this thread'],
-    ['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)'],
-    ['Alt J / Alt K', 'Next / previous thread in the inbox'],
-    ['Alt A', 'Show or hide the files Claude made in this thread'],
-    ['Alt U', 'Update the brain'],
-    ['Esc', 'Close the side panel or this window'],
+  const groups = [
+    ['Writing', [
+      ['Enter', 'Send, then open what the queue puts next'],
+      ['Shift Enter', 'New line'],
+      ['Ctrl Enter', 'Send and done: the message is kept for the brain update and the thread closes, with no answer from Claude'],
+      ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
+    ]],
+    ['Threads', [
+      ['Alt N', 'New thread'],
+      ['Alt S', 'Requeue: not now, show me the next'],
+      ['Alt X', 'Done: close this thread'],
+      ['Alt J / Alt K', 'Next / previous thread in the inbox'],
+      ['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)'],
+    ]],
+    ['Showing and hiding', [
+      ['Alt L', 'Show or hide the inbox (or move the pointer to the left edge)'],
+      ['Alt A', 'Show or hide the files Claude made in this thread'],
+      ['Esc', 'Close the side panel or this window'],
+    ]],
+    ['Brain', [
+      ['Alt U', 'Update the brain'],
+    ]],
   ];
   body.append(h('h3', { class: 'window-head' }, 'Keys'),
-    h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])),
+    ...groups.map(([g, rows]) => h('section', { class: 'keys-group' },
+      h('h4', { class: 'layout-head' }, g),
+      h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])))),
     h('p', { class: 'panel-note' }, 'Select any text in a reply, a file or a vault note to quote it in your reply. Drag a thread to reorder the inbox, onto Done to close it, or onto a folder to file it.'));
 }
 
