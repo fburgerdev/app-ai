@@ -1590,3 +1590,109 @@ a.chip:hover { border-color: var(--muted); }
 body.is-booting .shell { visibility: hidden; }
 .update-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .update-out .link { padding: 0; }
+
+/* ---------- the right bar, 19-11-2026 ----------
+   A segmented switch on top; areas as small-caps captions with their rank; projects on
+   one quiet line below each, no ticks; times compact and faint; what starts many threads
+   at the foot. Comes last, so it wins over the older rules above. */
+.tree { --guide: rgba(148, 154, 183, 0.18); }
+:root[data-theme="light"] .tree, :root[data-theme="light"] .rail-lists .tree { --guide: rgba(109, 99, 81, 0.2); }
+.slide-nav { gap: 2px; margin: 12px 12px 6px; padding: 3px; background: var(--panel); border-radius: 9px; }
+.slide-tab { flex: 1; padding: 6px 8px; border-radius: 7px; color: var(--muted); font: 600 12.5px/1.1 var(--sans); letter-spacing: 0; text-transform: none; }
+.slide-tab:hover { color: var(--text); }
+.slide-tab.is-on { background: var(--raised); color: var(--bright); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+.slide-nav.is-single { background: none; padding: 3px 4px; }
+.slide-title { color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; }
+.slide { padding: 2px 8px 28px; }
+
+/* One rail per list, without the ticks. */
+.tree .out-list { --guide: rgba(148, 154, 183, 0.18); margin-left: 12px; }
+:root[data-theme="light"] .tree .out-list { --guide: rgba(109, 99, 81, 0.22); }
+.out::before, .out:not(:last-child)::after { display: none; }
+.out-list:not(.is-flat) { border-left: 1px solid var(--guide); padding-left: 2px; }
+.out { padding-left: 4px; }
+.out-row { min-height: 28px; padding: 5px 34px 5px 8px; border-radius: 6px; font-size: 13.5px; }
+.out:hover > .out-row { background: var(--panel); }
+.out.is-here > .out-row { background: rgba(245, 183, 92, 0.11); color: var(--you); font-weight: 600; }
+:root[data-theme="light"] .out.is-here > .out-row { background: rgba(176, 109, 12, 0.1); }
+.out-when { top: 7px; right: 8px; font-size: 11px; opacity: 0.85; }
+.out-plus { top: 3px; right: 4px; }
+
+/* Areas: small capitals, the rank faint in front; projects hang below on the rail. */
+.area-group { margin-top: 12px; }
+.area-group:first-child { margin-top: 2px; }
+.out-list.is-area { margin-left: 0; }
+.out-list.is-area .out { padding-left: 0; }
+.out-list.is-area .out-row { min-height: 24px; padding: 3px 34px 3px 26px; color: var(--muted); font: 650 11px/1.3 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; }
+.out-list.is-area .out-rank { width: 14px; margin-left: -20px; font-size: 10.5px; letter-spacing: 0; color: var(--faint); opacity: 1; }
+.out-list.is-area .out.is-here > .out-row { color: var(--you); background: none; }
+.area-group > .out-list:not(.is-area) { margin-left: 21px; }
+.area-group.is-bare { margin-top: 4px; }
+.area-group.is-bare + .area-group:not(.is-bare) { margin-top: 12px; }
+.area-group.is-bare .out-list.is-area .out-row { color: var(--faint); font-weight: 600; opacity: 0.8; }
+.area-none { margin: 0; padding: 3px 0 3px 26px; color: var(--faint); font: 650 11px/1.3 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; }
+.out-divide { margin: 12px 10px 4px 26px; opacity: 0.6; }
+
+/* Paused: one quiet line that unfolds. */
+.out-folded { margin: 14px 0 0; }
+.out-folded-head { margin: 0; padding: 3px 0 3px 26px; color: var(--faint); font: 650 11px/1.3 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; }
+.out-folded-head::after { content: ' ›'; letter-spacing: 0; }
+.out-folded:hover .out-folded-head::after, .out-folded:focus-within .out-folded-head::after { content: ' ⌄'; }
+.out-folded > .out-list { margin-left: 21px; }
+
+/* Section heads (People, Someday) line up with the area captions. */
+.tree-head { margin: 16px 8px 4px 26px; }
+.slide > .tree-head:first-child { margin-top: 6px; }
+.tree-n { margin-right: 0; font-size: 11px; }
+
+/* The foot: starting many threads, and where the order of the areas comes from. */
+.tree-foot { margin: 22px 4px 0 26px; padding-top: 10px; border-top: 1px solid var(--guide); display: flex; flex-direction: column; gap: 6px; }
+.tree-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.tree-foot-label { flex-basis: 100%; margin-bottom: 3px; color: var(--faint); font-size: 11.5px; }
+.tree-bulk .out-start { padding: 3px 8px; border-color: var(--line); }
+.tree-foot .tree-sub { width: auto; margin: 0; padding: 0; }
+
+/* ---------- no right bar: its lists are under Folders in the drawer ---------- */
+.app.no-tree { --tree-w: 0px; }
+.app.no-tree > .tree { display: none; }
+.app.no-tree .tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+
+/* ---------- Settings → Layout ---------- */
+.layout-btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 12px; }
+.layout { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px 24px; }
+.layout-group { display: flex; flex-direction: column; gap: 6px; }
+.layout-head { margin: 0 0 2px; color: var(--faint); font: 650 11px/1.3 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
+.layout-row { align-items: flex-start; font-size: 13.5px; line-height: 1.35; }
+.layout-row input { margin-top: 2px; flex: none; }
+
+/* ---------- picking parts on the page ---------- */
+.arrange-bar {
+  /* In the middle, over the messages: the bars at the top and bottom hold what is picked. */
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 200;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 24px);
+  padding: 8px 8px 8px 16px; border: 1px solid var(--you); border-radius: 12px;
+  background: var(--raised); box-shadow: 0 10px 34px rgba(8, 9, 16, 0.45);
+  color: var(--text); font-size: 13.5px;
+}
+.arrange-bar[hidden] { display: none; }
+.arrange-n { color: var(--muted); }
+html.is-arranging .out:hover > .out-row .out-when { visibility: visible; }
+html.is-arranging .out-plus { display: none; }
+html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
+@media (max-width: 700px) {
+  .arrange-bar { width: calc(100vw - 24px); flex-wrap: wrap; }
+}
+/* Five tabs in Settings fit a phone's width beside the close button. */
+@media (max-width: 700px) { .window-tab { flex: none; padding: 8px 7px; font-size: 14px; white-space: nowrap; } .window-title { display: none; } }
+
+/* A finished turn: the way there folded into one line, the report below it. */
+.progress { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
+.progress > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; list-style: none; color: var(--faint); }
+.progress > summary::-webkit-details-marker { display: none; }
+.progress > summary::before { content: '›'; display: inline-block; width: 10px; font-size: 15px; line-height: 1; transition: transform 140ms ease; }
+.progress[open] > summary::before { transform: rotate(90deg); }
+.progress > summary:hover { color: var(--text); }
+.progress-body { margin: 8px 0 6px 4px; padding: 2px 0 2px 14px; border-left: 1px solid var(--line); color: var(--muted); display: flex; flex-direction: column; gap: 8px; animation: swap 160ms ease-out; }
+.progress-body > * { margin: 0; }
+.progress-body :is(p, li) { font-size: 14.5px; line-height: 1.5; color: var(--muted); }
+.progress-body :is(strong, b) { color: var(--text); }

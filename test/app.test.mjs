@@ -107,6 +107,15 @@ test('the app starts on Auto, with the five tiers', async () => {
   await call('PUT', '/api/settings', { tier: 'auto' });
 });
 
+test('parts of the page switched off in Layout are kept, cleaned of anything odd', async () => {
+  assert.deepEqual((await state()).settings.hidden, [], 'nothing hidden at first');
+  const out = (await call('PUT', '/api/settings', { hidden: ['talk', 'tree-people', 'talk', 'Not A Key', 7, 'x'.repeat(60)] })).data;
+  assert.deepEqual(out.hidden, ['talk', 'tree-people'], 'duplicates, odd strings and non-strings dropped');
+  assert.deepEqual((await state()).settings.hidden, ['talk', 'tree-people'], 'saved');
+  assert.deepEqual((await call('PUT', '/api/settings', { mood: '' })).data.hidden, ['talk', 'tree-people'], 'another setting leaves it alone');
+  assert.deepEqual((await call('PUT', '/api/settings', { hidden: [] })).data.hidden, [], 'everything shown again');
+});
+
 test('a thread started from a project carries it; the tree shows it', async () => {
   planThread = (await call('POST', '/api/threads', { text: 'Where does the motion stand?', project: 'Motion' })).data.thread.id;
   mailThread = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office' })).data.thread.id;
