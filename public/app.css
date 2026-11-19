@@ -1684,3 +1684,13 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 }
 /* Five tabs in Settings fit a phone's width beside the close button. */
 @media (max-width: 700px) { .window-tab { flex: none; padding: 8px 7px; font-size: 14px; white-space: nowrap; } .window-title { display: none; } }
+
+/* A finished turn: the way there folded into one line, the report below it. */
+.progress { margin: 0 0 4px; color: var(--muted); font-size: 13px; }
+.progress > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; list-style: none; color: var(--faint); }
+.progress > summary::-webkit-details-marker { display: none; }
+.progress > summary::before { content: '›'; display: inline-block; width: 10px; font-size: 15px; line-height: 1; transition: transform 140ms ease; }
+.progress[open] > summary::before { transform: rotate(90deg); }
+.progress > summary:hover { color: var(--text); }
+.progress-body { margin: 8px 0 6px 4px; padding: 2px 0 2px 14px; border-left: 1px solid var(--line); color: var(--muted); display: flex; flex-direction: column; gap: 8px; animation: swap 160ms ease-out; }
+.progress-body > * { margin: 0; }

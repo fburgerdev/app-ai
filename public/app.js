@@ -1150,7 +1150,7 @@ function artifactCard(threadId, part) {
   );
 }
 
-function partsInto(container, threadId, parts, { live = false } = {}) {
+function partNodes(threadId, parts, { live = false } = {}) {
   const out = [];
   let tools = [];
   const flush = (isLast) => {
@@ -1166,7 +1166,34 @@ function partsInto(container, threadId, parts, { live = false } = {}) {
     } else if (part.type === 'artifact') out.push(artifactCard(threadId, part));
   });
   flush(true);
-  container.replaceChildren(...out);
+  return out;
+}
+
+// While Claude works, every progress line and step shows as it comes. Once the turn is
+// over, all of that folds into one line, and only the report at the end stays open,
+// with the files the turn made. Florian, 19-11-2026: "when the run finishes i want this
+// collapsed and just want to see the end report". A turn that ended mid-way (stopped,
+// an error, the limit) has no report, so it stays as it is.
+const hasText = (p) => p.type === 'text' && p.text.trim();
+function partsInto(container, threadId, parts, { live = false } = {}) {
+  const lastTool = parts.findLastIndex((p) => p.type === 'tool');
+  const run = parts.slice(0, lastTool + 1);
+  const report = parts.slice(lastTool + 1);
+  const updates = run.filter(hasText).length;
+  if (live || lastTool < 0 || !updates || !report.some(hasText)) {
+    container.replaceChildren(...partNodes(threadId, parts, { live }));
+    return;
+  }
+  const steps = run.filter((p) => p.type === 'tool').length;
+  const label = `${updates} ${updates === 1 ? 'update' : 'updates'} on the way, ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+  container.replaceChildren(
+    h('details', { class: 'progress' },
+      h('summary', {}, label),
+      h('div', { class: 'progress-body' }, ...partNodes(threadId, run.filter((p) => p.type !== 'artifact')))),
+    // A file written several times on the way shows once, at its last version.
+    ...[...new Map(run.filter((p) => p.type === 'artifact').map((p) => [p.name, p])).values()].map((p) => artifactCard(threadId, p)),
+    ...partNodes(threadId, report),
+  );
 }
 
 // What a note in the thread says, in a few words. The note itself stays as it is
