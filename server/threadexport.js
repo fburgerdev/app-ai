@@ -17,6 +17,7 @@ import path from 'node:path';
 import * as store from './store.js';
 import { THREADS_FOLDER } from './brain.js';
 import { dateTimeDMY, messageText, safeFileName } from './util.js';
+import { redact } from './secrets.js';
 
 const FILE_TEXT_LIMIT = 20_000; // characters of a made file's final text that are kept
 const TEXT_FILE = /\.(md|txt)$/i;
@@ -39,7 +40,8 @@ export function isExported(thread, messages) {
   return messages.some((m) => m.role === 'user' && (!m.auto || m.event));
 }
 
-// The file for one thread, as text.
+// The file for one thread, as text. A secret value in it (Florian typed one, or a file
+// holds one) comes out as its placeholder, so Threads/ never holds a value.
 export function renderThread(thread, messages) {
   const own = thread.spunFrom ? messages.slice(thread.spunAt || 0) : messages;
   const turns = own
@@ -60,7 +62,7 @@ export function renderThread(thread, messages) {
   }
 
   const last = messages.at(-1)?.ts || thread.updatedAt || thread.createdAt;
-  return [
+  const text = [
     `# ${thread.title}`,
     '',
     `Thread: ${thread.id}`,
@@ -79,6 +81,7 @@ export function renderThread(thread, messages) {
     '',
     ...(files.length ? ['## Files Claude made in this thread', '', ...files] : []),
   ].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  return redact(text);
 }
 
 // The header of a thread file: which thread it is, its project, when it was last written in.

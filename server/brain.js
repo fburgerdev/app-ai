@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { git, gitOk } from './git.js';
 import { log } from './config.js';
+import { containsSecret, redact, refreshSecrets, secretNames } from './secrets.js';
 
 let config;
 let chain = Promise.resolve(); // serialises every git operation on the clone
@@ -224,6 +225,14 @@ export function commitAndPush({ subject, body }) {
     await git(dir, ['add', '-A']);
     if (await gitOk(dir, ['diff', '--cached', '--quiet'])) return null;
 
+    // The last check: a secret value still in a staged text file is replaced by its
+    // placeholder before it is committed, and the report names the file.
+    const redacted = await redactStaged(dir);
+    if (redacted.length) {
+      log(`brain update: a secret value was in ${redacted.join(', ')}; replaced by its placeholder before committing`);
+      await git(dir, ['add', '-A']);
+    }
+
     const files = (await git(dir, ['diff', '--cached', '--name-status', '--no-renames', '-z']))
       .split('\0').filter(Boolean);
     const changes = [];
@@ -252,8 +261,27 @@ export function commitAndPush({ subject, body }) {
     }
     status.unpushed = pushed ? 0 : 1;
     status.head = await head();
-    return { commit: status.head, pushed, pushError, changes, restored };
+    return { commit: status.head, pushed, pushError, changes, restored, redacted };
   });
+}
+
+// Staged text files (added or changed) that held a secret value, redacted in place.
+const TEXT_PATH = /\.(md|txt|csv|json|jsonl|html?|ya?ml)$/i;
+export async function redactStaged(dir) {
+  await refreshSecrets();
+  if (!secretNames().length) return [];
+  const staged = (await git(dir, ['diff', '--cached', '--name-only', '--diff-filter=AM', '--no-renames', '-z'])).split('\0').filter(Boolean);
+  const out = [];
+  for (const rel of staged) {
+    if (!TEXT_PATH.test(rel)) continue;
+    const file = path.join(dir, ...rel.split('/'));
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    if (!containsSecret(text)) continue;
+    fs.writeFileSync(file, redact(text));
+    out.push(rel);
+  }
+  return out;
 }
 
 // ---------- reading the vault for the interface ----------

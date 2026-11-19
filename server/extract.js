@@ -34,6 +34,7 @@ import { saveNow } from './datasync.js';
 import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
 import { exportThreads } from './threadexport.js';
+import { refreshSecrets } from './secrets.js';
 import { report as reportFailure } from './repair.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
@@ -444,6 +445,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
     if (!mailOnly) {
       setStep('Writing the threads into the vault');
       try {
+        await refreshSecrets(); // so the export knows every value to keep out
         const done = exportThreads(brain.brainDir());
         log(`brain update: ${done.total} threads in the vault, ${done.written} written, ${done.renamed} renamed`);
       } catch (err) {
@@ -508,6 +510,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
       pushError: committed?.pushError || '',
       changes: committed ? visibleChanges(committed.changes) : [],
       restored: committed?.restored || [],
+      redacted: committed?.redacted || [],
     };
   });
 }

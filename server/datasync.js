@@ -18,7 +18,8 @@
 import { isNetworkError, report } from './repair.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, log } from './config.js';
+import { DATA_DIR, THREADS_DIR, log } from './config.js';
+import { redact, refreshSecrets, secretNames } from './secrets.js';
 import { git, gitOk } from './git.js';
 import { adoptRewritten, forgetOld, moveBranch, rewriteWithout, wasRewritten } from './purge.js';
 import { events } from './store.js';
@@ -27,6 +28,7 @@ const IGNORE = [
   '# Secrets and machine-local files. Never commit these.',
   'config.json',
   'google-token.json',
+  '*.agekey',
   '/brain/',
   'log.txt',
   'reads.jsonl',
@@ -136,7 +138,35 @@ export async function whenUnlocked(fn, { tries = 5, wait = 400 } = {}) {
   }
 }
 
+// A secret value in a thread's conversation (Florian typed it, or a tool's output
+// showed it) is replaced by its placeholder before it is committed, so the data repo
+// never holds one. Only the files changed since the last look are read; the read and the
+// write happen in one go, so no message the app appends in between is lost.
+const seen = new Map(); // file -> mtime when last checked
+export async function redactMessages() {
+  await refreshSecrets();
+  if (!secretNames().length) return 0;
+  let changed = 0;
+  let ids = [];
+  try { ids = fs.readdirSync(THREADS_DIR); } catch { return 0; }
+  // thread.json too: its title and gist are words from the conversation.
+  for (const file of ids.flatMap((id) => ['messages.jsonl', 'thread.json'].map((n) => path.join(THREADS_DIR, id, n)))) {
+    let st;
+    try { st = fs.statSync(file); } catch { continue; }
+    if (seen.get(file) === st.mtimeMs) continue;
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      const clean = redact(text);
+      if (clean !== text) { fs.writeFileSync(file, clean); changed += 1; }
+      seen.set(file, fs.statSync(file).mtimeMs);
+    } catch { /* the next save looks again */ }
+  }
+  if (changed) log(`app data: a secret value in ${changed} thread file(s) was replaced by its placeholder before saving`);
+  return changed;
+}
+
 async function commitLocal(reason) {
+  await redactMessages().catch((err) => log(`app data: redacting secrets failed: ${err.message}`));
   await whenUnlocked(() => git(DATA_DIR, ['add', '-A']));
   if (await gitOk(DATA_DIR, ['diff', '--cached', '--quiet'])) return false;
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');

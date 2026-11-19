@@ -24,6 +24,7 @@ import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
 import { lastThreadOn } from './threadexport.js';
 import * as repos from './repos.js';
+import * as secrets from './secrets.js';
 import * as repair from './repair.js';
 import * as ship from './ship.js';
 import { piShell } from './pi.js';
@@ -385,6 +386,18 @@ async function runTurn(threadId, prompt) {
     return `Shown to Florian as "${path.relative(artifactsDir, target).split(path.sep).join('/')}".`;
   };
 
+  // use_document: one of his encrypted documents, decrypted onto the workbench for a
+  // script; the copy goes when the turn ends (see the finally below).
+  const decryptedDir = path.join(workDir, 'decrypted');
+  const useDocument = async ({ path: given }) => {
+    const doc = await secrets.decryptDocument(String(given || ''));
+    if (!doc) throw new Error(`There is no encrypted document "${given}" in the vault's Files/ folder.`);
+    fs.mkdirSync(decryptedDir, { recursive: true });
+    const target = path.join(decryptedDir, doc.name);
+    fs.writeFileSync(target, doc.data, { mode: 0o600 });
+    return `Decrypted to ${target}. It is deleted when this turn ends.`;
+  };
+
   // Claude starts a spin-off when Florian asks for one in his message: a new thread that
   // begins as a copy of this one and works on the task by itself.
   let spun = 0;
@@ -448,6 +461,7 @@ async function runTurn(threadId, prompt) {
   try {
     activity('Getting the vault up to date');
     await brain.refresh();
+    await secrets.refreshSecrets();
     // A project renamed in the vault keeps its threads, this one included.
     try { followRenames(); } catch { /* the thread runs without it */ }
     // The project's repo, once: after that the thread's own choice counts.
@@ -482,6 +496,9 @@ async function runTurn(threadId, prompt) {
       fake: config.fake,
       onEvent,
       spinOff,
+      // His secrets reach a script on the workbench as APP_SECRET_<NAME>, and his
+      // encrypted documents through use_document. Only when this computer has the key.
+      ...(secrets.secretsEnabled() ? { secretsKey: threadId, useDocument } : {}),
       mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer({
         // An invitation went out to other people: the thread says so, for him and for the brain update.
         onInvite: ({ title, start, invited }) => store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude added "${title}" (${String(start).slice(0, 16).replace('T', ' ')}) to the calendar on ${dateTimeDMY(Date.now())}, and Google sent an invitation to: ${invited.join(', ')}.]` }),
@@ -561,6 +578,9 @@ async function runTurn(threadId, prompt) {
       if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
     }
   } finally {
+    // What a turn decrypted is gone once it ends.
+    secrets.dropEnvFile(threadId);
+    try { fs.rmSync(decryptedDir, { recursive: true, force: true }); } catch { /* next turn */ }
     // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});

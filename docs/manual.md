@@ -178,6 +178,15 @@ Any thread can work in any of your GitHub repos: from the project's `repo:` line
 
 A thread without a repo can run scripts in a workbench of its own (`threads/<id>/work/`): filling a PDF form, reading or editing a Word or Excel file, converting a file. Every command has to start with `cd` into that folder, and git is refused. Only what Claude hands over (with its `show_file` tool) appears in the thread; the workbench itself is never saved. `artifactsShell: false` turns this off.
 
+## Secrets
+
+The brain keeps high-risk data only encrypted with age: `Core/Secrets.md.age` (one `name: value` line per secret) and documents in `Files/` with `.age` added to their names. The app is the only thing with the key: `secretsKey` in config.json is the path to an age identity file (from `age-keygen`), outside the data folder (a key inside it is refused, and `*.agekey` is never saved). Without it, secrets are off.
+
+- Claude writes `{{secret:name}}` where a value belongs. The app fills it in only at the last step: Copy, Download, Open in app, Put in Gmail and Send. The view in the app keeps the placeholder. A mail with a placeholder this computer cannot fill is not sent.
+- A script on a thread's workbench gets the values as `APP_SECRET_<NAME>` (only that command, through a file in the system's temp folder that goes when the turn ends). An `attach: Files/….age` line sends the decrypted document; the `use_document` tool decrypts one onto the workbench for a script, also only until the turn ends.
+- What the app writes elsewhere has every known value replaced by its placeholder: the thread files in the brain's `Threads/`, the conversation files saved to the data repo, and, as a last check, any text file a brain update commits (its report names the file).
+- Not covered: a binary file a script made with a value in it (a filled PDF) is saved like any other artifact. Claude can see a value if a script prints it.
+
 ## Video Kit
 
 Video Kit, the player for your videos' scripts, versions and comments (repo `app-ytvideo-kit`), starts with the app on http://localhost:4400 and starts again if it stops; **Video Kit** in the top bar opens it. It runs from a copy of its own that always follows GitHub's main: every three minutes the app looks for a new version and, if there is one, starts Video Kit again on it, so a change merged into `app-ytvideo-kit` is live within minutes without restarting the app. It shows every `ytvideo-*` repo of yours: the app clones the ones not here yet, and keeps the copies no thread is working in on main and up to date (every ten minutes, and when Video Kit opens a video). What you type there (scripts, comments) is saved through the app: committed onto main and pushed, after the thread working in that repo, if any, is done. Renders and recordings are not in git; they stay in the copy on this computer. Turned off with `"videoKit": { "enabled": false }` in config.json; another port with `"port"`.
@@ -308,6 +317,7 @@ A computer that starts with an empty data folder takes over the saved state. Two
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
 | `google` | empty | Client id and secret of your Google Cloud project ([google.md](google.md)). |
 | `github` | owner `fburgerdev`, no token | For renaming and creating repos; the token only if git's own does not work ([repos.md](repos.md)). |
+| `secretsKey` | `""` | The age identity file that decrypts the brain's secrets. Outside the data folder. Empty: secrets are off. See "Secrets". |
 | `artifactsShell` | `true` | Whether a thread without a repo may run scripts on its workbench. It is a rule the app checks, not a sandbox: a script can still reach other folders on the computer. |
 | `threadShell` | `false` | Whether Claude may run shell commands in threads outside a repo. Once a thread has opened a repo, it can always run them there; push, branch switching and destructive git commands are refused. |
 | `autoPush`, `autoMerge` | `true`, `true` | Whether a thread's branch is pushed when its turn ends, and then merged into main once the repo's tests pass (or at once if it has none). |

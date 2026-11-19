@@ -2,6 +2,7 @@
 // Bound to this computer only (127.0.0.1); nothing here is reachable from outside.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import express from 'express';
@@ -36,6 +37,7 @@ import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
 import { parseMail, closesOnSend } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import * as drafts from './drafts.js';
+import * as secrets from './secrets.js';
 import { dateDMY, dateTimeDMY, readPrompt, todayLine } from './util.js';
 import { answerCall, attachVoice, voiceStatus, words as voiceWords } from './voice.js';
 import { ROOT } from './util.js';
@@ -45,6 +47,7 @@ const wantsOpen = process.argv.includes('--open');
 const url = `http://localhost:${config.port}`;
 
 brain.initBrain(config);
+secrets.initSecrets(config);
 repos.initRepos(config);
 runner.initRunner(config);
 extraction.initExtraction(config);
@@ -726,9 +729,45 @@ app.get('/api/threads/:id/artifact', (req, res) => {
   // A page Claude wrote is shown, but boxed in: it cannot reach this app's API.
   if (ext !== '.pdf') res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-popups');
   res.setHeader('Cache-Control', 'no-store');
-  if (req.query.download) res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name))}`);
+  if (req.query.download) {
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name))}`);
+    // A download is the last step: its placeholders are filled in.
+    if (FILLABLE.test(name) && fromPage(req)) {
+      const text = fs.readFileSync(file, 'utf8');
+      if (secrets.hasPlaceholder(text)) return res.send(secrets.fill(text));
+    }
+  }
   fs.createReadStream(file).pipe(res);
 });
+
+// ---------- secrets: placeholders filled in at the last step ----------
+//
+// Claude writes {{secret:name}} where a value belongs; only Florian's own actions in the
+// page (copying, downloading, opening, Gmail) get the values. Those come from the page
+// itself: a browser marks its own requests "same-origin", a script on this computer
+// (a thread's shell, say) does not.
+const FILLABLE = /\.(md|txt|csv|json|html?)$/i;
+const fromPage = (req) => req.headers['sec-fetch-site'] === 'same-origin';
+
+app.post('/api/fill', async (req, res) => {
+  if (!fromPage(req)) return res.status(403).json({ error: 'Only the app\'s own page can fill in secrets.' });
+  await secrets.refreshSecrets();
+  const text = String(req.body?.text ?? '');
+  res.json({ text: secrets.fill(text) });
+});
+
+// A filled copy of a text file, for a program on this computer to open. It is removed
+// again after a while; the program has read it by then.
+function filledCopy(file) {
+  if (!FILLABLE.test(file)) return file;
+  const text = fs.readFileSync(file, 'utf8');
+  if (!secrets.hasPlaceholder(text)) return file;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-open-'));
+  const copy = path.join(dir, path.basename(file));
+  fs.writeFileSync(copy, secrets.fill(text), { mode: 0o600 });
+  setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 10 * 60_000).unref();
+  return copy;
+}
 
 function openWithSystem(file, reveal) {
   if (process.platform === 'win32') {
@@ -740,13 +779,15 @@ function openWithSystem(file, reveal) {
   }
 }
 
-app.post('/api/threads/:id/artifact/open', (req, res) => {
+app.post('/api/threads/:id/artifact/open', async (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   if (!isLocal(req)) return res.status(409).json({ error: 'The app runs on another computer, so it cannot open a program on this one. Use Download.' });
   const file = store.artifactLivePath(thread.id, String(req.body.name || ''));
   if (!file) return res.status(404).json({ error: 'That file is no longer in the thread\'s folder.' });
-  openWithSystem(file, Boolean(req.body.reveal));
+  const reveal = Boolean(req.body.reveal);
+  if (!reveal) await secrets.refreshSecrets();
+  openWithSystem(reveal || !fromPage(req) ? file : filledCopy(file), reveal);
   res.json({ ok: true });
 });
 
@@ -776,47 +817,64 @@ const fakeGmail = () => new Promise((resolve) => { setTimeout(resolve, 25); });
 // in the thread, a file Florian attached to a message, or a document in the vault's
 // Files/ folder. A name that leads nowhere stops the mail, so nothing goes out without a
 // file he expects to be on it.
+// A document kept encrypted in Files/ (`Files/X.pdf.age`, named with or without `.age`)
+// is decrypted into memory for the mail and goes out as X.pdf.
 const MAX_ATTACHED = 15 * 1024 * 1024;
-function attachedFiles(threadId, names = []) {
+async function attachedFiles(threadId, names = []) {
   const files = [];
   let total = 0;
   for (const given of names) {
     const name = String(given).trim();
     let file = null;
+    let doc = null;
     if (/^Files\//i.test(name)) {
       const root = path.join(config.brainDir, 'Files');
       const full = path.resolve(root, name.slice(6));
       const rel = path.relative(root, full);
-      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(full)) file = full;
+      const plain = rel && !rel.startsWith('..') && !path.isAbsolute(rel) && fs.existsSync(full) && !/\.age$/i.test(full);
+      if (plain) file = full;
+      else if (secrets.encryptedDocPath(name)) {
+        try { doc = await secrets.decryptDocument(name); } catch (err) { throw new Error(`The attachment "${name}" could not be decrypted: ${err.message}`); }
+      } else if (/\.age$/i.test(name) && fs.existsSync(full)) throw new Error(`The attachment "${name}" is encrypted, and this computer has no key for it (secretsKey in config.json).`);
     } else file = store.artifactLivePath(threadId, name) || store.uploadPath(threadId, name);
-    if (!file || !fs.statSync(file).isFile()) throw new Error(`The attachment "${name}" is not among this thread's files. Take the line out of the mail, or ask Claude to put the file there.`);
-    const data = fs.readFileSync(file);
+    if (!doc && (!file || !fs.statSync(file).isFile())) throw new Error(`The attachment "${name}" is not among this thread's files. Take the line out of the mail, or ask Claude to put the file there.`);
+    const data = doc ? doc.data : fs.readFileSync(file);
     total += data.length;
     if (total > MAX_ATTACHED) throw new Error('The attachments are larger than 15 MB together. Send a link instead, or fewer files.');
-    files.push({ name: path.basename(file), data });
+    files.push({ name: doc ? doc.name : path.basename(file), data });
   }
   return files;
 }
 
-function mailFor(req, res) {
+// `mail` is what goes to Gmail, with its placeholders filled in; `shown` is the same mail
+// as the card has it, for the note in the thread, which never holds a value.
+async function mailFor(req, res) {
   const thread = need(req, res);
   if (!thread) return null;
   const name = String(req.body.name || '');
   const key = `${thread.id}\n${name}`;
   if (mailBusy.has(key)) { res.status(409).json({ error: 'This mail is already on its way to Gmail.' }); return null; }
   const info = store.listArtifacts(thread.id).find((a) => a.name === name);
-  const mail = info ? parseMail(store.readArtifactText(thread.id, name)) : null;
-  if (!mail) { res.status(404).json({ error: 'That file is not a mail.' }); return null; }
+  const raw = info ? store.readArtifactText(thread.id, name) : null;
+  const shown = info ? parseMail(raw) : null;
+  if (!shown) { res.status(404).json({ error: 'That file is not a mail.' }); return null; }
   if (info.mail?.sentAt) { res.status(409).json({ error: 'This mail has already been sent.' }); return null; }
   if (!config.fake && !google.googleConnected()) { res.status(409).json({ error: 'Gmail is not connected. Connect it under Connections.' }); return null; }
-  let attachments;
-  try { attachments = attachedFiles(thread.id, mail.attach); } catch (err) { res.status(400).json({ error: err.message }); return null; }
   mailBusy.add(key);
-  return { thread, name, info, mail: { ...mail, attachments }, version: info.versions.at(-1).v, release: () => mailBusy.delete(key) };
+  const release = () => mailBusy.delete(key);
+  let attachments;
+  let mail;
+  try {
+    await secrets.refreshSecrets();
+    mail = parseMail(secrets.fill(raw)) || shown;
+    if (secrets.hasPlaceholder(`${mail.to}\n${mail.subject}\n${mail.body}`)) throw new Error(`The mail still has a placeholder for a secret this computer does not know (${/\{\{\s*secret:([A-Za-z0-9_]+)/.exec(`${mail.to}\n${mail.subject}\n${mail.body}`)[1]}). Put the value in, or take the placeholder out.`);
+    attachments = await attachedFiles(thread.id, mail.attach);
+  } catch (err) { release(); res.status(400).json({ error: err.message }); return null; }
+  return { thread, name, info, shown, mail: { ...mail, attachments }, version: info.versions.at(-1).v, release };
 }
 
 app.post('/api/threads/:id/mail/draft', async (req, res) => {
-  const m = mailFor(req, res);
+  const m = await mailFor(req, res);
   if (!m) return;
   try {
     if (config.fake) await fakeGmail();
@@ -832,7 +890,7 @@ app.post('/api/threads/:id/mail/draft', async (req, res) => {
 });
 
 app.post('/api/threads/:id/mail/send', async (req, res) => {
-  const m = mailFor(req, res);
+  const m = await mailFor(req, res);
   if (!m) return;
   if (!m.mail.to.trim()) { m.release(); return res.status(400).json({ error: 'The mail has no recipient.' }); }
   try {
@@ -847,7 +905,7 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
       store.appendMessage(m.thread.id, {
         role: 'user',
         event: true,
-        text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.mail.to}. Subject: ${m.mail.subject}.${m.mail.attachments.length ? ` Attached: ${m.mail.attachments.map((f) => f.name).join(', ')}.` : ''}]`,
+        text: `[Florian sent the mail "${m.name}" (version ${m.version}) from the app on ${dateTimeDMY(sentAt)}. To: ${m.shown.to}. Subject: ${m.shown.subject}.${m.mail.attachments.length ? ` Attached: ${m.mail.attachments.map((f) => f.name).join(', ')}.` : ''}]`,
       });
     }
     // A reply sent from a mail thread finishes that thread: it leaves the inbox, as if he

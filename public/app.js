@@ -141,6 +141,23 @@ async function api(method, path, body) {
   return data;
 }
 
+// Copies text with its {{secret:name}} placeholders filled in by the app: the values are
+// only ever put in at this last step. The clipboard is written while the click still
+// counts (Safari asks for that), with the filled text arriving a moment later.
+const SECRET_PLACEHOLDER = /\{\{\s*secret:[A-Za-z0-9_]+\s*\}\}/;
+async function copyFilled(text) {
+  const plain = String(text ?? '');
+  if (!SECRET_PLACEHOLDER.test(plain)) return navigator.clipboard.writeText(plain);
+  const filled = api('POST', '/api/fill', { text: plain }).then((d) => d.text ?? plain);
+  if (window.ClipboardItem) {
+    try {
+      const blob = filled.then((t) => new Blob([t], { type: 'text/plain' }));
+      return await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+    } catch { /* below */ }
+  }
+  return navigator.clipboard.writeText(await filled);
+}
+
 let toastTimer;
 function toast(text) {
   els.toast.textContent = text;
@@ -1097,7 +1114,7 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
       h('button', { class: 'btn', type: 'button', disabled: off, title: hint, onclick: () => act('draft', m.draftId ? 'The Gmail draft is updated.' : 'It is in your Gmail drafts.') },
         m.draftId ? (inGmail ? 'In Gmail drafts ✓' : 'Update Gmail draft') : 'Put in Gmail'),
       h('button', { class: 'btn', type: 'button', disabled: off, title: hint, onclick: () => drawActions(true) }, 'Send…'),
-      h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => { await navigator.clipboard.writeText(mail.body); toast('Copied.'); } }, 'Copy text'),
+      h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => { try { await copyFilled(mail.body); toast('Copied.'); } catch (err) { toast(err.message || 'Could not copy.'); } } }, 'Copy text'),
       info && info.versions.length > 1 ? h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => openPanel({ kind: 'artifact', threadId, name, diff: true }) }, `${info.versions.length} versions`) : null,
       status,
     ].filter(Boolean));
@@ -1716,7 +1733,7 @@ async function renderCard(t) {
     try {
       await flush();
       if (outcome === 'accepted' && !work) {
-        await navigator.clipboard.writeText(area.value).catch(() => {});
+        await copyFilled(area.value).catch(() => {});
         if (card.link) window.open(card.link, '_blank', 'noopener');
       }
       const out = await api('POST', `/api/threads/${t.id}/card`, { outcome, reason: reason.value });
@@ -2242,7 +2259,7 @@ async function showArtifact(panel) {
   }
   let text = null;
   if (isText) {
-    tools.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => { await navigator.clipboard.writeText(text ?? ''); toast('Copied.'); } }, 'Copy'));
+    tools.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: async () => { try { await copyFilled(text ?? ''); toast('Copied.'); } catch (err) { toast(err.message || 'Could not copy.'); } } }, 'Copy'));
   }
   if (S.config.local) tools.push(h('button', { class: 'btn btn-quiet', type: 'button', title: 'Open with the program your computer uses for this kind of file', onclick: () => api('POST', `/api/threads/${threadId}/artifact/open`, { name }).catch((e) => toast(e.message)) }, 'Open in app'));
   tools.push(h('a', { class: 'btn btn-quiet', href: `${url}&download=1` }, 'Download'));
@@ -2330,6 +2347,7 @@ function showRun(run) {
     }
     if (run.replyThreads?.length) body.append(h('p', { class: 'panel-note' }, `${run.replyThreads.length} ${run.replyThreads.length === 1 ? 'mail needs' : 'mails need'} an answer. Claude is drafting; ${run.replyThreads.length === 1 ? 'it appears' : 'they appear'} in the queue.`));
     if (run.restored?.length) body.append(h('p', { class: 'panel-note' }, `Left untouched on purpose: ${run.restored.join(', ')}.`));
+    if (run.redacted?.length) body.append(h('p', { class: 'panel-note' }, `A secret value was in ${run.redacted.join(', ')}; it went in as its placeholder, not as the value.`));
   }
   panelFrame(`Brain update, ${stamp(run.finishedAt)}`, [], body);
 }
@@ -3049,7 +3067,7 @@ document.addEventListener('click', (e) => {
   }
   const copy = e.target.closest('.code-copy');
   if (copy) {
-    navigator.clipboard.writeText(copy.parentElement.querySelector('code').textContent).then(() => {
+    copyFilled(copy.parentElement.querySelector('code').textContent).then(() => {
       copy.textContent = 'Copied';
       setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
     });
