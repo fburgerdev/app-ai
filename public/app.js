@@ -126,6 +126,14 @@ function grow(area) {
   area.style.height = `${area.scrollHeight + 2}px`;
 }
 
+// A text box that fits its text keeps fitting it when its column changes width (the side
+// panel opens, the window is resized): the lines wrap differently then.
+function keepGrown(area) {
+  let width = 0;
+  new ResizeObserver(() => { const w = area.clientWidth; if (w && w !== width) { width = w; grow(area); } }).observe(area);
+  return area;
+}
+
 const typing = () => {
   const a = document.activeElement;
   return a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.isContentEditable);
@@ -902,6 +910,7 @@ function mailCard(threadId, name, text, info, { onDecided, reason } = {}) {
     h('input', { type: 'text', value: mail[key], disabled: Boolean(sent), spellcheck: 'false', oninput: (e) => { mail[key] = e.target.value; changed(); } }));
   const body = h('textarea', { class: 'mail-body', rows: '4', disabled: Boolean(sent), spellcheck: 'true', oninput: (e) => { mail.body = e.target.value; grow(e.target); changed(); } });
   body.value = mail.body;
+  keepGrown(body);
   const status = h('span', { class: 'mail-status' });
   const actions = h('div', { class: 'mail-actions' });
   // The files that go along (the mail's `attach:` lines). He can take one off; adding one
@@ -1271,7 +1280,8 @@ function renderComposer() {
   els.composer.hidden = Boolean(S.pad) || t?.kind === 'card';
   // A spin-off needs a thread to start from.
   els.spin.hidden = !t;
-  els.spin.textContent = phone.matches ? 'Spin off' : 'Send into spin-off';
+  // Both wordings; the styles show the short one where the thread's column is narrow.
+  if (!els.spin.firstElementChild) els.spin.replaceChildren(h('span', { class: 'spin-long' }, 'Send into spin-off'), h('span', { class: 'spin-short' }, 'Spin off'));
   let verb = 'Send';
   if (!t) {
     els.input.placeholder = 'What should Claude work on?';
@@ -1591,7 +1601,7 @@ async function renderCard(t) {
 
   // What he wants to say about the card, for either verdict: why not, or what it got wrong.
   const reason = h('textarea', { class: 'card-reason', rows: '1', maxlength: '1000', spellcheck: 'true',
-    placeholder: 'Optional: your reason, or what is outdated here',
+    placeholder: phone.matches ? 'Optional: your reason' : 'Optional: your reason, or what is outdated here',
     title: 'Kept with your decision, and it reaches the brain with the next update',
     'aria-label': 'Your reason, optional', oninput: (e) => grow(e.target) });
   let area = null;
@@ -1612,6 +1622,7 @@ async function renderCard(t) {
     area.addEventListener('input', () => { dirty = true; grow(area); soon(); });
     bodyEl = area;
     requestAnimationFrame(() => grow(area));
+    keepGrown(area);
     if (work) {
       // A brief is read far more often than it is changed: show it formatted, and turn
       // it into the editable text on a click.
