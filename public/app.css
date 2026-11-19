@@ -131,48 +131,42 @@ kbd {
   white-space: nowrap;
 }
 
-/* Claude at work: a four-point spark that turns and breathes in the colour of where it
-   sits, with a small moon circling it. Blue in a reply, amber in the thread's status. */
+/* Claude at work: one small dot that breathes, and a thin ring that widens out of it and
+   fades. Blue in a reply, amber in the thread's status. */
 .pulse {
   --pulse-c: var(--work);
   position: relative;
   display: inline-block;
   width: 14px; height: 14px;
-  margin-right: 9px;
+  margin-right: 8px;
   flex: none;
   vertical-align: -2px;
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--pulse-c) 55%, transparent));
 }
 .status-working .pulse { --pulse-c: currentColor; }
-.pulse::before {
+.pulse::before, .pulse::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: conic-gradient(from 0deg, var(--pulse-c), color-mix(in srgb, var(--pulse-c) 45%, var(--quote)), var(--pulse-c), color-mix(in srgb, var(--pulse-c) 55%, var(--bright)), var(--pulse-c));
-  clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%);
-  animation: spark 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+  margin: auto;
+  border-radius: 50%;
+}
+.pulse::before {
+  width: 6px; height: 6px;
+  background: var(--pulse-c);
+  animation: breathe 1.8s ease-in-out infinite;
 }
 .pulse::after {
-  content: '';
-  position: absolute;
-  top: -2px; left: calc(50% - 1.5px);
-  width: 3px; height: 3px;
-  border-radius: 50%;
-  background: var(--pulse-c);
-  transform-origin: 1.5px 9px;
-  animation: orbit 1.6s linear infinite;
+  width: 14px; height: 14px;
+  border: 1.5px solid var(--pulse-c);
+  box-sizing: border-box;
+  animation: ripple 1.8s cubic-bezier(.2, .6, .35, 1) infinite;
 }
-@keyframes spark {
-  0% { transform: rotate(0deg) scale(0.74); opacity: 0.8; }
-  50% { transform: rotate(90deg) scale(1); opacity: 1; }
-  100% { transform: rotate(180deg) scale(0.74); opacity: 0.8; }
+@keyframes breathe { 50% { transform: scale(0.75); opacity: 0.7; } }
+@keyframes ripple {
+  0% { transform: scale(0.4); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 0; }
 }
-@keyframes orbit {
-  from { transform: rotate(0deg); opacity: 0.9; }
-  50% { opacity: 0.35; }
-  to { transform: rotate(360deg); opacity: 0.9; }
-}
-@media (prefers-reduced-motion: reduce) { .pulse::before, .pulse::after { animation: none; } .pulse::after { display: none; } }
+@media (prefers-reduced-motion: reduce) { .pulse::before { animation: none; } .pulse::after { display: none; } }
 
 /* ---------- frame ----------
    A top bar that is always there (inbox, mood line, talk, scratchpad, settings), and
