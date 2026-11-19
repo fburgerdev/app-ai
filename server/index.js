@@ -549,6 +549,17 @@ app.post('/api/threads/:id/pin', (req, res) => {
   res.json({ thread: store.updateThread(thread.id, pinned ? { pinned: true, pinAt: last + 1, ...(thread.state === 'done' ? { state: 'ready', queuedAt: Date.now(), archived: false, deferred: false } : {}) } : { pinned: false, queuedAt: Date.now() }) });
 });
 
+// His correction of what waits in focus: `later` true puts the thread under "waiting for
+// later", false keeps it in the queue, null takes his mark off so the app's rule decides.
+app.post('/api/threads/:id/later', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const v = req.body?.later;
+  if (v !== true && v !== false && v !== null) return res.status(400).json({ error: 'later must be true, false or null.' });
+  // undefined is dropped when the thread is written to disk and sent to the page.
+  res.json({ thread: store.updateThread(thread.id, { later: v === null ? undefined : v }) });
+});
+
 // The order he dragged the pinned threads into.
 app.post('/api/pins/order', (req, res) => {
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];

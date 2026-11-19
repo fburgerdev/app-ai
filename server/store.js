@@ -277,6 +277,14 @@ export function isAppThread(thread) {
   return Boolean(thread) && APP_KINDS.has(thread.kind) && !(thread.lastUserAt > 0);
 }
 
+// Whether a thread waits outside the queue while he focuses. His own mark wins: `later`
+// true sends any thread there (even one he wrote in), false keeps any thread in the
+// queue (even one the app started). Without a mark, the rule above decides.
+export function isLater(thread) {
+  if (!thread) return false;
+  return typeof thread.later === 'boolean' ? thread.later : isAppThread(thread);
+}
+
 // Deep work: the threads he is invested in and that take Claude long, a thinking session,
 // building in a repo, a document. They come first in the queue, so that whenever one is
 // waiting for him he answers it and it goes back to work; small things (cards, mail,

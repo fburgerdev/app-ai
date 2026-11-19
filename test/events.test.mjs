@@ -433,6 +433,31 @@ test('focus: only his own threads in the queue, no new cards, and it ends by its
   await until(async () => (await state()).queue.order.includes(card.id), 'back in the queue after focus');
 });
 
+test('"Later" corrects what waits in focus, both ways, and outlasts his writing', async () => {
+  const mine = (await call('POST', '/api/threads', { text: 'Something of mine that can wait' })).data.thread;
+  await ready(mine.id);
+  await call('POST', '/api/cards/make', {});
+  const card = await until(async () => (await state()).threads.find((t) => t.kind === 'card' && t.state === 'ready'), 'a card waiting');
+  assert.equal((await call('POST', `/api/threads/${mine.id}/later`, { later: 'yes' })).status, 400, 'only true, false or null');
+  assert.equal((await call('POST', `/api/threads/${mine.id}/later`, { later: true })).data.thread.later, true);
+  assert.equal((await call('POST', `/api/threads/${card.id}/later`, { later: false })).data.thread.later, false);
+  // In Everything the mark changes nothing.
+  await until(async () => { const o = (await state()).queue.order; return o.includes(mine.id) && o.includes(card.id); }, 'both in the queue without focus');
+  await call('PUT', '/api/settings', { focus: true });
+  const q = await until(async () => { const o = (await state()).queue.order; return !o.includes(mine.id) ? o : null; }, 'his "Later" thread out of the focus queue');
+  assert.ok(q.includes(card.id), 'the card he kept in focus stays');
+  // Writing in it again does not undo his mark.
+  await call('POST', `/api/threads/${mine.id}/messages`, { text: 'One more thing' });
+  await ready(mine.id);
+  assert.ok(!(await state()).queue.order.includes(mine.id), 'still waiting for later after he wrote');
+  // Taking the mark off gives the app's rule back.
+  const off = (await call('POST', `/api/threads/${card.id}/later`, { later: null })).data.thread;
+  assert.equal(off.later, undefined);
+  await until(async () => !(await state()).queue.order.includes(card.id), 'the card waits for later again');
+  await call('PUT', '/api/settings', { focus: false });
+  await call('POST', `/api/threads/${mine.id}/later`, { later: null });
+});
+
 test('focus ends at the next sleep time, or midnight without one', async () => {
   const { focusEnd } = await import('../server/state.js');
   const at = new Date(2026, 10, 15, 22, 30).getTime();

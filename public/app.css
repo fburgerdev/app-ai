@@ -1559,6 +1559,13 @@ a.chip:hover { border-color: var(--muted); }
 .group[data-drop="pin"].is-drop { background: rgba(245, 183, 92, 0.08); border-radius: 8px; }
 .pin-btn.is-on { color: var(--s-event); }
 
+/* "Later": his correction of what waits in Focus. Marked threads are dimmed wherever
+   they show, so the mark is visible before Focus is on. */
+.item.is-later { opacity: 0.55; }
+.item.is-later:hover, .item.is-later.is-current { opacity: 1; }
+.later-btn.is-on { color: var(--muted); }
+.coming.later.is-drop { background: rgba(245, 183, 92, 0.08); border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(245, 183, 92, 0.5); }
+
 /* ---------- Defer: it changes a lot, so it looks different and asks once more ---------- */
 #defer { color: var(--bad); }
 #defer:hover { color: var(--bad); border-color: var(--bad); }
