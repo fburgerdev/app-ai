@@ -1694,3 +1694,5 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 .progress > summary:hover { color: var(--text); }
 .progress-body { margin: 8px 0 6px 4px; padding: 2px 0 2px 14px; border-left: 1px solid var(--line); color: var(--muted); display: flex; flex-direction: column; gap: 8px; animation: swap 160ms ease-out; }
 .progress-body > * { margin: 0; }
+.progress-body :is(p, li) { font-size: 14.5px; line-height: 1.5; color: var(--muted); }
+.progress-body :is(strong, b) { color: var(--text); }
