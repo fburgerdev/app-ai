@@ -49,6 +49,7 @@ const IGNORE = [
 let config;
 let timer = null;
 let netSince = 0;
+let stalled = 0; // saves in a row in which a git step was stopped by its timeout
 let chain = Promise.resolve(); // one git operation on the data folder at a time
 const reloaders = []; // what reads its data from disk again after a merge
 const pushed = []; // told when something new went to GitHub
@@ -277,6 +278,7 @@ export function saveNow(reason = 'state') {
         status.commit = (await git(DATA_DIR, ['rev-parse', '--short', 'HEAD'])).trim();
       }
       netSince = 0;
+      stalled = 0;
       if (status.error) { status.error = ''; events.emit('connections-changed'); }
     } catch (err) {
       if (isNetworkError(err.message)) {
@@ -285,6 +287,9 @@ export function saveNow(reason = 'state') {
         if (Date.now() - netSince > 10 * 60_000 && !status.error) { status.error = 'GitHub has not been reachable for more than ten minutes. The app keeps trying to save.'; events.emit('connections-changed'); }
         return dataSyncStatus();
       }
+      // A step stopped by its timeout (the laptop slept in the middle of it) is not a
+      // failure yet: the next save does it again. Only said when it happens twice in a row.
+      if (err.timedOut && (stalled += 1) < 2) { log(`app data: ${err.message}; the next save tries again`); return dataSyncStatus(); }
       const message = `The app's state could not be saved to GitHub: ${err.message}`;
       if (status.error !== message) { status.error = message; log(message); events.emit('connections-changed'); report('saving the app\'s state', err.message); }
     }
