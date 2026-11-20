@@ -195,6 +195,17 @@ test('a git step refused because another git process holds the index runs again'
   assert.equal(calls, 2);
 });
 
+test('a git step stopped by its timeout says so, and is marked as such', async () => {
+  const { git } = await import('../server/git.js');
+  // Waits for input that never comes, as a step does that the computer slept through.
+  const err = await git(process.cwd(), ['hash-object', '--stdin'], { timeout: 300 }).then(() => null, (e) => e);
+  assert.ok(err, 'the step is stopped');
+  assert.equal(err.timedOut, true);
+  assert.match(err.message, /did not finish within/);
+  const failed = await git(process.cwd(), ['rev-parse', '--verify', 'no-such-ref']).then(() => null, (e) => e);
+  assert.equal(failed.timedOut, false, 'a step git itself refused is a failure');
+});
+
 test('pi_shell: what could break the Pi or cut off the way in needs his OK first', async () => {
   const { needsConsent } = await import('../server/pi.js');
   for (const cmd of ['sudo reboot', 'rm -rf /', 'rm -rf ~/', 'sudo rm -rf /etc', 'sudo mkfs.ext4 /dev/sda1', 'dd if=x.img of=/dev/mmcblk0', 'sudo tailscale down', 'sudo systemctl stop ssh', 'sudo shutdown -h now']) {
