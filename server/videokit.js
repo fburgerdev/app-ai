@@ -41,6 +41,7 @@ export const videoKitUrl = () => `http://localhost:${kitPort()}`;
 
 export function initVideoKit(cfg) {
   config = cfg;
+  repos.onBeforeOpen((full, title) => handover(full, title));
   if (config.fake || config.videoKit?.enabled === false) return;
   // A little after the start, so cloning does not slow the app's own start down.
   setTimeout(() => { start().catch((err) => log(`video kit: could not start: ${err.message}`)); }, 3000).unref?.();
@@ -163,6 +164,47 @@ export async function refresh(full) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Florian, 20-11-2026: "when claude edits, its one diff state to save, but when i edit dont save
+// every single time i do a change, only, the moment claude steps in again, take a snapshot", and
+// "claude can lock the editing for a moment while it is changing things and then release".
+// So Video Kit keeps what he types and saves nothing as he types. When a thread opens a video repo,
+// before it gets its branch, the app asks Video Kit for it (POST /api/handover): Video Kit saves
+// all of it as one commit (a save with handover: true, let through although the thread holds the
+// repo already) and locks the writing; it asks GET /api/videokit/held until the thread is done.
+const handingOver = new Set();
+const lower = (full) => String(full || '').toLowerCase();
+export const handingOverTo = (full) => handingOver.has(lower(full));
+
+// Who holds a video repo, for Video Kit's lock: { held: title or null, handover: true }.
+export function held(full) {
+  if (!isVideoRepo(full)) throw new Error(`${full} is not a video repo`);
+  return { held: repos.holder(full) ? repos.holderTitle(full) : null, handover: true };
+}
+
+// Before a thread starts in a video repo. Never throws: without Video Kit, nothing is kept there.
+export async function handover(full, by) {
+  if (!isVideoRepo(full) || !config || config.videoKit?.enabled === false) return null;
+  if (config.fake && !config.videoKit?.port) return null;   // the tests' app: no Video Kit of this computer's
+  handingOver.add(lower(full));
+  try {
+    const r = await fetch(`http://127.0.0.1:${kitPort()}/api/handover`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: full, by }),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (r.status === 404) return null;                       // a Video Kit from before snapshots
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { log(`video kit: handing ${full} over to "${by}" failed: ${j.error || r.status}`); return null; }
+    if (j.saved?.length) log(`video kit: Florian's edits in ${full} saved as one commit before "${by}" (${j.commit || 'no commit'})`);
+    if (j.error) log(`video kit: Florian's edits in ${full} could not be saved before "${by}", they stay kept in Video Kit: ${j.error}`);
+    return j;
+  } catch (err) {
+    if (!/ECONNREFUSED|fetch failed/i.test(`${err.message} ${err.cause?.code || ''}`)) log(`video kit: handing ${full} over to "${by}": ${err.message}`);
+    return null;
+  } finally {
+    handingOver.delete(lower(full));
+  }
+}
+
 // What Video Kit typed was typed against the copy as it was when the save was asked for. If one of
 // its files changed on main since (a thread merged while this waited, or GitHub moved on before a
 // push went through), writing it whole would take that change out again: on 19-11-2026 a save of
@@ -200,7 +242,7 @@ async function changedSince(dir, from, to, list) {
 // deletes the file. `from` is the commit Video Kit read them against; left out, the commit the
 // copy stood at when the save came in. A file changed on main since then is not written over
 // (StaleError).
-export async function save(full, files, message, { waitMs = 30 * 60_000, from = null } = {}) {
+export async function save(full, files, message, { waitMs = 30 * 60_000, from = null, handover: handing = false } = {}) {
   if (!isVideoRepo(full)) throw new Error(`${full} is not a video repo`);
   const list = (files || []).map((f) => ({ path: String(f?.path || '').replace(/\\/g, '/'), content: f?.content ?? null }));
   for (const f of list) {
@@ -210,9 +252,10 @@ export async function save(full, files, message, { waitMs = 30 * 60_000, from = 
   if (!list.length) return { commit: null };
   if (from !== null && !/^[0-9a-f]{4,40}$/i.test(String(from))) throw new Error('from is not a commit');
   const seen = from || await standing(repos.dirOf(full)).catch(() => null);
-  // A thread's turn can run for a while; its work goes first, then this.
+  // A thread's turn can run for a while; its work goes first, then this. Not so for what Video
+  // Kit hands over while a thread is being given the repo: that goes first, so the thread starts from it.
   const until = Date.now() + waitMs;
-  while (repos.holder(full)) {
+  while (repos.holder(full) && !(handing && handingOverTo(full))) {
     if (Date.now() > until) throw new Error(`"${repos.holderTitle(full)}" is working in ${full}; saving waits until it is done`);
     await sleep(2000);
   }
