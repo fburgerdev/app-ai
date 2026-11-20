@@ -192,10 +192,18 @@ async function commitLeftovers(dir, message) {
   return true;
 }
 
+// Something that has to happen before a thread starts in a repo, outside the repo's queue:
+// Video Kit hands over what Florian typed in a video repo, as one commit (server/videokit.js).
+let beforeOpen = null;
+export const onBeforeOpen = (fn) => { beforeOpen = fn; };
+
 // Opens the repo for a thread that holds it: up to date, on the thread's own branch.
 export async function openFor(threadId, full) {
   const thread = store.getThread(threadId);
-  const { dir, base } = await ensure(full);
+  let { dir, base } = await ensure(full);
+  if (beforeOpen && (await beforeOpen(full, thread?.title || '').catch(() => null))?.saved?.length) {
+    ({ dir, base } = await ensure(full));   // main moved on with that commit: the thread starts from it
+  }
   return serial(full, async () => {
     // Whatever the thread before left behind goes onto its own branch.
     const on = await currentBranch(dir);

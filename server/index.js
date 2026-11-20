@@ -207,8 +207,11 @@ app.get('/api/videokit', (req, res) => res.json({ url: videokit.videoKitUrl() })
 app.post('/api/videokit/refresh', express.json(), async (req, res) => {
   try { res.json(await videokit.refresh(repos.repoName(req.body?.repo))); } catch (err) { res.status(400).json({ error: err.message }); }
 });
+app.get('/api/videokit/held', (req, res) => {
+  try { res.json(videokit.held(repos.repoName(req.query.repo))); } catch (err) { res.status(400).json({ error: err.message }); }
+});
 app.post('/api/videokit/save', express.json({ limit: '5mb' }), async (req, res) => {
-  try { res.json(await videokit.save(repos.repoName(req.body?.repo), req.body?.files, String(req.body?.message || '').slice(0, 200), { from: req.body?.from ?? null })); } catch (err) { res.status(err.stale ? 409 : 400).json({ error: err.message, ...(err.stale ? { stale: true, paths: err.paths } : {}) }); }
+  try { res.json(await videokit.save(repos.repoName(req.body?.repo), req.body?.files, String(req.body?.message || '').slice(0, 200), { from: req.body?.from ?? null, handover: req.body?.handover === true })); } catch (err) { res.status(err.stale ? 409 : 400).json({ error: err.message, ...(err.stale ? { stale: true, paths: err.paths } : {}) }); }
 });
 app.use('/api', (req, res, next) => (link.isRemote() ? link.passOn(req, res) : next()));
 

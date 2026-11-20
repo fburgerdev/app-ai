@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,13 +39,32 @@ function bare(name, files) {
 const vault = bare('brain', { 'CLAUDE.md': '# vault\n', 'Claude/Instructions.md': '# Instructions\n' });
 const video = bare('ytvideo-demo', { 'writing/script/1 Start.md': '# Start\n\nHello.\n' });
 
+// A stand-in Video Kit: asked for what Florian kept when a thread opens a video repo, it hands it
+// over the way the real one does (a save with handover: true) and notes who held the repo meanwhile.
+const kit = { kept: null, asked: [] };
+const kitServer = http.createServer((req, res) => {
+  let b = ''; req.on('data', (c) => { b += c; });
+  req.on('end', async () => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url !== '/api/handover') { res.statusCode = 404; return res.end('{}'); }
+    const ask = JSON.parse(b);
+    const held = await (await fetch(`${base}/api/videokit/held?repo=${encodeURIComponent(ask.repo)}`)).json();
+    kit.asked.push({ ...ask, held });
+    if (!kit.kept) return res.end(JSON.stringify({ saved: [], commit: null }));
+    const r = await fetch(`${base}/api/videokit/save`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: ask.repo, message: `Video Kit: script (1 Start) (before “${ask.by}”)`, files: kit.kept, handover: true }) });
+    const j = await r.json();
+    res.end(JSON.stringify(r.ok ? { saved: kit.kept.map((f) => f.path), commit: j.commit } : { saved: [], error: j.error }));
+  });
+});
+await new Promise((r) => kitServer.listen(0, '127.0.0.1', r));
+
 fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false }, autoMerge: false }));
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false }, autoMerge: false, videoKit: { port: kitServer.address().port } }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
-  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_DATA: data, APP_AI_FAKE_GITHUB: '1' },
+  env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_FAKE_GITHUB: '1' },
   stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), fs.openSync(path.join(dir, 'server.log'), 'a')],
 });
-test.after(() => cleanup(dir, [server]));
+test.after(() => { kitServer.close(); return cleanup(dir, [server]); });
 
 const post = async (url, body) => {
   const res = await fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -140,4 +160,39 @@ test('Video Kit runs from its own copy of main, which follows GitHub', async () 
   assert.equal(kitFile(), '// v2');
   assert.equal(fs.existsSync(path.join(run, 'stray.txt')), false);
   assert.ok(remote);
+});
+
+// Florian, 20-11-2026: "when i edit dont save every single time i do a change, only, the moment
+// claude steps in again, take a snapshot", and the writing waits while Claude works.
+test('a thread opening a video repo first gets what Florian kept in Video Kit, as one commit, and starts from it', async () => {
+  await until(async () => { try { return (await fetch(`${base}/api/videokit`)).ok; } catch { return false; } }, 'server up');
+  const file = 'writing/script/1 Start.md';
+  const free = await (await fetch(`${base}/api/videokit/held?repo=ytvideo-demo`)).json();
+  assert.deepEqual(free, { held: null, handover: true });
+  assert.equal((await fetch(`${base}/api/videokit/held?repo=brain`)).status, 400);
+
+  kit.kept = [{ path: file, content: '# Start\n\nKept in Video Kit until Claude stepped in.\n' }];
+  const count = () => Number(execFileSync('git', ['--git-dir', video, 'rev-list', '--count', 'main'], { encoding: 'utf8' }).trim());
+  const commitsBefore = count();
+  const made = (await post('/api/threads', { text: 'Tighten the opening' })).data.thread;
+  const thread = async () => (await fetch(`${base}/api/threads/${made.id}`)).json();
+  await until(async () => (await thread()).thread.state === 'ready', 'first answer');
+  const before = (await thread()).messages.filter((m) => m.role === 'assistant').length;
+  await post(`/api/threads/${made.id}/messages`, { text: 'REPO-TEST=ytvideo-demo' });
+  const done = await until(async () => { const t = await thread(); return t.thread.state === 'ready' && t.messages.filter((m) => m.role === 'assistant').length > before ? t : null; }, 'the turn in the video repo');
+
+  // asked once, while the thread already held the repo, and the save went through anyway
+  assert.equal(kit.asked.length, 1);
+  assert.equal(kit.asked[0].repo, 'fburgerdev/ytvideo-demo');
+  assert.ok(kit.asked[0].held.held, 'Video Kit sees the thread holding the repo, so it locks');
+  assert.equal(kit.asked[0].by, kit.asked[0].held.held);
+  const subjects = execFileSync('git', ['--git-dir', video, 'log', '--format=%s', 'main'], { encoding: 'utf8' }).split('\n');
+  assert.equal(count(), commitsBefore + 1, 'one commit');
+  assert.match(subjects[0], /^Video Kit: script \(1 Start\) \(before “/);
+  assert.match(onMain(file), /Kept in Video Kit/);
+  // the thread's branch starts from it
+  const branch = done.thread.repoBranch;
+  assert.match(branch, /^claude\//);
+  assert.match(execFileSync('git', ['--git-dir', video, 'show', `${branch}:${file}`], { encoding: 'utf8' }), /Kept in Video Kit/);
+  assert.deepEqual(await (await fetch(`${base}/api/videokit/held?repo=ytvideo-demo`)).json(), { held: null, handover: true }, 'free again after the turn');
 });
