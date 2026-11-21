@@ -7,7 +7,7 @@ import { parseMail, serializeMail } from '/mail.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  app: $('app'), lists: $('rail-lists'), brain: $('brain'), head: $('thread-head'),
+  app: $('app'), lists: $('rail-lists'), paneQueue: $('pane-queue'), paneFolders: $('pane-folders'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
   send: $('send'), spin: $('spin'), sendDone: $('send-done'), defer: $('defer'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   tier: $('tier'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
@@ -683,7 +683,14 @@ function slideNodes() {
   const slides = shownSlides();
   if (!slides.some((s) => s.key === tree.slide)) tree.slide = 'projects';
   const content = { projects: nodes.first, people: nodes.second, someday: nodes.third };
-  const go = (i) => { tree.slide = slides[i].key; const box = els.tree.querySelector('.slides'); box?.scrollTo({ left: i * box.clientWidth, behavior: reducedMotion.matches ? 'auto' : 'smooth' }); markSlide(); };
+  // A click slides straight there; the slides passed on the way do not light their tab.
+  let heading = null;
+  const go = (i) => {
+    tree.slide = slides[i].key;
+    const box = els.tree.querySelector('.slides');
+    if (box) { heading = { left: i * box.clientWidth, until: Date.now() + 900 }; box.scrollTo({ left: heading.left, behavior: reducedMotion.matches ? 'auto' : 'smooth' }); }
+    markSlide();
+  };
   const nav = slides.length > 1
     ? h('div', { class: 'slide-nav', role: 'tablist' }, ...slides.map((s, i) => h('button', {
       class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
@@ -691,6 +698,10 @@ function slideNodes() {
     : h('div', { class: 'slide-nav is-single' }, h('span', { class: 'slide-title' }, slides[0].label));
   const box = h('div', { class: 'slides' }, ...slides.map((s) => h('div', { class: 'slide' }, ...content[s.key])));
   box.addEventListener('scroll', () => {
+    if (heading) {
+      if (Math.abs(box.scrollLeft - heading.left) > 2 && Date.now() < heading.until) return;
+      heading = null;
+    }
     const i = Math.round(box.scrollLeft / Math.max(1, box.clientWidth));
     if (slides[i] && slides[i].key !== tree.slide) { tree.slide = slides[i].key; markSlide(); }
   }, { passive: true });
@@ -713,8 +724,49 @@ function renderTree(force = false) {
       box.scrollLeft = slideIndex() * box.clientWidth;
       box.querySelectorAll('.slide').forEach((el, i) => { el.scrollTop = tops[i] || 0; });
     }
-  } else if (S.tab === 'projects') renderRail();
+  } else renderFolders();
 }
+
+// Without the right bar, its outline is the drawer's second pane, beside the inbox. Both
+// are drawn all the time, so a sideways swipe shows the other one at once and it snaps.
+function drawerTree() {
+  const n = treeNodes();
+  if (Array.isArray(n)) return n;
+  return [...n.first,
+    ...(partHidden('tree-people') ? [] : n.second),
+    ...(partHidden('tree-someday') ? [] : somedayNodes(S.projects?.someday || [], true))];
+}
+function renderFolders() {
+  if (drag?.active) { drag.stale = true; return; }
+  const has = !treeShown();
+  els.paneFolders.hidden = !has;
+  if (!has) {
+    els.paneFolders.replaceChildren();
+    if (S.tab !== 'queue') S.tab = 'queue';
+    markTabs();
+    return;
+  }
+  els.paneFolders.replaceChildren(h('div', { class: 'tree' }, ...drawerTree()));
+}
+function markTabs() {
+  const folders = S.tab === 'projects' && !treeShown();
+  els.tabQueue.classList.toggle('is-on', !folders);
+  els.tabProjects.classList.toggle('is-on', folders);
+  els.tabQueue.setAttribute('aria-selected', String(!folders));
+  els.tabProjects.setAttribute('aria-selected', String(folders));
+}
+// Which pane is in view decides the tab, so a swipe moves the underline with it.
+// While a tab click slides it there, the panes passed on the way do not count.
+let tabSlide = null;
+els.lists.addEventListener('scroll', () => {
+  if (els.paneFolders.hidden) return;
+  if (tabSlide) {
+    if (Math.abs(els.lists.scrollLeft - tabSlide.left) > 2 && Date.now() < tabSlide.until) return;
+    tabSlide = null;
+  }
+  const tab = Math.round(els.lists.scrollLeft / Math.max(1, els.lists.clientWidth)) ? 'projects' : 'queue';
+  if (tab !== S.tab) { S.tab = tab; markTabs(); }
+}, { passive: true });
 
 async function moveToProject(id, project) {
   try {
@@ -727,20 +779,12 @@ async function moveToProject(id, project) {
 function renderRail() {
   // While a thread is being dragged the lists stay as they are; they are drawn afresh on the drop.
   if (drag?.active) { drag.stale = true; return; }
-  const folders = S.tab === 'projects' && !treeShown();
-  const before = new Map([...els.lists.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
-  const drawerTree = () => {
-    const n = treeNodes();
-    if (Array.isArray(n)) return n;
-    return [...n.first,
-      ...(partHidden('tree-people') ? [] : n.second),
-      ...(partHidden('tree-someday') ? [] : somedayNodes(S.projects?.someday || [], true))];
-  };
-  els.lists.replaceChildren(...(folders ? [h('div', { class: 'tree' }, ...drawerTree())] : queueLists()));
-  els.tabQueue.classList.toggle('is-on', !folders);
-  els.tabProjects.classList.toggle('is-on', folders);
+  const before = new Map([...els.paneQueue.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
+  els.paneQueue.replaceChildren(...queueLists());
+  renderFolders();
+  markTabs();
   if (!reducedMotion.matches && before.size) {
-    for (const el of els.lists.querySelectorAll('.item')) {
+    for (const el of els.paneQueue.querySelectorAll('.item')) {
       const was = before.get(el.dataset.id);
       const now = el.getBoundingClientRect().top;
       if (was == null) el.animate([{ opacity: 0, transform: 'translateX(-8px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
@@ -862,6 +906,10 @@ function moveDrag(x, y) {
   drag.ghost.style.transform = `translate(${x + 14}px, ${y + 10}px)`;
   // Coming from the folders with the inbox hidden: the left edge brings it in.
   if (x < 18 && !els.app.classList.contains('rail-open') && !els.app.classList.contains('rail-pinned')) setRail(true);
+  // Over a drawer tab, the drawer slides to that pane, so a thread can be carried from
+  // the inbox onto a folder.
+  const tab = document.elementFromPoint(x, y)?.closest('.tab');
+  if (tab) { const want = tab === els.tabProjects ? 'projects' : 'queue'; if (want !== S.tab) setTab(want); }
   clearDropMarks();
   const target = dropAt(x, y);
   drag.target = target;
@@ -963,9 +1011,13 @@ const loadProjects = debounce(async () => {
   } catch { /* the next change brings it */ }
 }, 400);
 
-function setTab(tab) {
-  S.tab = tab;
-  renderRail();
+// Both panes are drawn already: a tab only slides the drawer to its pane.
+function setTab(tab, smooth = true) {
+  S.tab = els.paneFolders.hidden ? 'queue' : tab;
+  markTabs();
+  const left = S.tab === 'projects' ? els.lists.clientWidth : 0;
+  tabSlide = { left, until: Date.now() + 900 };
+  els.lists.scrollTo({ left, behavior: smooth && !reducedMotion.matches ? 'smooth' : 'auto' });
 }
 
 // ---------- the brain footer ----------
@@ -1526,7 +1578,7 @@ function askTier(go) {
       class: `tier-ask-btn${n === last ? ' is-last' : ''}`, type: 'button', title: S.settings.tiers?.[n]?.about || '',
       onclick: () => pick(n),
     }, h('kbd', {}, String(i + 1)), S.settings.tiers?.[n]?.label || n)),
-    h('button', { class: 'tier-ask-x', type: 'button', title: 'Back to writing (Esc)', onclick: closeTierAsk }, '×'));
+    h('button', { class: 'tier-ask-x', type: 'button', title: 'Back to writing (Esc)', 'aria-label': 'Back to writing', onclick: closeTierAsk }, '×'));
   els.composer.prepend(row);
   tierAsk = { row, last, names, pick };
   els.input.focus();
@@ -1792,10 +1844,14 @@ async function renderCard(t) {
     area = h('textarea', { class: `card-text${work ? ' is-brief' : ''}`, spellcheck: 'true', disabled: decided, 'aria-label': work ? 'The brief. Edit it here.' : 'The message. Edit it here.' });
     area.value = raw.trim();
     let dirty = false;
+    // A save already on its way is waited for too, so a decision never overtakes it.
+    let inflight = Promise.resolve();
     flush = async () => {
+      await inflight.catch(() => {});
       if (!dirty) return;
       dirty = false;
-      await api('POST', `/api/threads/${t.id}/artifact/save`, { name: 'Message.md', content: `${area.value.trim()}\n` });
+      inflight = api('POST', `/api/threads/${t.id}/artifact/save`, { name: 'Message.md', content: `${area.value.trim()}\n` });
+      await inflight;
     };
     const soon = debounce(() => flush().catch((e) => toast(e.message)), 700);
     area.addEventListener('input', () => { dirty = true; grow(area); soon(); });
@@ -2220,8 +2276,9 @@ async function showRepo(panel) {
   else if (st.ahead || st.uncommitted) {
     actions.append(
       h('button', { class: 'btn', type: 'button', onclick: async (e) => {
-        e.currentTarget.disabled = true;
-        try { const out = await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed.'); window.open(out.compare, '_blank', 'noopener'); showRepo(panel); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+        const btn = e.currentTarget; // gone from the event once it awaits
+        btn.disabled = true;
+        try { const out = await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed.'); window.open(out.compare, '_blank', 'noopener'); showRepo(panel); } catch (err) { toast(err.message); btn.disabled = false; }
       } }, st.pushed ? 'Open pull request' : 'Push and open pull request'),
       armedButton(`Merge into ${st.main}`, `Merge into ${st.main} and push`, async () => {
         await api('POST', `/api/threads/${threadId}/repo/merge`, {});
@@ -2230,8 +2287,9 @@ async function showRepo(panel) {
       }),
     );
     if (!st.pushed && st.ahead) actions.append(h('button', { class: 'btn btn-quiet', type: 'button', onclick: async (e) => {
-      e.currentTarget.disabled = true;
-      try { await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed the branch.'); showRepo(panel); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await api('POST', `/api/threads/${threadId}/repo/push`, {}); toast('Pushed the branch.'); showRepo(panel); } catch (err) { toast(err.message); btn.disabled = false; }
     } }, 'Only push'));
   }
   body.append(actions);
@@ -3087,6 +3145,13 @@ stage.addEventListener('drop', (e) => {
 $('new-thread').addEventListener('click', () => openNew());
 els.tabQueue.addEventListener('click', () => setTab('queue'));
 els.tabProjects.addEventListener('click', () => setTab('projects'));
+// Arrow keys on the tabs move between the two panes, as on any tab list.
+for (const tab of [els.tabQueue, els.tabProjects]) tab.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  setTab(e.key === 'ArrowRight' ? 'projects' : 'queue');
+  (S.tab === 'projects' ? els.tabProjects : els.tabQueue).focus();
+});
 els.quote.addEventListener('mousedown', (e) => e.preventDefault());
 els.quote.addEventListener('click', insertQuote);
 document.addEventListener('mouseup', () => setTimeout(maybeShowQuote, 0));
@@ -3252,7 +3317,9 @@ function onThread(t) {
   }
   // On the empty screen with nothing typed, the first thread to finish opens by itself.
   const arrived = t.state === 'ready' && (!before || before.state === 'working');
-  if (arrived && S.current === null && !S.pad && !els.input.value.trim() && !S.newProject) openThread(inbox()[0].id, { byQueue: true });
+  // A pinned event or a thread waiting for later is not in the queue: nothing opens then.
+  const firstUp = inbox()[0];
+  if (arrived && firstUp && S.current === null && !S.pad && !els.input.value.trim() && !S.newProject) openThread(firstUp.id, { byQueue: true });
   else if (S.current === null && !S.pad) renderEmpty();
   if (S.brain) {
     S.brain.waiting = all().filter(isUnfiled).length;

@@ -168,7 +168,7 @@ On every slide:
 - A dot after a name means it has open threads; the project of the open thread is highlighted. A long name runs onto a second line; the full name is in the tooltip.
 - Hover a row for **+**: a new thread on it, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
 - At the foot of Projects: **Start a thread on every** active or paused project, or area (about which project to start there). Each asks once more, and skips what already has an open thread.
-- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Folders** tab in the inbox.
+- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Folders** tab in the inbox. Inbox and Folders sit side by side: swipe sideways (or scroll sideways on a trackpad) and the drawer snaps to the other one; the arrow keys on the tabs do the same. Carrying a thread over the Folders tab slides the drawer there, so it can be dropped on a folder.
 
 The order is the vault's, not the app's: change a `Status:` line or the 30,000 ft list (ask Claude in a thread) and the outline follows.
 
