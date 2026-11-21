@@ -176,3 +176,22 @@ test('an error from Claude is shown in the thread, which stays in the inbox', as
   assert.match(t.thread.error, /not signed in/);
   assert.match(t.messages.at(-1).error, /npm run login/);
 });
+
+test('a message sent while Claude works is answered after that turn, in the same thread', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'First part' })).data.thread.id;
+  await call('POST', `/api/threads/${id}/messages`, { text: 'And a second part' });
+  const t = await until(async () => {
+    const x = await thread(id);
+    return x.thread.state === 'ready' && x.messages.filter((m) => m.role === 'assistant').length === 2 ? x : null;
+  }, 'both answers');
+  assert.deepEqual(t.thread.pending || [], []);
+  assert.equal(t.messages.filter((m) => m.role === 'user').length, 2);
+});
+
+test('deleting a thread while Claude works on it opens no repair thread', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Soon deleted' })).data.thread.id;
+  assert.equal((await call('DELETE', `/api/threads/${id}`, {})).data.deleted, true);
+  await new Promise((r) => setTimeout(r, 2000));
+  const state = (await call('GET', '/api/state')).data;
+  assert.ok(!state.threads.some((t) => t.kind === 'repair'), 'a deleted thread is not an error in the app');
+});

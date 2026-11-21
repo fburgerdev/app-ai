@@ -295,7 +295,7 @@ function playServer(next, finish) {
     player.src = url;
     player.playbackRate = settings.rate;
     player.onended = () => { URL.revokeObjectURL(url); done(''); };
-    player.onerror = () => done('audio error');
+    player.onerror = () => { URL.revokeObjectURL(url); done('audio error'); };
     player.play().catch((err) => done(`play refused: ${err.message}`));
   }).catch((err) => {
     if (current !== token) return;
@@ -352,8 +352,12 @@ function pump() {
 }
 
 function shutUp() {
+  // Audio already fetched for the sentences that will not be said is let go of too.
+  for (const x of toSpeak) x.audio?.then((url) => URL.revokeObjectURL(url)).catch(() => {});
   toSpeak.length = 0;
+  const playing = player.getAttribute('src') || '';
   try { player.pause(); player.removeAttribute('src'); } catch { /* nothing playing */ }
+  if (playing.startsWith('blob:')) URL.revokeObjectURL(playing);
   if (current && !(current instanceof Object && 'text' in current)) { current = null; setTimeout(pump, 0); }
   if (canSpeak) { try { speechSynthesis.cancel(); } catch { /* nothing to cancel */ } }
   // cancel() normally ends the current utterance through its error handler; make sure.
@@ -419,8 +423,15 @@ function flush() {
 
 const ear = { stream: null, ctx: null, analyser: null, data: null, recorder: null, chunks: [], timer: 0, startedAt: 0, speechAt: 0, lastLoud: 0, loud: 0, floor: 0.008, busy: 0 };
 
-async function openEar() {
-  if (ear.stream) return true;
+// Two calls while the browser still asks for the microphone share one request, so no
+// second stream is opened that would never be closed.
+let earOpening = null;
+function openEar() {
+  if (ear.stream) return Promise.resolve(true);
+  earOpening ??= openEarOnce().finally(() => { earOpening = null; });
+  return earOpening;
+}
+async function openEarOnce() {
   try {
     ear.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch (err) {

@@ -377,12 +377,12 @@ app.get('/api/events', (req, res) => {
     brain: send('brain'),
     projects: send('projects'),
     connections: send('connections'),
+    // The page moved to the other computer, or the data was read again from disk: end
+    // this stream, so the page connects again and reads the whole state.
+    'link-switched': () => res.end(),
+    reloaded: () => res.end(),
   };
   for (const [name, fn] of Object.entries(handlers)) store.events.on(name, fn);
-  // The page moved to the other computer, or the data was read again from disk: end
-  // this stream, so the page connects again and reads the whole state.
-  handlers['link-switched'] = () => res.end();
-  handlers.reloaded = () => res.end();
   const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
   req.on('close', () => {
     clearInterval(beat);

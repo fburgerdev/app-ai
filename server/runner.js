@@ -458,6 +458,9 @@ async function runTurn(threadId, prompt) {
     list: () => repos.list(),
   };
 
+  // What he added while Claude was working: started only once this turn has cleaned up,
+  // so the cleanup below never takes the new turn's slot, repo or secrets with it.
+  let followUp = '';
   try {
     activity('Getting the vault up to date');
     await brain.refresh();
@@ -549,13 +552,18 @@ async function runTurn(threadId, prompt) {
     // Tested and merged into main by itself, in the background (ship.js).
     ship.afterTurn(threadId).catch(() => {});
     const fresh = store.getThread(threadId);
+    // Deleted while Claude was working: nothing is left to update.
+    if (!fresh) return;
     const pending = fresh.pending || [];
-    running.delete(threadId);
-    if (pending.length && !result.aborted) {
+    // With a follow-up the slot stays taken until the cleanup hands it over, so a message
+    // sent meanwhile is added to it rather than starting a second turn.
+    const followsUp = pending.length && !result.aborted;
+    if (!followsUp) running.delete(threadId);
+    if (followsUp) {
       // What he added while Claude was working belongs to that work: it runs on the
       // same tier, without asking him or the picker again.
       store.updateThread(threadId, { pending: [], nextTier: fresh.nextTier || fresh.lastTier || '' });
-      startTurn(threadId, pending.join('\n\n'));
+      followUp = pending.join('\n\n');
     } else {
       const lastText = parts.filter((p) => p.type === 'text').at(-1)?.text || '';
       // "Send and done": the thread closes with Claude's answer in it. If the turn went
@@ -587,6 +595,8 @@ async function runTurn(threadId, prompt) {
     repos.releaseAll(threadId);
     running.delete(threadId);
     emitLive({ op: 'end' });
+    // The follow-up takes the slot this turn had; the waiting line moves only if it is free.
+    if (followUp && store.getThread(threadId)) { startTurn(threadId, followUp); if (!slotFree(false)) return; }
     // His own messages first; background work only into a slot it may have.
     let i = waiting.findIndex((w) => !w.background);
     if (i < 0 && waiting.length && slotFree(true)) i = 0;
