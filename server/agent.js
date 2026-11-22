@@ -153,7 +153,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -200,6 +200,12 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
           where: z.string().optional().describe('The new place, if that changed too'),
         },
         async (args) => { try { return ok(moveEvent(args)); } catch (err) { return fail(err); } })] : []),
+      ...(continueLater ? [tool('continue_later', 'Have the app start a new turn in this thread by itself after `minutes`, to carry on with work that cannot finish in this turn because something is still running or not ready yet (a render, a build, an install, a long test run, a job on the Pi). Start such a job so it outlives this turn (in the background, writing to a log file) before you call this; then end the turn with one or two lines on where it stands. Use it instead of asking Florian to say "go on", "continue" or "try again". Do not use it to wait for Florian, and do not call it again if nothing has moved since your last look.',
+        {
+          minutes: z.number().describe('When to look again, in minutes (1 to 60): about how long the job still needs'),
+          why: z.string().describe('What you are waiting for, in a few words ("the v14 render", "npm install on the Pi")'),
+        },
+        async (args) => { try { return ok(await continueLater(args)); } catch (err) { return fail(err); } })] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -277,6 +283,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__github_describe_repo': return `Described the repo ${input.repo}`;
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__app__move_event': return `Moved ${input.event ? `the event "${clip(input.event, 50)}"` : 'this event'} in Events`;
+    case 'mcp__app__continue_later': return `Carries on by itself in ${Math.round(Number(input.minutes) || 10)} min: ${clip(input.why || 'work still running', 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
@@ -334,8 +341,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, secretsKey, useDocument }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, secretsKey, useDocument, continueLater }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -473,7 +480,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fakeBrainLimited = false;
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -623,6 +630,20 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
 
   if (/FAIL-TEST/.test(prompt)) {
     return { sessionId, text: '', finalText: '', error: friendlyError('Invalid API key · Please run /login'), aborted: false };
+  }
+  // "RETRY-TEST": the turn ends on a timeout; the try the app starts by itself goes through.
+  // "RETRY-ALWAYS": every try ends on it, so the app has to stop by itself.
+  if (/RETRY-ALWAYS/.test(userPrompt) || (/RETRY-TEST/.test(userPrompt) && !/ended on an error/.test(userPrompt))) {
+    return { sessionId, text: '', finalText: '', error: friendlyError('API Error: Request timed out.'), aborted: false };
+  }
+  // "CONTINUE-TEST" or "CONTINUE-TEST=<minutes>": a render still runs, so Claude asks the
+  // app to look again; the turn the app starts by itself (or his message) finishes.
+  const continueAsk = continueLater && /CONTINUE-TEST(?:=([\d.]+))?/.exec(userPrompt);
+  if (continueAsk && !/called continue_later/.test(userPrompt)) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__continue_later', summary: 'Carries on by itself in 1 min: the test render' });
+    await continueLater({ minutes: Number(continueAsk[1] || 0.002), why: 'the test render' });
+    const said = await say('The render is running; I look again shortly.');
+    return { sessionId, text: said, finalText: said, error: '', aborted: false };
   }
 
   let text = '';

@@ -70,6 +70,8 @@ export function loadThreads() {
       meta.state = 'ready';
       meta.queuedAt = Date.now();
       meta.error = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
+      // The app carries on with it by itself once it runs again (runner.retryInterrupted).
+      meta.interrupted = Date.now();
       meta.activity = '';
       meta.pending = [];
       writeJson(metaFile(id), meta);

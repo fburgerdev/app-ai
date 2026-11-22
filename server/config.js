@@ -146,6 +146,17 @@ const DEFAULTS = {
   // far the two computers' clocks may be apart.
   leftOver: { checkMs: 60_000, minAgeMs: 60_000, maxAgeMs: 6 * 3600_000, slackMs: 5000 },
 
+  // Work that stalls carries on by itself (retry.js), so Florian need not type "go on" or
+  // "try again": a turn that ended on an error runs again after `backoffMin` minutes; a
+  // turn in which Claude called continue_later (a render or build still running) runs
+  // again when it asked; a branch whose tests failed or that clashes with main gets a turn
+  // that fixes it, and a merge that failed for another reason (the network) is tried again
+  // after `remergeMin` minutes. The safety handles, all counted since his last message:
+  // at most `maxRuns` automatic turns, `errorTries` errors in a row in which Claude got
+  // nothing done, `mergeFixes` fixing turns and `remerges` plain retries of the merge.
+  // continue_later waits between `continueMinMin` and `continueMaxMin` minutes.
+  autoRetry: { enabled: true, maxRuns: 20, errorTries: 3, backoffMin: [1, 4, 15], mergeFixes: 2, remerges: 3, remergeMin: 5, mergeFixDelayMs: 20_000, continueMinMin: 1, continueMaxMin: 60 },
+
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
 
@@ -198,7 +209,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver', 'autoRetry']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
