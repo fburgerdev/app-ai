@@ -213,6 +213,39 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
   });
 }
 
+// A shell command as Florian can read it in one line: the leading `cd` into the
+// workbench or repo goes (every command starts with one, and its long path filled the
+// line), and the absolute paths left are cut to the part that says something: relative
+// to the folder the thread works in, after the thread's id (work/…, artifacts/…), inside
+// a repo, or else the last two folders.
+export function shortCommand(command, cwd = '') {
+  let c = String(command || '').trim();
+  const cdLead = /^\s*(?:cd|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:\/d\s+)?(?:-(?:Literal)?Path\s+)?(?:"[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;|\n)\s*/i;
+  while (cdLead.test(c)) c = c.replace(cdLead, '');
+  const norm = (p) => p.replace(/\\/g, '/').replace(/^\/([a-z])\//i, '$1:/').replace(/\/+$/, '');
+  const base = norm(String(cwd || '')).toLowerCase();
+  const shorten = (p) => {
+    const n = norm(p);
+    if (base && (n.toLowerCase() === base)) return '.';
+    if (base && n.toLowerCase().startsWith(`${base}/`)) return n.slice(base.length + 1);
+    let m = /\/threads\/[^/]+\/((?:work|artifacts)(?:\/.*)?)$/i.exec(n);
+    if (m) return m[1];
+    m = /\/repos\/[^/]+\/[^/]+\/(.+)$/i.exec(n);
+    if (m) return m[1];
+    m = /\/repos\/[^/]+\/([^/]+)$/i.exec(n);
+    if (m) return m[1];
+    const parts = n.split('/').filter(Boolean);
+    return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : n;
+  };
+  // Quoted absolute paths first (they may hold spaces), then bare ones.
+  c = c.replace(/(["'])((?:[A-Za-z]:[\\/]|\/[a-z]\/|~\/|\/(?:home|Users|tmp|var|opt|srv)\/)[^"']*)\1/g, (_, q, p) => {
+    const s = shorten(p);
+    return /\s/.test(s) ? `${q}${s}${q}` : s;
+  });
+  c = c.replace(/(^|[\s=(])((?:[A-Za-z]:[\\/]|\/[a-z]\/|~\/|\/(?:home|Users|tmp|var|opt|srv)\/)[^\s"';&|)]*)/g, (_, pre, p) => pre + shorten(p));
+  return c.replace(/\s*\n\s*/g, ' ⏎ ').replace(/[ \t]+/g, ' ').trim();
+}
+
 // A short line for the interface saying what a tool call does.
 export function describeTool(name, input = {}, cwd = '') {
   const rel = (p) => {
@@ -233,7 +266,8 @@ export function describeTool(name, input = {}, cwd = '') {
       try { return `Read ${new URL(String(input.url)).hostname}`; } catch { return 'Read a web page'; }
     }
     case 'Bash':
-    case 'PowerShell': return `Ran ${clip(input.command, 80)}`;
+    case 'PowerShell': return `Ran ${clip(shortCommand(input.command, cwd) || input.description || 'a command', 110)}`;
+    case 'mcp__app__pi_shell': return `Ran on the Pi: ${clip(shortCommand(input.command, cwd) || 'a command', 100)}`;
     case 'Agent':
     case 'Task': return `Started a helper: ${clip(input.description || 'subtask', 70)}`;
     case 'mcp__app__open_repo': return `Opened the repo ${input.repo || ''}`.trim();
