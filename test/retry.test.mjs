@@ -111,7 +111,8 @@ git(seed, 'push', 'origin', 'main');
 fs.mkdirSync(data, { recursive: true });
 fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ cards: { auto: false }, limits: { checkMs: 100 }, autoRetry: { backoffMin: [0.002], continueMinMin: 0 } }));
 const env = { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_BRAIN_REPO: remote, APP_AI_DATA_REPO: '', APP_AI_PORT: String(port) };
-const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'a'), 'inherit'] });
+const start = () => spawn(process.execPath, [path.join(root, 'server', 'index.js')], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'a'), 'inherit'] });
+let server = start();
 test.after(() => { if (process.env.KEEP) console.log(fs.readFileSync(path.join(dir, 'server.log'), 'utf8')); return cleanup(dir, [server]); });
 
 const call = async (method, url, body) => {
@@ -162,4 +163,17 @@ test('when Claude calls continue_later the app carries on by itself, and a messa
   const after = await settled(other, 2);
   assert.equal(after.thread.held, null);
   assert.ok(!/the app carried on by itself/.test(notes(after)), 'his message started it, not the app');
+});
+
+test('a turn cut off because the app closed is started again by itself once it runs again', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Long job SLOW-TEST' })).data.thread.id;
+  await until(async () => (await thread(id)).thread.state === 'working', 'working');
+  await new Promise((r) => setTimeout(r, 400));
+  await cleanup(path.join(dir, 'nothing'), [server]);
+  server = start();
+  await brainReady();
+  const t = await settled(id, 1);
+  assert.equal(t.thread.error, '');
+  assert.match(notes(t), /the app was closed in the middle of the turn.*the app tried again by itself/);
+  assert.equal(answers(t).length, 1, 'the cut-off turn left no answer; the new one finished');
 });
