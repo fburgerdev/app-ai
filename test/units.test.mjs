@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { buildPolicy, describeTool, startsIn } from '../server/agent.js';
+import { buildPolicy, describeTool, shortCommand, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
 import { pushTakingIn, whenUnlocked } from '../server/datasync.js';
@@ -80,6 +80,22 @@ test('tool lines read like sentences', () => {
   assert.equal(describeTool('Read', { file_path: '/vault/Core/Next Actions.md' }, '/vault'), 'Read Core/Next Actions.md');
   assert.equal(describeTool('WebFetch', { url: 'https://example.com/a/b' }), 'Read example.com');
   assert.equal(describeTool('TodoWrite', {}), null);
+});
+
+test('command lines drop the leading cd and shorten long paths', () => {
+  const bench = 'C:\\Users\\Florian\\AppData\\Local\\app-ai\\threads\\abc123\\work';
+  assert.equal(
+    describeTool('Bash', { command: `cd "${bench}" && PYTHONPATH=pylib python fill.py "C:\\Users\\Florian\\Downloads\\Antrag Form.pdf"` }, 'C:\\Users\\Florian\\AppData\\Local\\app-ai\\brain'),
+    'Ran PYTHONPATH=pylib python fill.py "…/Downloads/Antrag Form.pdf"',
+  );
+  assert.equal(shortCommand('cd "C:\\Users\\F\\AppData\\Local\\app-ai\\repos\\fburgerdev\\app-ai"; npm test'), 'npm test');
+  assert.equal(
+    shortCommand('cd /c/Users/F/AppData/Local/app-ai/repos/fburgerdev/app-ai && node /c/Users/F/AppData/Local/app-ai/repos/fburgerdev/app-ai/server/index.js'),
+    'node server/index.js',
+  );
+  assert.equal(shortCommand('cp out.pdf "C:/Users/F/AppData/Local/app-ai/threads/abc/artifacts/Antrag.pdf"'), 'cp out.pdf artifacts/Antrag.pdf');
+  assert.equal(shortCommand('ls /home/pi/app-ai/server', '/home/pi/app-ai'), 'ls server');
+  assert.equal(describeTool('mcp__app__pi_shell', { command: 'systemctl --user status app-ai' }), 'Ran on the Pi: systemctl --user status app-ai');
 });
 
 test('diff marks added and removed words and keeps the rest', () => {
