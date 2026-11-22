@@ -24,9 +24,24 @@ import { git } from './git.js';
 import * as repos from './repos.js';
 import * as store from './store.js';
 import { dateTimeDMY } from './util.js';
+import { mergeFailure } from './retry.js';
+import { clock } from './limits.js';
 
 let config;
 export function initShip(cfg) { config = cfg; }
+
+// What the app does by itself when a merge failed (runner.mergeFailed, retry.js): a turn
+// that fixes it, the merge tried again later, or nothing more. Returns the words for the note.
+let failedHook = null;
+export function onMergeFailed(fn) { failedHook = fn; }
+function whatNext(threadId, failure, detail) {
+  let next = null;
+  try { next = failedHook?.(threadId, { failure, detail }) || null; } catch (err) { log(`ship: carrying on by itself failed: ${err.message}`); }
+  if (next?.fix) return ' Claude fixes it by itself now, and the app then tries the merge again.';
+  if (next?.remerge) return ` The app tries the merge again by itself at ${clock(next.remerge)}.`;
+  if (next?.stop) return ` The app does not try again by itself: ${next.stop}. Ask Claude to fix it, or merge it yourself from the repo panel.`;
+  return '';
+}
 
 const shipping = new Set(); // threads whose branch is being tested or merged right now
 export const isShipping = (threadId) => shipping.has(threadId);
@@ -95,6 +110,9 @@ export async function afterTurn(threadId) {
   if (repair ? config?.repair?.autoMerge === false : config?.autoMerge === false) return;
   const full = thread.repo;
   const note = (text) => store.appendMessage(threadId, { role: 'user', text: `[${text}]`, event: true });
+  // A merge that failed: what the app does about it by itself is decided once the repo is
+  // given back, so the turn that fixes it can take it.
+  let failed = null;
   shipping.add(threadId);
   try {
     // Is there anything main does not have?
@@ -111,7 +129,8 @@ export async function afterTurn(threadId) {
       const result = await test(dir);
       await tidy(dir);
       if (!result.ok) {
-        note(`The app ran the tests of ${full} on this branch and they did not pass, so it did not merge into ${main}. The branch ${now.repoBranch} is on GitHub. Ask Claude to fix it, or merge it yourself from the repo panel.\n\nThe end of the test output:\n${tail(result.out)}`);
+        const out = tail(result.out);
+        failed = { failure: 'tests', detail: out, text: (next) => `The app ran the tests of ${full} on this branch and they did not pass, so it did not merge into ${main}. The branch ${now.repoBranch} is on GitHub.${next || ' Ask Claude to fix it, or merge it yourself from the repo panel.'}\n\nThe end of the test output:\n${out}` };
         log(`ship: tests failed for "${now.title}" in ${full}; not merged`);
         return;
       }
@@ -128,9 +147,12 @@ export async function afterTurn(threadId) {
       repos.release(full, threadId);
     }
   } catch (err) {
-    note(`The app could not merge this branch into main by itself: ${err.message.split('\n')[0]} The branch is on GitHub; the Merge button in the repo panel tries again.`);
+    const reason = err.message.split('\n')[0];
+    const failure = mergeFailure(reason);
+    failed = { failure, detail: reason, text: (next) => `The app could not merge this branch into main by itself: ${next ? reason.replace(/\s*Ask Claude.*$/, '') : reason}${next || ' The branch is on GitHub; the Merge button in the repo panel tries again.'}` };
     log(`ship: could not merge for "${thread.title}": ${err.message}`);
   } finally {
     shipping.delete(threadId);
   }
+  if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail) : ''));
 }

@@ -170,6 +170,14 @@ function toast(text) {
 
 // Claude's usage limits, and when a held turn or brain update runs again.
 const LIMIT_NAMES = { five_hour: 'five-hour limit', seven_day: 'weekly limit', seven_day_opus: 'weekly limit', seven_day_sonnet: 'weekly limit', seven_day_overage_included: 'weekly limit', overage: 'extra-usage limit' };
+// What a held thread waits for: the usage limit, or carrying on by itself (retry.js).
+function heldText(held) {
+  const at = holdClock(held.until);
+  if (held.kind === 'retry') return `Ended on an error · tries again by itself at ${at}`;
+  if (held.kind === 'continue') return `Waiting for ${held.reason || 'work still running'} · carries on by itself at ${at}`;
+  if (held.kind === 'merge') return `Could not merge · Claude fixes it by itself at ${at}`;
+  return `Held by the ${LIMIT_NAMES[held.type] || 'usage limit'} · carries on at ${at}`;
+}
 function holdClock(ts) {
   const d = new Date(ts);
   const hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -287,7 +295,7 @@ function kindLabel(t) {
 
 function railItem(t) {
   let sub = '';
-  if (t.state === 'working' && t.held) sub = `Held: carries on at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
+  if (t.state === 'working' && t.held) sub = `${t.held.kind && t.held.kind !== 'limit' ? 'Carries on by itself' : 'Held: carries on'} at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
@@ -1443,7 +1451,7 @@ function renderHead() {
     if (t.state === 'ready') actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else if (t.state === 'working') {
     status = t.held
-      ? h('span', { class: 'status status-held' }, `Held by the ${LIMIT_NAMES[t.held.type] || 'usage limit'} · carries on at ${holdClock(t.held.until)}`)
+      ? h('span', { class: 'status status-held' }, heldText(t.held))
       : h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held ? 'Cancel the hold' : 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
@@ -1518,8 +1526,8 @@ function renderComposer() {
     els.input.placeholder = 'What should Claude work on?';
     verb = 'Start';
   } else if (t.state === 'working') {
-    els.input.placeholder = t.held ? 'Add to this thread. Claude gets it when the limit lifts.' : 'Add to this thread. Claude gets it when this turn ends.';
-    verb = 'Add';
+    els.input.placeholder = t.held ? (t.held.kind && t.held.kind !== 'limit' ? 'Reply. Claude starts on it at once.' : 'Add to this thread. Claude gets it when the limit lifts.') : 'Add to this thread. Claude gets it when this turn ends.';
+    verb = t.held?.kind && t.held.kind !== 'limit' ? 'Send' : 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
       : t.kind === 'event' && t.event && Date.now() > t.event.end ? 'How did it go?' : 'Reply.';

@@ -30,6 +30,7 @@ import * as ship from './ship.js';
 import { piShell } from './pi.js';
 import { moveEvent } from './events.js';
 import { limitLabel, resumeAt, clock } from './limits.js';
+import * as retry from './retry.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -38,6 +39,7 @@ const heldPrompt = new Map(); // threadId -> the message a turn started again af
 
 export function initRunner(cfg) {
   config = cfg;
+  ship.onMergeFailed(mergeFailed);
 }
 
 // Whether a turn of this thread runs in this process right now.
@@ -86,11 +88,22 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     return message;
   }
   // A plain message after "send and done" means he wants to see the answer after all.
-  // A message into a deferred thread wakes it again.
-  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false });
+  // A message into a deferred thread wakes it again. A message of his also sets the
+  // count of what the app retried by itself back (retry.js).
+  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null });
   // What he sent with "send and done" goes in first, so Claude has it too.
   const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
+  // Waiting to carry on by itself (not for the usage limit): his message starts the turn now.
+  if (thread.state === 'working' && thread.held?.kind && thread.held.kind !== 'limit' && !isRunning(threadId)) {
+    const { held } = thread;
+    const added = thread.pending || [];
+    heldPrompt.set(threadId, { prompt: held.prompt, tries: 0, kind: held.kind });
+    store.updateThread(threadId, { held: null, pending: [], nextTier: thread.nextTier || (TIER_NAMES.includes(held.tier) ? held.tier : '') }, { quiet: true });
+    log(`thread "${thread.title}": he wrote while it waited to carry on by itself; starting now`);
+    startTurn(threadId, retry.interruptedText(held, [...added, withUnsent].join('\n\n')));
+    return message;
+  }
   if (thread.state === 'working') {
     // Claude is still on the previous message: this one goes in as soon as that turn ends.
     store.updateThread(threadId, { pending: [...(thread.pending || []), withUnsent] });
@@ -150,13 +163,22 @@ export function stopTurn(threadId) {
 // cancels the hold. Nothing here keeps a timer per thread: the hold is data, and
 // resumeHeld() looks at the clock, on whichever computer does the work at that moment.
 
-const holdLine = (held) => `Held by the ${limitLabel(held.type)}: carries on by itself at ${clock(held.until)}`;
+const holdLine = (held) => (held.kind && held.kind !== 'limit' ? retry.holdLine(held) : `Held by the ${limitLabel(held.type)}: carries on by itself at ${clock(held.until)}`);
 
 function hold(threadId, limit, { prompt, tier, tries = 0 }) {
   const until = resumeAt(limit, { marginMs: config.limits?.marginMs, fallbackMs: config.limits?.fallbackMs });
   const held = { until, type: limit.type || '', prompt, at: Date.now(), tier, tries: tries + 1 };
   store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '' });
   log(`thread "${store.getThread(threadId)?.title}": held by the ${limitLabel(held.type)} until ${new Date(until).toISOString()}`);
+  return held;
+}
+
+// Held to carry on by itself (retry.js): after an error, when Claude asked to look again,
+// or to fix a merge. The same data as a hold for the usage limit, with its `kind`.
+function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries = 1 }) {
+  const held = { until, type: '', kind, reason, prompt, at: Date.now(), tier, tries };
+  store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '' });
+  log(`thread "${store.getThread(threadId)?.title}": ${kind}, carries on by itself at ${new Date(until).toISOString()}`);
   return held;
 }
 
@@ -169,16 +191,33 @@ export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
     if (!mayRun()) return started;
     const { held } = t;
     const added = t.pending || [];
+    const kind = held.kind || 'limit';
+    const own = kind === 'limit' ? null : retry.resumeText(held, now);
     const prompt = [
-      `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
-      held.prompt,
+      own ? own.prompt : `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
+      ...(own ? [] : [held.prompt]),
       ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
     ].join('\n\n');
-    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
-    heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: held.tries || 1 });
+    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
+    heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
     store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
-    log(`thread "${t.title}": the ${limitLabel(held.type)} lifted, carrying on`);
+    log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
     startTurn(t.id, prompt);
+    started += 1;
+  }
+  return started;
+}
+
+// Merges that failed for a reason a turn cannot fix (GitHub not reachable) are tried
+// again by themselves once `remerge.at` has come (retry.js).
+export function retryMerges({ mayRun = () => true, now = Date.now() } = {}) {
+  let started = 0;
+  for (const t of store.listThreads()) {
+    if (!t.remerge || now < t.remerge.at || t.state === 'working' || isRunning(t.id) || ship.isShipping(t.id)) continue;
+    if (!mayRun()) return started;
+    store.updateThread(t.id, { remerge: null }, { quiet: true });
+    log(`thread "${t.title}": trying the merge again by itself`);
+    ship.afterTurn(t.id).catch(() => {});
     started += 1;
   }
   return started;
@@ -187,7 +226,10 @@ export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
 let holdTimer = null;
 export function watchHolds(mayRun) {
   clearInterval(holdTimer);
-  holdTimer = setInterval(() => { try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); } }, config.limits?.checkMs || 20_000);
+  holdTimer = setInterval(() => {
+    try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); }
+    try { retryMerges({ mayRun }); } catch (err) { log(`merges to try again: ${err.stack || err.message}`); }
+  }, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
 }
 
@@ -398,6 +440,16 @@ async function runTurn(threadId, prompt) {
     return `Decrypted to ${target}. It is deleted when this turn ends.`;
   };
 
+  // continue_later: something still runs (a render, a build) and the turn ends before it
+  // is done. The app starts a turn by itself when Claude asked, instead of Claude asking
+  // Florian to say "go on" (retry.js).
+  const continueLater = async ({ minutes, why }) => {
+    run.carryOn = { minutes: Number(minutes) || 10, why: String(why || '').trim() };
+    const o = { ...retry.DEFAULTS, ...(config.autoRetry || {}) };
+    const m = Math.max(1, Math.round(Math.min(Math.max(run.carryOn.minutes, o.continueMinMin), o.continueMaxMin)));
+    return `The app starts a new turn in this thread by itself in about ${m} minute${m === 1 ? '' : 's'}, to look again. End this turn now, with one or two lines for Florian on where it stands; do not ask him to say "go on". What you leave on a repo's branch is not merged into main before the work is done.`;
+  };
+
   // Claude starts a spin-off when Florian asks for one in his message: a new thread that
   // begins as a copy of this one and works on the task by itself.
   let spun = 0;
@@ -499,6 +551,7 @@ async function runTurn(threadId, prompt) {
       fake: config.fake,
       onEvent,
       spinOff,
+      continueLater,
       // His secrets reach a script on the workbench as APP_SECRET_<NAME>, and his
       // encrypted documents through use_document. Only when this computer has the key.
       ...(secrets.secretsEnabled() ? { secretsKey: threadId, useDocument } : {}),
@@ -542,6 +595,25 @@ async function runTurn(threadId, prompt) {
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId);
+    // Ended on an error, or Claude asked to look again later: it carries on by itself
+    // (retry.js), unless he added something meanwhile (that goes first) or a safety
+    // handle is reached.
+    const latest = store.getThread(threadId);
+    const plan = !limited && !result.aborted && latest && !(latest.pending || []).length
+      ? retry.turnPlan({ auto: latest.auto, error: result.error, carryOn: run.carryOn, didWork: parts.some((p) => p.type === 'tool'), opts: config.autoRetry })
+      : null;
+    if (plan?.kind) {
+      // Like a hold for the usage limit: half-done work is not merged into main meanwhile.
+      running.delete(threadId);
+      store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
+      holdAuto(threadId, { kind: plan.kind, until: plan.until, reason: plan.reason, prompt: again?.prompt || prompt, tier: tier.name, tries: plan.tries });
+      return;
+    }
+    if (plan?.stop) {
+      store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
+      store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]` });
+      log(`thread "${latest.title}": stopped carrying on by itself (${plan.stop})`);
+    }
     if (limited) {
       // The work so far is on its branch on GitHub, but half-done work is not merged into
       // main. What he added meanwhile stays in `pending` and goes in with the next try.
@@ -602,6 +674,28 @@ async function runTurn(threadId, prompt) {
     if (i < 0 && waiting.length && slotFree(true)) i = 0;
     if (i >= 0) { const [next] = waiting.splice(i, 1); startTurn(next.threadId, next.prompt, next.background); }
   }
+}
+
+// ---------- a merge that failed: fixed by itself ----------
+//
+// ship.js calls this when the branch could not go into main. Returns what the app does
+// about it, for the note in the thread: { fix: true } (a turn fixes it, then the merge
+// runs again), { remerge: at } (only the merge runs again), { stop: why }, or null.
+export function mergeFailed(threadId, { failure, detail = '' }) {
+  const t = store.getThread(threadId);
+  if (!t || !failure) return null;
+  if (t.state === 'working' || isRunning(threadId)) return null; // he answered: that turn's end merges again
+  const plan = retry.mergePlan({ auto: t.auto, failure, opts: config.autoRetry });
+  if (!plan) return null;
+  if (plan.stop) return { stop: plan.stop };
+  if (plan.kind === 'remerge') {
+    store.updateThread(threadId, { auto: plan.auto, remerge: { at: plan.at } });
+    return { remerge: plan.at };
+  }
+  store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
+  const prompt = retry.mergeFixPrompt({ repo: t.repo, branch: t.repoBranch, main: t.repoMain || 'main', failure, detail });
+  holdAuto(threadId, { kind: 'merge', until: plan.until, reason: failure === 'clash' ? 'main clashes with the branch' : 'the tests failed', prompt, tier: t.lastTier || '', tries: plan.tries });
+  return { fix: true };
 }
 
 // ---------- for calls: a reply as something to listen to ----------

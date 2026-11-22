@@ -41,7 +41,7 @@ const bad = bare('bad', { 'package.json': JSON.stringify({ name: 'bad', private:
 const plain = bare('plain', { 'README.md': '# plain\n' });
 
 fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false } }));
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: vault, dataRepo: '', repoBase: hub, cards: { auto: false }, limits: { checkMs: 100 }, autoRetry: { mergeFixDelayMs: 50 } }));
 const log = path.join(dir, 'server.log');
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data, APP_AI_FAKE_GITHUB: '1' },
@@ -71,10 +71,15 @@ test('tests pass: the branch is merged into main by itself, and what testing lef
   assert.equal((await thread(t.id)).thread.repoBranch, '');
 });
 
-test('tests fail: nothing is merged, the branch stays on GitHub, and the thread says why', async () => {
+test('tests fail: nothing is merged, Claude tries to fix it by itself, then the thread says why', async () => {
   const t = (await call('POST', '/api/threads', { text: 'REPO-TEST=bad change it' })).data.thread;
-  const said = await until(async () => { const n = await notes(t.id); return /did not pass/.test(n) ? n : null; }, 'refused', 60000);
+  const said = await until(async () => { const n = await notes(t.id); return /does not try again by itself/.test(n) ? n : null; }, 'gave up fixing', 90000);
   assert.match(said, /1 failing/, 'with the end of the test output');
+  assert.match(said, /Claude fixes it by itself now, and the app then tries the merge again/);
+  assert.equal((said.match(/started a turn by itself on .* to fix it/g) || []).length, 2, 'two turns tried to fix it');
+  assert.match(said, /Claude already tried to fix it 2 times by itself/);
+  const fixed = (await thread(t.id)).messages.filter((m) => m.role === 'assistant');
+  assert.equal(fixed.length, 3, 'his turn and two fixing turns');
   assert.ok(!onMain(bad).includes('CHANGED-BY-CLAUDE.md'), 'main is untouched');
   assert.match(git(bad, 'branch', '--list', 'claude/*'), /claude\//, 'the branch is on GitHub');
   assert.ok((await thread(t.id)).thread.repoBranch, 'and still the thread\'s');
