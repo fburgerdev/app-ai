@@ -90,7 +90,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   // A plain message after "send and done" means he wants to see the answer after all.
   // A message into a deferred thread wakes it again. A message of his also sets the
   // count of what the app retried by itself back (retry.js).
-  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null });
+  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0 });
   // What he sent with "send and done" goes in first, so Claude has it too.
   const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
@@ -118,7 +118,9 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
 const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);
 
 function startTurn(threadId, prompt, background = false) {
-  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null });
+  // The prompt is kept with the thread, so a turn cut off by the app closing can be started
+  // again by itself (retryInterrupted).
+  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null, interrupted: 0, turnPrompt: prompt });
   if (!slotFree(background)) {
     waiting.push({ threadId, prompt, background });
     store.updateThread(threadId, { activity: background ? 'Waiting its turn (your own messages go first)' : 'Waiting for a free slot' }, { quiet: true });
@@ -223,10 +225,35 @@ export function retryMerges({ mayRun = () => true, now = Date.now() } = {}) {
   return started;
 }
 
+// Turns cut off because the app closed (or restarted) in the middle of them: started
+// again by itself, as after an error, with the same safety handles (retry.js).
+export function retryInterrupted({ mayRun = () => true, now = Date.now() } = {}) {
+  let started = 0;
+  for (const t of store.listThreads()) {
+    if (!t.interrupted || t.state !== 'ready' || isRunning(t.id)) continue;
+    if (!mayRun()) return started;
+    store.updateThread(t.id, { interrupted: 0 }, { quiet: true });
+    if (!t.turnPrompt) continue; // from before the app kept the prompt
+    const reason = 'the app was closed in the middle of the turn';
+    const plan = retry.turnPlan({ auto: t.auto, error: reason, didWork: false, opts: config.autoRetry, now });
+    if (plan?.stop) {
+      store.updateThread(t.id, { auto: plan.auto }, { quiet: true });
+      store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]` });
+      continue;
+    }
+    if (!plan?.kind) continue;
+    store.updateThread(t.id, { auto: plan.auto }, { quiet: true });
+    holdAuto(t.id, { kind: 'retry', until: now, reason, prompt: t.turnPrompt, tier: t.lastTier || '', tries: plan.tries });
+    started += 1;
+  }
+  return started;
+}
+
 let holdTimer = null;
 export function watchHolds(mayRun) {
   clearInterval(holdTimer);
   holdTimer = setInterval(() => {
+    try { retryInterrupted({ mayRun }); } catch (err) { log(`interrupted turns: ${err.stack || err.message}`); }
     try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); }
     try { retryMerges({ mayRun }); } catch (err) { log(`merges to try again: ${err.stack || err.message}`); }
   }, config.limits?.checkMs || 20_000);

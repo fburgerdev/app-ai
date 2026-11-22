@@ -9,8 +9,10 @@
 //   4. it says in the thread what it did, so Florian (and the next brain update) knows.
 //
 // Tests that fail, or a main that has moved on in a way that clashes, leave the branch
-// as it is, on GitHub, with a note in the thread: ask Claude to fix it, or merge with the
-// button. A repo without tests is merged as it is; the note says so.
+// as it is, on GitHub, with a note in the thread, and the app starts a turn by itself that
+// fixes it, after which the merge runs again; a merge that failed for another reason is
+// tried again a few minutes later (retry.js, with its limits). A repo without tests is
+// merged as it is; the note says so.
 //
 // For the app's own repo this means a change reaches the running app with its next
 // self-update, a few minutes later, and only once the tests have passed. Switched off
@@ -153,6 +155,7 @@ export async function afterTurn(threadId) {
     log(`ship: could not merge for "${thread.title}": ${err.message}`);
   } finally {
     shipping.delete(threadId);
+    // Here and not after the try: its early returns would skip it.
+    if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail) : ''));
   }
-  if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail) : ''));
 }
