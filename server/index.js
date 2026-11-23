@@ -1040,7 +1040,7 @@ extraction.watchHold(link.mayRunBackground);
 // A message that no turn took up (sent while the work moved between the computers) is
 // answered after all.
 runner.watchLeftOver(link.mayRunBackground);
-events.initEvents({ mayRunHere: link.mayRunBackground });
+events.initEvents({ mayRunHere: link.mayRunBackground, mailConnected: () => config.fake || google.googleConnected() });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
 setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) runner.backfillSignatures().catch(() => {}); }, 20_000).unref?.();
