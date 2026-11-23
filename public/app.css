@@ -1484,6 +1484,11 @@ a.chip:hover { border-color: var(--muted); }
 .stats .stats-label { text-align: left; color: var(--text); }
 .stats .stats-group th { text-align: left; padding-top: 12px; color: var(--muted); font: 650 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 .stats td.is-zero { color: var(--faint); opacity: 0.6; }
+/* The first count, before anything is kept: grey bars in the table's shape. */
+.stats-bar { display: inline-block; vertical-align: middle; width: 22px; height: 9px; border-radius: 3px; background: var(--line); animation: stats-pulse 1.4s ease-in-out infinite; }
+.stats-bar.is-wide { width: 140px; }
+@keyframes stats-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .stats-bar { animation: none; } }
 
 /* The two parts of the queue: deep work first, small things in between. */
 .queue-part { margin: 6px 8px 2px 21px; color: var(--faint); font-size: 11.5px; letter-spacing: 0.02em; }

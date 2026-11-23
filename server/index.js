@@ -29,7 +29,7 @@ import { buildPolicy, runAgent } from './agent.js';
 import { git as runGit } from './git.js';
 import { initShip, isShipping, anyShipping, onMerged } from './ship.js';
 import { initPi } from './pi.js';
-import { stats } from './stats.js';
+import { stats, recount as recountStats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
@@ -625,7 +625,12 @@ app.post('/api/next-actions/wake', (req, res) => {
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
 // What happened, counted by week (server/stats.js).
-app.get('/api/stats', (req, res) => { try { res.json(stats()); } catch (err) { res.status(500).json({ error: err.message }); } });
+// It answers with the kept count at once; ?wait=1 waits for a count already running, and
+// ?fresh=1 for a new one.
+app.get('/api/stats', async (req, res) => {
+  try { res.json(await stats({ wait: req.query.wait === '1', fresh: req.query.fresh === '1' })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
 // Check for a new version now; `force` updates even while Claude is working.
 app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
 // The line at the top: a new version is there, and what the lock still waits for.
@@ -1069,7 +1074,9 @@ function openBrowser() {
 const server = app.listen(config.port, '127.0.0.1', () => {
   log(`app-ai is running at ${url}  (data: ${DATA_DIR}${config.fake ? ', stand-in Claude' : ''})`);
   if (wantsOpen) openBrowser();
-  brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()));
+  brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()))
+    // The stats are counted once at the start, so the first look at them is instant.
+    .then(() => recountStats().catch(() => {}));
 });
 
 attachVoice(server, config, allowedHosts);

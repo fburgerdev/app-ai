@@ -7,14 +7,14 @@ Everything the app does, feature by feature. What it is, how to install it and w
 - **The top bar** is always there: the inbox button with the number waiting, Focus, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **The outline** on the right: projects and areas, People and Someday (see "The outline" below).
-- **Settings** opens as a window: General (sleep time, what the queue has learned), Look (light or dark, and the layout), Keys, Connections (Google, calling by phone, saving the state), Stats, About (the version and where the app runs).
-- **Layout** (Settings → Look) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
+- **Settings** opens as a window: General (light or dark, sleep time), Layout (which parts of the page show), Queue (what the queue has learned), Shortcuts, Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
+- **Layout** (Settings → Layout) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
 
 ## The queue
 
 The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from two things.
 
-- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → General. Your own lines are kept.
+- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → Queue. Your own lines are kept.
 - **Otherwise:** things with a date or that block others first, then what has waited longest, kinds mixed.
 
 The order is worked out in the background, so moving on never waits for a model. Under the heading you see in a few words why the first one is first. You can always click any thread yourself.
@@ -167,7 +167,7 @@ These two buttons are the only things in the app that file facts into the vault,
 
 ## The outline
 
-The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Look.
+The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Layout.
 
 - **Projects**: the **areas** in the order of `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`; areas not in it follow alphabetically, and the line at the foot opens that file), each with its active projects below it, most recently dealt with first (your latest message in one of its threads, or the last change to its note). Paused projects (`Status: paused` in the project's note) are folded away under their own line and unfold on hover. An area with no project right now is grey.
 - **Someday**: each item newest first, the parked old actions under their own heading; **+** starts a thread on the item: do it now, keep it, or fold it.
@@ -321,7 +321,7 @@ App data is in its own folder, outside the vault (`APP_AI_DATA` sets another):
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`dataRepo`): threads and their files, water levels, the tier setting, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
+That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`dataRepo`): threads and their files, water levels, the tier setting, the queue's record and profile, the card log. Settings → System → Backup to GitHub shows when it last saved.
 
 Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, the repo clones, logs, and each thread's workbench (`threads/<id>/work/`).
 

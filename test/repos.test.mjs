@@ -259,7 +259,11 @@ test('a brain update waits for a thread that is changing the vault, then runs', 
 });
 
 test('the stats count what happened', async () => {
-  const s = (await call('GET', '/api/stats')).data;
+  // A count kept from earlier comes back at once, without waiting for git.
+  const quick = (await call('GET', '/api/stats')).data;
+  assert.equal(typeof quick.asOf, 'number');
+  const s = (await call('GET', '/api/stats?fresh=1')).data;
+  assert.ok(s.asOf >= quick.asOf);
   assert.deepEqual(s.periods.map((p) => p.key), ['thisWeek', 'lastWeek', 'fourWeeks', 'all']);
   const row = (label) => s.rows.find((r) => r.label === label).values;
   assert.ok(row('Threads you started').thisWeek >= 3);
