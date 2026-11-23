@@ -332,7 +332,7 @@ function kindLabel(t) {
 function railItem(t) {
   let sub = '';
   if (t.state === 'working' && t.held) sub = `${t.held.kind && t.held.kind !== 'limit' ? 'Carries on by itself' : 'Held: carries on'} at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
-  else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.doneAfter ? ', closes when finished' : ''}`;
+  else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.activityAt && Date.now() - t.activityAt > 60_000 ? ` · ${ago(t.activityAt)}` : ''}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
@@ -1315,7 +1315,7 @@ function partsInto(container, threadId, parts, { live = false } = {}) {
   const report = parts.slice(lastTool + 1);
   const updates = run.filter(hasText).length;
   if (live || lastTool < 0 || !updates || !report.some(hasText)) {
-    container.replaceChildren(...partNodes(threadId, parts, { live }));
+    container.replaceChildren(...partNodes(threadId, parts));
     return;
   }
   const steps = run.filter((p) => p.type === 'tool').length;
@@ -1354,6 +1354,15 @@ function shortNote(text) {
 }
 
 function messageEl(threadId, m) {
+  // What the app did by itself: the supervisor's own bubble, in its own colour, with what
+  // Claude got when it started a turn.
+  if (m.role === 'user' && m.supervisor) {
+    const text = String(m.text || '').replace(/^\[|\]$/g, '').trim();
+    return h('article', { class: 'msg msg-supervisor' },
+      h('p', { class: 'supervisor-label' }, 'Supervisor', m.ts ? h('span', { class: 'supervisor-time' }, ` · ${stamp(m.ts)}`) : null),
+      h('div', { class: 'msg-body' }, renderMarkdown(text)),
+      m.prompt ? h('details', { class: 'supervisor-prompt' }, h('summary', {}, 'What Claude got'), h('div', { class: 'msg-body' }, renderMarkdown(m.prompt))) : null);
+  }
   if (m.role === 'user' && m.event) {
     const n = shortNote(m.text);
     const full = m.text.replace(/^\[|\]$/g, '');
@@ -1371,7 +1380,7 @@ function messageEl(threadId, m) {
       m.files?.length ? h('div', { class: 'msg-files' }, m.files.map((f) => h('a', {
         class: 'chip', href: `/api/threads/${threadId}/upload?name=${encodeURIComponent(f.name)}`, target: '_blank', rel: 'noopener', title: `Open ${f.name}`,
       }, h('span', { class: 'chip-name' }, f.name), h('span', { class: 'chip-size' }, fileSize(f.size))))) : null,
-      h('time', { class: 'msg-time' }, stamp(m.ts), m.unanswered ? ' · sent and done, no answer' : ''),
+      h('time', { class: 'msg-time' }, stamp(m.ts), m.unanswered ? ' · sent and done, no answer' : '', m.steered ? ' · added while Claude worked' : '', m.queuedAt ? ` · queued as Next at ${clock(m.queuedAt)}` : ''),
     );
   }
   const body = h('div', { class: 'msg-body' });
@@ -1422,11 +1431,59 @@ function renderLive() {
   const stick = nearBottom();
   if (!liveEl || !liveEl.isConnected) {
     liveEl = h('article', { class: 'msg msg-claude is-live' }, h('div', { class: 'msg-body' }));
-    els.messages.append(liveEl);
+    const box = els.messages.querySelector('.queued-box');
+    if (box) box.before(liveEl); else els.messages.append(liveEl);
   }
   partsInto(liveEl.firstChild, S.current, S.live, { live: true });
-  if (!S.live.length) liveEl.firstChild.append(h('p', { class: 'starting' }, h('span', { class: 'pulse' }), S.threads.get(S.current)?.activity || 'Starting'));
+  liveEl.firstChild.append(liveStatus(S.threads.get(S.current)));
   if (stick) els.scroller.scrollTop = els.scroller.scrollHeight;
+}
+
+// While Claude works, the live reply always ends on what it is doing now and for how
+// long, with the last line each background job wrote. Before 23-11-2026 the pulse showed
+// only while the last thing in the reply was a step, so a thread waiting on a render
+// looked finished.
+function liveStatus(t) {
+  const since = t?.activityAt ? Date.now() - t.activityAt : 0;
+  const long = since >= 10_000 ? (since < 60_000 ? `${Math.round(since / 1000)} s` : ago(t.activityAt)) : '';
+  const jobs = (t?.background || []).filter((j) => j.tail);
+  return h('div', { class: 'live-status' },
+    h('p', { class: 'starting' }, h('span', { class: 'pulse' }), t?.activity || 'Starting', long ? h('span', { class: 'live-since' }, ` · ${long}`) : null),
+    ...jobs.map((j) => h('p', { class: 'live-tail', title: `${j.description}: the last line it wrote` }, j.tail)));
+}
+// The time on the status line moves on by itself.
+setInterval(() => { if (S.live && liveEl?.isConnected) scheduleLive(); }, 5000);
+
+// What he queued as "Next": under the live reply while Claude works, and once the turn is
+// over, with why the supervisor held it and a button to run it.
+function renderQueued() {
+  els.messages.querySelector('.queued-box')?.remove();
+  const t = S.current ? S.threads.get(S.current) : null;
+  if (!t || !S.view || t.kind === 'card' || !t.queued?.length) return;
+  const working = t.state === 'working';
+  const head = working ? 'Next, when this turn ends' : t.queuedHeld ? `Held by the supervisor: ${t.queuedHeld}` : 'Queued as Next, not run yet';
+  const box = h('div', { class: `queued-box${working ? '' : ' is-held'}` },
+    h('p', { class: 'queued-head' }, head),
+    ...t.queued.map((q) => h('div', { class: 'queued-item' },
+      h('span', { class: 'queued-text', title: q.text }, clip(q.text || (q.files?.length ? `${q.files.length} file(s)` : ''), 140)),
+      q.tier ? h('span', { class: 'queued-tier' }, S.settings.tiers?.[q.tier]?.label || q.tier) : null,
+      h('button', { class: 'link', type: 'button', title: 'Take it back into the box to change it', onclick: () => unqueue(t.id, q, true) }, 'Change'),
+      h('button', { class: 'queued-x', type: 'button', title: 'Take it out', 'aria-label': 'Take it out', onclick: () => unqueue(t.id, q, false) }, '×'))),
+    working ? null : h('div', { class: 'queued-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/queued/run`, {}).then((out) => { S.threads.set(t.id, out.thread); renderQueued(); renderRail(); }).catch((e) => toast(e.message)) }, 'Run it')));
+  els.messages.append(box);
+}
+async function unqueue(threadId, q, edit) {
+  try {
+    const out = await api('DELETE', `/api/threads/${threadId}/queued/${q.id}`, {});
+    S.threads.set(threadId, out.thread);
+    if (edit) {
+      els.input.value = [out.item.text, els.input.value].filter((x) => x.trim()).join('\n\n');
+      autosize();
+      focusInput();
+    }
+    renderQueued();
+  } catch (e) { toast(e.message); }
 }
 
 function scheduleLive() {
@@ -1562,7 +1619,7 @@ function renderComposer() {
     els.input.placeholder = 'What should Claude work on?';
     verb = 'Start';
   } else if (t.state === 'working') {
-    els.input.placeholder = t.held ? (t.held.kind && t.held.kind !== 'limit' ? 'Reply. Claude starts on it at once.' : 'Add to this thread. Claude gets it when the limit lifts.') : 'Add to this thread. Claude gets it when this turn ends.';
+    els.input.placeholder = t.held ? (t.held.kind && t.held.kind !== 'limit' ? 'Reply. Claude starts on it at once.' : 'Add to this thread. Claude gets it when the limit lifts.') : 'Add to this thread. Then pick: Claude reads it now, or it runs next.';
     verb = t.held?.kind && t.held.kind !== 'limit' ? 'Send' : 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
@@ -1604,28 +1661,57 @@ function updateButton() {
   return h('div', { class: 'update-row' }, button, out);
 }
 
-// Quick select: the five tiers over the reply box, 1 to 5 or a click, Enter for Default
-// (always the middle one, 3, whatever was picked last), Escape to go back to writing.
-// Nothing is sent until one is picked. It asks
-// where a message starts new work (Send, Start, a spin-off). Never for "Done", which
-// Claude does not answer, nor for a message added while Claude is working, which runs on
-// the tier of the work it belongs to. `go` gets the tier and sends.
+// Quick select: a row of choices over the reply box. 1 to 9 or a click picks one; the
+// arrow keys move the highlight, and Enter, or Send once more, takes the highlighted one.
+// Each row starts on its default, so every message starts from Default again. Escape goes
+// back to writing. Nothing is sent until one is picked.
+//
+// Two rows use it. "How much?", the five tiers, where a message starts new work (Send,
+// Start, a spin-off, a "Next"); never for "Done", which Claude does not answer, nor for a
+// message added into the running turn. And "When?", while Claude works: "Add now"
+// (Claude reads it at its next step) or "Next" (runs after the turn, with its own tier).
 const asksTier = () => S.settings.tier === 'ask';
-function askTier(go) {
+function askChoice({ label, aria, items, def, go }) {
   closeTierAsk();
-  const names = S.settings.tierNames || [];
-  const last = names.includes('default') ? 'default' : names[Math.floor(names.length / 2)];
-  const pick = (n) => { closeTierAsk(); go(n); };
-  const row = h('div', { class: 'tier-ask', role: 'group', 'aria-label': 'How much is this worth?' },
-    h('span', { class: 'tier-ask-label' }, 'How much?'),
-    ...names.map((n, i) => h('button', {
-      class: `tier-ask-btn${n === last ? ' is-last' : ''}`, type: 'button', title: S.settings.tiers?.[n]?.about || '',
-      onclick: () => pick(n),
-    }, h('kbd', {}, String(i + 1)), S.settings.tiers?.[n]?.label || n)),
+  const pick = (key) => { closeTierAsk(); go(key); };
+  const buttons = items.map((it, i) => h('button', {
+    class: 'tier-ask-btn', type: 'button', title: it.about || '',
+    onclick: () => pick(it.key),
+  }, h('kbd', {}, String(i + 1)), it.label));
+  const row = h('div', { class: 'tier-ask', role: 'group', 'aria-label': aria || label },
+    h('span', { class: 'tier-ask-label' }, label),
+    ...buttons,
     h('button', { class: 'tier-ask-x', type: 'button', title: 'Back to writing (Esc)', 'aria-label': 'Back to writing', onclick: closeTierAsk }, '×'));
+  const ask = {
+    row, items, buttons, pick, sel: Math.max(0, items.findIndex((it) => it.key === def)),
+    move(by) { this.sel = (this.sel + by + items.length) % items.length; this.mark(); },
+    mark() { buttons.forEach((b, i) => b.classList.toggle('is-last', i === this.sel)); },
+    take() { this.pick(items[this.sel].key); },
+  };
+  ask.mark();
   els.composer.prepend(row);
-  tierAsk = { row, last, names, pick };
+  tierAsk = ask;
   els.input.focus();
+}
+function askTier(go) {
+  const names = S.settings.tierNames || [];
+  askChoice({
+    label: 'How much?', aria: 'How much is this worth?',
+    items: names.map((n) => ({ key: n, label: S.settings.tiers?.[n]?.label || n, about: S.settings.tiers?.[n]?.about || '' })),
+    def: names.includes('default') ? 'default' : names[Math.floor(names.length / 2)],
+    go,
+  });
+}
+function askWhen(go) {
+  askChoice({
+    label: 'When?', aria: 'When should Claude get this?',
+    items: [
+      { key: 'add', label: 'Add now', about: 'Claude reads it at its next step, in the work that is running.' },
+      { key: 'next', label: 'Next', about: 'Runs after this turn, as a new command. The supervisor holds it if the reply asks you something first.' },
+    ],
+    def: 'add',
+    go,
+  });
 }
 function closeTierAsk() { tierAsk?.row.remove(); tierAsk = null; }
 
@@ -1973,6 +2059,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   els.messages.replaceChildren(...data.messages.map((m) => messageEl(id, m)));
   enter(els.messages);
   placeLevel();
+  renderQueued();
   if (S.live) renderLive();
   upgradeMailCards();
   // Start reading where Claude's latest message starts, not at its end.
@@ -2055,7 +2142,9 @@ async function openPad() {
 }
 
 // `done` is "send and done": the message is kept, the thread closes, Claude does not answer.
-async function send(done = false, tier = '') {
+async function send(done = false, tier = '', mode = '') {
+  // Send once more while quick select asks: the highlighted choice.
+  if (tierAsk && !done && !tier && !mode) { tierAsk.take(); return; }
   const text = els.input.value.trim();
   if (S.pad) return;
   const files = filesToSend();
@@ -2066,8 +2155,11 @@ async function send(done = false, tier = '') {
   // "Done": Claude does not answer that, so there is nothing to pick. Not in a thread
   // that keeps a tier ("Again, higher") either.
   const t = S.current ? S.threads.get(S.current) : null;
-  // Nor for a message added while Claude is working: it belongs to the work that is
-  // running and gets the tier chosen for that.
+  // While Claude works: into the running turn, or next. A message added into the running
+  // turn belongs to that work and gets its tier; a "Next" is new work and may get its own.
+  const running = t?.state === 'working' && !t.held;
+  if (!done && running && !mode) return askWhen((m) => send(false, '', m));
+  if (!done && running && mode === 'next' && !tier && !t?.keepTier && asksTier()) return askTier((n) => send(false, n, 'next'));
   if (!done && !tier && !t?.keepTier && t?.state !== 'working' && asksTier()) return askTier((n) => send(false, n));
   closeTierAsk();
   const from = S.current;
@@ -2076,8 +2168,9 @@ async function send(done = false, tier = '') {
   draftPending.delete(from || 'new'); // the text is going out; a delayed save of it must not follow
   try {
     if (from) {
-      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, tier: done ? '' : tier });
+      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, tier: done ? '' : tier, mode: mode || 'add' });
       S.threads.set(from, out.thread);
+      if (!done && running && !out.message) toast('Queued as Next: it runs when this turn ends.');
     } else {
       const out = await api('POST', '/api/threads', { text, files, done, tier: done ? '' : tier, project: S.newProject });
       S.threads.set(out.thread.id, out.thread);
@@ -3154,9 +3247,11 @@ els.input.addEventListener('input', () => saveDraft(true)); // kept on every key
 els.defer.addEventListener('click', deferThread);
 els.input.addEventListener('keydown', (e) => {
   if (tierAsk) {
-    if (/^[1-5]$/.test(e.key) && tierAsk.names[Number(e.key) - 1]) { e.preventDefault(); tierAsk.pick(tierAsk.names[Number(e.key) - 1]); return; }
-    // Plain Enter takes the last one used. Ctrl Enter (Done) and Alt Enter (spin-off) go on below.
-    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); tierAsk.pick(tierAsk.last); return; }
+    if (/^[1-9]$/.test(e.key) && tierAsk.items[Number(e.key) - 1]) { e.preventDefault(); tierAsk.pick(tierAsk.items[Number(e.key) - 1].key); return; }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); tierAsk.move(1); return; }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); tierAsk.move(-1); return; }
+    // Plain Enter takes the highlighted one. Ctrl Enter (Done) and Alt Enter (spin-off) go on below.
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); tierAsk.take(); return; }
     if (e.key === 'Escape') { e.preventDefault(); closeTierAsk(); return; }
   }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -3354,7 +3449,8 @@ function onThread(t) {
     if (S.panel?.kind === 'repo' && S.panel.threadId === t.id && before && (before.state !== t.state || before.repo !== t.repo || before.repoBranch !== t.repoBranch)) showRepo(S.panel);
     if (t.kind !== 'card') {
       if (t.state === 'working' && !S.live) { S.live = []; scheduleLive(); }
-      if (t.state === 'working' && S.live && !S.live.length) scheduleLive();
+      if (t.state === 'working' && S.live) scheduleLive();
+      if (!before || JSON.stringify(before.queued || []) !== JSON.stringify(t.queued || []) || before.queuedHeld !== t.queuedHeld || before.state !== t.state) renderQueued();
       if (t.state !== 'working' && S.live) { S.live = null; liveEl?.remove(); liveEl = null; }
       if (!before || before.extractedCount !== t.extractedCount || before.state !== t.state) placeLevel();
     }
@@ -3383,7 +3479,9 @@ function onMessage({ threadId, message }) {
   }
   const el = messageEl(threadId, message);
   el.classList.add('arrive');
+  const box = els.messages.querySelector('.queued-box');
   if (liveEl?.isConnected) liveEl.before(el);
+  else if (box) box.before(el);
   else els.messages.append(el);
   placeLevel();
   if (message.role === 'assistant') upgradeMailCards();
