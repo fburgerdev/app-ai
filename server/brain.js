@@ -13,7 +13,7 @@
 // structure or rules does it in its own copy of the vault's repo, like any repo, and
 // the app merges it on GitHub; this clone picks it up with its next refresh.)
 
-import { isNetworkError, report } from './repair.js';
+import { isAway, report } from './repair.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { git, gitOk } from './git.js';
@@ -140,9 +140,10 @@ export function refresh({ force = false } = {}) {
       netSince = 0;
       netFails = 0;
     } catch (err) {
-      if (isNetworkError(err.message)) {
-        // The network is away (the laptop just woke): try again by itself, with growing
-        // pauses, and say nothing unless it lasts.
+      if (isAway(err)) {
+        // The network is away (the laptop just woke), or the fetch was stopped by its
+        // timeout because the laptop slept in the middle of it: try again by itself, with
+        // growing pauses, and say nothing unless it lasts.
         netFails += 1;
         netSince ||= Date.now();
         const wait = Math.min(120_000, 10_000 * 2 ** Math.min(netFails - 1, 4));

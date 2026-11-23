@@ -307,6 +307,15 @@ test('network trouble is retried quietly; a real failure opens a repair thread, 
   assert.ok(isNetworkError("fatal: unable to access 'https://github.com/x/': Failed to connect to github.com port 443 after 21133 ms: Could not connect to server"));
   assert.ok(isNetworkError('Could not resolve host: github.com'));
   assert.ok(!isNetworkError('TypeError: cannot read properties of undefined'));
+  // A fetch stopped by its timeout while the laptop slept is retried too, not repaired.
+  const { isAway } = await import('../server/repair.js');
+  const { GitError } = await import('../server/git.js');
+  const stopped = new GitError(['fetch', '--quiet', 'origin', 'main'], 'did not finish within 120 s and was stopped (the computer may have been asleep)', null);
+  assert.ok(!isAway(stopped));
+  stopped.timedOut = true;
+  assert.ok(isAway(stopped));
+  assert.ok(isAway(new Error('Could not resolve host: github.com')));
+  assert.ok(!isAway(new Error('TypeError: x is not a function')));
   const before = (await state()).threads.filter((t) => t.kind === 'repair').length;
   const made = (await call('POST', '/api/repair/test', { source: 'the brain update', message: 'TypeError: x is not a function at extract.js:12' })).data;
   assert.ok(made.thread);

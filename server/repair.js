@@ -25,6 +25,9 @@ import { readPrompt } from './util.js';
 const SEEN = path.join(DATA_DIR, 'repairs.json');
 const NETWORK = /could not resolve host|failed to connect|could not connect|connection (timed out|reset|refused)|timed out|network is unreachable|unable to access .*(resolve|connect)|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|is not reachable/i;
 export const isNetworkError = (message) => NETWORK.test(String(message || ''));
+// A git step that talks to GitHub and was stopped by its timeout (git.js sets `timedOut`)
+// is the same trouble: the laptop slept in the middle of it, or woke before the network did.
+export const isAway = (err) => err?.timedOut === true || isNetworkError(err?.message);
 
 let config;
 let deps = { send: null, mayRun: () => true };
