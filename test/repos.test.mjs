@@ -179,6 +179,33 @@ test('two threads in one repo: the first in the main copy, the second in a workt
   assert.ok(files.includes('CHANGED-BY-First-worker.md') && files.includes('CHANGED-BY-Second-worker.md'));
 });
 
+test('a thread renamed while it was in another repo comes back to its own branch, not to a new empty one', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'Old name', project: 'Site' })).data.thread;
+  await ready(t.id);
+  const first = await turn(t.id, 'REPO-TEST REPO-OWN go');
+  const branch = first.thread.repoBranch;
+  assert.match(branch, /^claude\/old-name-/);
+  // The turn after it ends in another repo, so nothing merges the work in site.
+  const away = await turn(t.id, 'REPO-TEST=tool REPO-OWN over there');
+  assert.equal(away.thread.repo, 'fburgerdev/tool');
+  assert.equal((await call('POST', `/api/threads/${t.id}/title`, { title: 'A quite different name' })).status, 200);
+  // Back in site under its new name: the branch with the work, not one named after the new title.
+  const back = await turn(t.id, 'REPO-TEST=site REPO-OWN and back');
+  assert.equal(back.thread.repo, 'fburgerdev/site');
+  assert.equal(back.thread.repoBranch, branch, 'the branch it had in this repo');
+  assert.ok(!/a-quite-different-name/.test(git(site.remote, 'branch', '--list', 'claude/*')), 'no second branch under the new name');
+  const st = await repoStatus(t.id);
+  assert.ok(st.ahead >= 1, 'the work from before the rename is on it');
+  assert.ok(st.files.some((f) => f.name === 'CHANGED-BY-Old-name.md'), JSON.stringify(st.files));
+  const merged = await call('POST', `/api/threads/${t.id}/repo/merge`, {});
+  assert.equal(merged.status, 200, JSON.stringify(merged.data));
+  assert.ok(git(site.remote, 'ls-tree', '--name-only', 'main').includes('CHANGED-BY-Old-name.md'), 'and it reaches main');
+  // Merged: the next change in site starts on a new branch, under the name the thread has now.
+  const next = await turn(t.id, 'REPO-TEST=site REPO-OWN once more');
+  assert.match(next.thread.repoBranch, /^claude\/a-quite-different-name-/);
+  assert.equal((await call('POST', `/api/threads/${t.id}/repo/merge`, {})).status, 200);
+});
+
 test('any thread can open any repo; Florian can change a thread\'s repo; repos can be renamed', async () => {
   const loose = (await call('POST', '/api/threads', { text: 'Something unrelated' })).data.thread;
   assert.ok(!loose.repo);

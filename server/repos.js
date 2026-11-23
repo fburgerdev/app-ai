@@ -652,6 +652,13 @@ export function dirFor(threadId, full) {
 
 const hasRef = (dir, ref) => git(dir, ['rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false);
 
+// The thread's branch in each repo it has worked in and not merged yet, by the repo's name:
+// `repoBranch` is only the branch in the repo it is in now. '' forgets one (it was merged).
+function keepBranch(threadId, full, branch) {
+  const { [key(full)]: _was, ...rest } = store.getThread(threadId)?.repoBranches || {};
+  return branch ? { ...rest, [key(full)]: branch } : rest;
+}
+
 // Which branch the thread works on, and from what it starts if the branch is not here yet.
 //   { branch, from }   from: null (the local branch is there), or the ref to make it from
 async function pickBranch(dir, thread, threadId, full, base) {
@@ -659,13 +666,20 @@ async function pickBranch(dir, thread, threadId, full, base) {
   if (branch && await hasRef(dir, `refs/heads/${branch}`)) return { branch, from: null };
   // The thread's branch may have been made on the other computer and pushed from there.
   if (branch && await hasRef(dir, `refs/remotes/origin/${branch}`)) return { branch, from: `origin/${branch}` };
-  branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
   const remote = await hasRef(dir, `refs/remotes/origin/${base}`) ? `origin/${base}` : 'HEAD';
-  // A thread that worked here, went to another repo and comes back no longer knows
-  // its branch, but the branch is still there, with work main does not have (the
-  // turn ended in the other repo, so nothing merged it). It goes on from that work
-  // instead of starting over from main and dropping it.
+  // A thread that worked here, went to another repo and comes back no longer has this
+  // repo's branch as `repoBranch`, but the branch is still there, with work main does not
+  // have (the turn ended in the other repo, so nothing merged it). It goes on from that
+  // work instead of starting over from main and dropping it.
   const unmerged = async (ref) => (await hasRef(dir, ref)) && !(await git(dir, ['merge-base', '--is-ancestor', ref, remote]).then(() => true, () => false));
+  // The branch it had here is kept under the repo's name (`repoBranches`), because the
+  // thread may have been renamed since: a name made from the title it has now would be a
+  // new, empty branch, "nothing to merge", and the work would stay on the old one (55d1,
+  // 23-11-2026).
+  const kept = thread.repoBranches?.[key(full)] || '';
+  if (kept && await unmerged(`refs/heads/${kept}`)) return { branch: kept, from: null };
+  if (kept && await unmerged(`refs/remotes/origin/${kept}`)) return { branch: kept, from: `origin/${kept}` };
+  branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
   if (await unmerged(`refs/heads/${branch}`)) return { branch, from: null };
   if (await unmerged(`refs/remotes/origin/${branch}`)) return { branch, from: `origin/${branch}` };
   return { branch, from: remote };
@@ -723,7 +737,7 @@ function openMain(threadId, full, dir, base, { share }) {
     if (from) await git(dir, ['checkout', '--quiet', '-B', branch, from]);
     else if (on !== branch) await git(dir, ['checkout', '--quiet', branch]);
     if (share) await linkShared(full, dir);
-    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base });
+    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base, repoBranches: keepBranch(threadId, full, branch) });
     return { dir, branch, base, worktree: false };
   });
 }
@@ -747,7 +761,7 @@ async function openWorktree(threadId, full, mainDir, base) {
       log(`repos: "${thread.title}" got a worktree of its own in ${full}, as another thread works in the main copy`);
     }
     await linkShared(full, wt);
-    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base });
+    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base, repoBranches: keepBranch(threadId, full, branch) });
     return { dir: wt, branch, base, worktree: true };
   });
 }
@@ -1011,7 +1025,7 @@ export async function merge(threadId, { locked = false } = {}) {
         await git(dir, ['checkout', '--quiet', '-B', base, `origin/${base}`]);
       }
       await git(dir, ['branch', '-D', branch]).catch(() => {});
-      store.updateThread(threadId, { repoBranch: '', repoMerged: Date.now() });
+      store.updateThread(threadId, { repoBranch: '', repoMerged: Date.now(), repoBranches: keepBranch(threadId, full, '') });
       log(`repos: merged ${branch} into ${full} ${base}`);
       return { base };
     });
@@ -1115,7 +1129,12 @@ export async function rename(fromInput, toName) {
   });
   if (locks.has(k)) { const L = locks.get(k); L.full = to; locks.set(key(to), L); locks.delete(k); }
   if (settings.has(k)) { settings.set(key(to), settings.get(k)); settings.delete(k); }
-  for (const t of store.listThreads()) if (t.repo && key(t.repo) === k) store.updateThread(t.id, { repo: to });
+  for (const t of store.listThreads()) {
+    const patch = {};
+    if (t.repo && key(t.repo) === k) patch.repo = to;
+    if (t.repoBranches?.[k]) { const { [k]: branch, ...rest } = t.repoBranches; patch.repoBranches = { ...rest, [key(to)]: branch }; }
+    if (Object.keys(patch).length) store.updateThread(t.id, patch);
+  }
   // The brain and the app's data are repos too. GitHub forwards the old address, but the
   // clones are pointed at the new one so nothing depends on that.
   for (const field of ['brainRepo', 'dataRepo']) {
