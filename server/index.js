@@ -726,7 +726,8 @@ app.delete('/api/threads/:id', (req, res) => {
   if (!thread) return;
   if (thread.state === 'working') runner.stopTurn(thread.id);
   log(`thread deleted: "${thread.title}"`);
-  repos.releaseAll(thread.id);
+  repos.forget(thread.id);
+  repos.dropWorktrees(thread.id).catch(() => {});
   store.deleteThread(thread.id);
   datasync.saveNow('thread deleted').catch(() => {});
   res.json({ deleted: true });

@@ -776,6 +776,7 @@ async function runTurn(threadId, prompt) {
       systemAppend: threadInstructions(store.getThread(threadId)),
       repoDir,
       reposDir: config.reposDir,
+      repoRoots: [repos.dirsForPolicy().worktrees, repos.dirsForPolicy().shared],
       repoTools,
       model: tier.model,
       effort: tier.effort,
