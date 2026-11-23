@@ -47,6 +47,12 @@ function whatNext(threadId, failure, detail) {
 
 const shipping = new Set(); // threads whose branch is being tested or merged right now
 export const isShipping = (threadId) => shipping.has(threadId);
+export const anyShipping = () => shipping.size > 0;
+
+// Told when a branch went into main (selfupdate.noteMerged: the app's own repo means a
+// new version of the app).
+let mergedHook = null;
+export function onMerged(fn) { mergedHook = fn; }
 
 function run(cmd, args, cwd, ms) {
   return new Promise((resolve) => {
@@ -155,10 +161,11 @@ export async function afterTurn(threadId) {
         if (store.getThread(threadId)?.state === 'working') return;
         const branch = now.repoBranch;
         const { base } = await repos.merge(threadId, { locked: true });
+        try { mergedHook?.(full); } catch { /* never in the way */ }
         const tested = result.ran ? 'ran the tests, they passed, and it' : 'found no tests in this repo and';
         note(repair
-          ? `The app ${tested} merged the fix into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The app updates itself with it within ten minutes.`
-          : `The app ${tested} merged the branch ${branch} into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.${full.toLowerCase() === (config?.repair?.repo || 'fburgerdev/app-ai').toLowerCase() ? ' The app updates itself with it within ten minutes.' : ''}`);
+          ? `The app ${tested} merged the fix into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.`
+          : `The app ${tested} merged the branch ${branch} into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.${full.toLowerCase() === (config?.repair?.repo || 'fburgerdev/app-ai').toLowerCase() ? ' The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.' : ''}`);
         if (repair) store.updateThread(threadId, { state: 'done', doneAt: Date.now() });
         log(`ship: merged ${branch} into ${full} ${base}${result.ran ? ' after its tests passed' : ' (no tests)'}`);
       };
