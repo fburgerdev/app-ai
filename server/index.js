@@ -27,13 +27,14 @@ import { initRepair, report } from './repair.js';
 import { createPruner } from './prune.js';
 import { buildPolicy, runAgent } from './agent.js';
 import { git as runGit } from './git.js';
-import { initShip, isShipping } from './ship.js';
+import { initShip, isShipping, anyShipping, onMerged } from './ship.js';
 import { initPi } from './pi.js';
 import { stats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
-import { startSelfUpdate, updateStatus, checkNow } from './selfupdate.js';
+import { startSelfUpdate, updateStatus, checkNow, lockForUpdate, unlockUpdate, noteMerged, fakeAvailable } from './selfupdate.js';
+import * as gate from './gate.js';
 import { parseMail, closesOnSend } from './mail.js';
 import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
 import * as drafts from './drafts.js';
@@ -139,7 +140,8 @@ const pruner = createPruner({
 });
 // A turn held by the usage limit is not work in progress: it must not keep the laptop
 // from handing over, or the app from updating itself.
-const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning;
+// A merge being tested counts too: a restart in the middle would leave it half done.
+const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -389,6 +391,7 @@ app.get('/api/events', (req, res) => {
     brain: send('brain'),
     projects: send('projects'),
     connections: send('connections'),
+    update: send('update'),
     // The page moved to the other computer, or the data was read again from disk: end
     // this stream, so the page connects again and reads the whole state.
     'link-switched': () => res.end(),
@@ -625,6 +628,25 @@ app.get('/api/usage', (req, res) => res.json(usageOverview()));
 app.get('/api/stats', (req, res) => { try { res.json(stats()); } catch (err) { res.status(500).json({ error: err.message }); } });
 // Check for a new version now; `force` updates even while Claude is working.
 app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
+// The line at the top: a new version is there, and what the lock still waits for.
+// Passed on to the Pi when handed over, so it is always the side that does the work.
+const lockWaitsFor = () => [
+  ...store.listThreads().filter((t) => t.state === 'working' && !t.held).map((t) => ({ id: t.id, title: t.title })),
+  ...(extraction.extractionStatus().running ? [{ title: 'the brain update' }] : []),
+  ...(cards.cardsStatus().running ? [{ title: 'the card run' }] : []),
+  ...(anyShipping() ? [{ title: 'a merge into main' }] : []),
+  ...(pruner.status().partRunning ? [{ title: 'the night prune' }] : []),
+];
+const queuedForLock = () => store.listThreads().filter((t) => t.state === 'working' && t.held?.kind === 'gate').length + (getState().brainHeld?.gate ? 1 : 0);
+const updateView = () => ({ ...updateStatus(), lock: gate.status(), waitsFor: lockWaitsFor(), queued: queuedForLock() });
+app.get('/api/update', (req, res) => res.json(updateView()));
+// "Lock for update" (on), and undoing it (off).
+app.post('/api/update/lock', (req, res) => {
+  const out = req.body?.on === false ? unlockUpdate() : lockForUpdate();
+  res.json({ outcome: out.outcome, status: updateView() });
+});
+// For the tests: the stand-in has a new version.
+if (config.fake) app.post('/api/update/fake', (req, res) => res.json(fakeAvailable(req.body?.version, req.body?.subject)));
 // For the tests: report a failure the way the app's own parts do.
 if (config.fake) app.post('/api/repair/test', (req, res) => res.json({ thread: report(String(req.body.source), String(req.body.message)) }));
 
@@ -727,6 +749,7 @@ app.post('/api/threads/:id/repo/merge', async (req, res) => {
   const branch = thread.repoBranch;
   try {
     const { base } = await repos.merge(thread.id);
+    noteMerged(thread.repo);
     repoEvent(thread, `Florian merged the branch ${branch} into ${base} of ${thread.repo} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.`);
     res.json({ status: await repos.status(thread.id) });
   } catch (err) { res.status(409).json({ error: err.message }); }
@@ -1054,6 +1077,9 @@ datasync.startDataSync();
 startSelfUpdate(config, { busy: () => Boolean(isBusy()) });
 initRepair(config, { send: runner.sendMessage, mayRun: link.mayRunBackground });
 initShip(config);
+onMerged(noteMerged);
+// The lock came on or went off (an update, a handover): the line at the top changes.
+gate.onChange(() => store.events.emit('update', updateView()));
 videokit.initVideoKit(config);
 initPi(config);
 initLabels(config);

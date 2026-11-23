@@ -28,6 +28,7 @@ import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import * as datasync from './datasync.js';
 import { events } from './store.js';
+import * as gate from './gate.js';
 
 let config;
 let isBusy = () => false;
@@ -65,7 +66,8 @@ function setChoice(next) {
 // Background work (cards, events, sorting threads) runs on one computer only: on the
 // laptop while it does the work and is not handing over; on the Pi while the laptop has
 // not said for a few minutes that it does.
-export const mayRunBackground = () => !finalizing && (enabled() ? choice === 'local' && !isRemote() : Date.now() - leaseAt > LEASE_MS);
+// Nothing starts by itself either while locked for an update or a handover (gate.js).
+export const mayRunBackground = () => !finalizing && !gate.isLocked() && (enabled() ? choice === 'local' && !isRemote() : Date.now() - leaseAt > LEASE_MS);
 
 // Getting ready to suspend: no new background work starts, and what is here is saved, so
 // the status line can say when the computer can sleep. Any message from Florian ends it.
@@ -209,6 +211,9 @@ export function choose(next) {
 export async function initLink(cfg, { busy }) {
   config = cfg;
   isBusy = busy;
+  // A handover he asked for locks this computer until it has gone through: what is sent
+  // meanwhile waits, and the Pi starts it once it has taken over (Florian, 23-11-2026).
+  gate.alsoWhen(() => (enabled() && choice === 'remote' && active === 'local' ? 'handover' : ''));
   if (!enabled()) return;
   // Handed over before the app stopped: still handed over. The laptop did nothing since,
   // so the page goes straight to the Pi.
