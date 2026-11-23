@@ -132,6 +132,10 @@ export async function afterTurn(threadId) {
     // time instead (repos.withMergeLock) and the branch is brought up to date with main first.
     await repos.ensure(full);
     const parallel = repos.isParallel(full);
+    // A new turn of this thread holds the repo already (a follow-up started meanwhile): the
+    // lock is the turn's, under the same name, so this neither takes nor gives it back. That
+    // turn's end merges.
+    if (repos.holds(full, threadId)) return;
     await repos.acquire(full, threadId, { mode: 'shared' });
     try {
       const now = store.getThread(threadId);
