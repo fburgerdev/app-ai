@@ -165,7 +165,7 @@ async function writeThreads(dir, changed) {
         const base = safeFileName(artifact.name.slice(0, artifact.name.length - ext.length).replace(/\//g, ' - '));
         const dest = path.join(filesDir, `${base} (v${version.v})${ext}`);
         fs.copyFileSync(src, dest);
-        const who = version.by === 'you' ? 'edited by Florian' : 'written by Claude';
+        const who = version.by === 'you' ? 'edited by Florian' : version.by === 'app' ? 'put in by the app, the mails as they are in Gmail' : 'written by Claude';
         const sent = artifact.mail?.sentVersion === version.v ? `, SENT by Florian ${dateTimeDMY(artifact.mail.sentAt)}` : '';
         artifactLines.push(`- "${artifact.name}" version ${version.v}, ${who}, ${dateTimeDMY(version.ts)}${sent}: \`${dest}\``);
       }

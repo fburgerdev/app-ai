@@ -9,6 +9,7 @@ For an entry that is worth preparing (a meeting with people outside his own grou
 - `important`: `true` for what deserves a real preparation (a fair, a conference, a talk he gives, a first meeting with an organisation, a meeting where something gets decided). Its thread opens a day before. `false` for smaller things (a call, a regular meeting with something new on it); those open on the day.
 - `why` says when it is and why it deserves preparing.
 - `project` is the project or area it belongs to, if the vault shows one.
+- `mailThreads`: the Gmail thread ids of the mail conversation that led to this entry (where it was arranged, asked for or agreed), found with the mail search: with the people in the entry, about its subject, in the weeks before. Up to three, the most relevant first; an empty list when there is none, such as an entry he made himself. Look properly: the app puts these mails into the thread word for word, because Florian wants to read what he asked himself next to the briefing.
 - `text` is the brief for that thread: what the entry is, when and where, who is there as far as the calendar and the vault show, and which notes to read. Ask it to write a short briefing (what he wants out of it, what is open with the people there, what to bring or have ready) and then to start a preparation session as `Claude/Thinking With Me.md` describes. For a small entry, a few lines of briefing are enough.
 
 An entry whose event is already in that list under another time has moved: it is not made again.

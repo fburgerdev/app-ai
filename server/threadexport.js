@@ -53,7 +53,7 @@ export function renderThread(thread, messages) {
   for (const artifact of store.listArtifacts(thread.id)) {
     const last = artifact.versions.at(-1);
     const sent = artifact.mail?.sentAt ? `, sent by Florian ${dateTimeDMY(artifact.mail.sentAt)}` : '';
-    files.push(`### File "${artifact.name}" (${artifact.versions.length} ${artifact.versions.length === 1 ? 'version' : 'versions'}; the last ${last.by === 'you' ? 'edited by Florian' : 'written by Claude'}, ${dateTimeDMY(last.ts)}${sent})`);
+    files.push(`### File "${artifact.name}" (${artifact.versions.length} ${artifact.versions.length === 1 ? 'version' : 'versions'}; the last ${last.by === 'you' ? 'edited by Florian' : last.by === 'app' ? 'put in by the app, the mails as they are in Gmail' : 'written by Claude'}, ${dateTimeDMY(last.ts)}${sent})`);
     if (!TEXT_FILE.test(artifact.name)) { files.push('', '(not a text file; kept in the app)', ''); continue; }
     let text = '';
     try { text = (store.readArtifactText(thread.id, artifact.name) || '').trim(); } catch { /* gone */ }

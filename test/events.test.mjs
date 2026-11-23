@@ -121,6 +121,7 @@ test('an event close enough opens with its briefing, outside the inbox, and stay
   const t = await ready(fair.id);
   assert.match(t.messages[0].text, /^This is the thread for an entry in Florian's calendar: Example fair/);
   assert.match(t.messages[0].text, /prepare before the entry and to debrief after it/);
+  assert.match(t.messages[0].text, /Search his mail .* word for word: write it into the artifacts folder as "Mailverlauf — Example fair\.md"/, 'no mails found by the calendar run: the briefing looks for them');
   assert.ok(!(await state()).queue.order.includes(fair.id), 'not in the inbox');
   // The smaller call two hours from now opens too: its morning has passed, an hour before at the latest.
   const small = (await state()).threads.find((t2) => t2.kind === 'event' && t2.title === 'Call with the example office');
