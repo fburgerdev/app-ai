@@ -13,7 +13,7 @@ import { cleanup, freePort, until } from './helpers.mjs';
 import WebSocket from 'ws';
 import { parseMail, serializeMail } from '../server/mail.js';
 import { parseIndex } from '../server/projects.js';
-import { parseReport } from '../server/extract.js';
+import { notesSection, parseReport } from '../server/extract.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -448,6 +448,37 @@ test('send and done keeps the message and closes the thread without an answer; f
   const original = await ready(planThread);
   assert.equal(original.messages.at(-1).role, 'assistant', 'the original thread got its answer too');
   assert.ok(!(await state()).threads.some((t) => t.spunFrom === spun.id), 'and the spin-off does not spin off again');
+});
+
+test('Yes and No on a proposed line go into the thread and with the next message; notes are kept with the thread', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Propose the lines for the motion' })).data.thread.id;
+  await ready(id);
+  const before = (await thread(id)).messages.length;
+  assert.equal((await call('POST', `/api/threads/${id}/confirm`, { line: 'Waiting For: the office, chase 03-12', answer: 'maybe' })).status, 400);
+  const yes = await call('POST', `/api/threads/${id}/confirm`, { line: 'Waiting For: the office, chase 03-12', group: 'Motion', answer: 'yes' });
+  assert.equal(yes.status, 200);
+  assert.deepEqual(yes.data.message.confirm, { line: 'Waiting For: the office, chase 03-12', group: 'Motion', answer: 'yes' });
+  assert.match(yes.data.message.text, /^\[Florian confirmed with the Yes button, .*under "Motion": Waiting For: the office, chase 03-12\]$/);
+  // He changes his mind: the newer answer replaces the older one for the next turn.
+  await call('POST', `/api/threads/${id}/confirm`, { line: 'Waiting For: the office, chase 03-12', group: 'Motion', answer: 'no' });
+  let t = await thread(id);
+  assert.equal(t.thread.state, 'ready', 'a click starts no turn');
+  assert.equal(t.messages.length, before + 2);
+  assert.equal(t.thread.unsent.length, 1);
+  assert.match(t.thread.unsent[0], /declined with the No button/);
+  await call('POST', `/api/threads/${id}/messages`, { text: 'Go on' });
+  t = await ready(id);
+  assert.match(t.thread.turnPrompt, /declined with the No button[\s\S]*Go on$/);
+  assert.deepEqual(t.thread.unsent, []);
+  // Notes: saved with the thread, unchanged text is no new save.
+  const n1 = (await call('PUT', `/api/threads/${id}/notes`, { text: 'holiday from 07-12\nscope: Uni first' })).data.notes;
+  assert.equal(n1.text, 'holiday from 07-12\nscope: Uni first');
+  const n2 = (await call('PUT', `/api/threads/${id}/notes`, { text: 'holiday from 07-12\nscope: Uni first' })).data.notes;
+  assert.equal(n2.ts, n1.ts);
+  assert.equal((await thread(id)).thread.notes.text, n1.text);
+  assert.deepEqual(notesSection({ notes: n1, extractedAt: 0 }).slice(0, 1).map((l) => /new since the last brain update/.test(l)), [true]);
+  assert.match(notesSection({ notes: n1, extractedAt: n1.ts + 1 })[0], /context only/);
+  assert.deepEqual(notesSection({ notes: { text: '  ', ts: 1 } }), []);
 });
 
 test('a spin-off starts as a copy; the original goes to the back untouched; a thread can be deleted', async () => {

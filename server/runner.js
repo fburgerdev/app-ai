@@ -113,6 +113,23 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   return message;
 }
 
+// Florian answers a proposed line with its Yes or No button (Florian, 23-11-2026: "they
+// should be taken into account for the next response as well as for brain updates").
+// The click starts no turn. It goes into the thread as a note, which the brain update
+// reads as his answer, and it goes in first with his next message, so Claude knows it
+// too. A second click on the same line is his new answer.
+export function recordConfirm(threadId, { line, group = '', answer }) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('No such thread');
+  const yes = answer === 'yes';
+  const text = `[Florian ${yes ? 'confirmed' : 'declined'} with the ${yes ? 'Yes' : 'No'} button, ${dateTimeDMY(Date.now())}, the proposed line${group ? ` under "${group}"` : ''}: ${line}]`;
+  const message = store.appendMessage(threadId, { role: 'user', event: true, text, confirm: { line, group, answer: yes ? 'yes' : 'no' } });
+  // An earlier click on the same line is replaced, not stacked.
+  const unsent = (thread.unsent || []).filter((u) => !(u.startsWith('[Florian confirmed with') || u.startsWith('[Florian declined with')) || !u.endsWith(`: ${line}]`));
+  store.updateThread(threadId, { unsent: [...unsent, text] });
+  return message;
+}
+
 // How many turns may run at once. Work the app started by itself (`background`) leaves
 // one slot free, so a message of Florian's never waits behind it for long.
 const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);

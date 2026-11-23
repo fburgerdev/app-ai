@@ -167,6 +167,11 @@ document.addEventListener('pointermove', (e) => {
 }, { passive: true });
 document.documentElement.addEventListener('mouseleave', () => foldPointer(''));
 
+// The notes field of an event thread (notesBox): text typed but not saved yet, and the
+// save of the one on screen, run before the panel changes.
+const notesDraft = new Map();
+let flushNotes = () => {};
+
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
@@ -1354,6 +1359,8 @@ function shortNote(text) {
 }
 
 function messageEl(threadId, m) {
+  // A Yes or No shows on its line, not as a note of its own.
+  if (m.role === 'user' && m.event && m.confirm) return h('span', { class: 'msg-hidden', hidden: true });
   if (m.role === 'user' && m.event) {
     const n = shortNote(m.text);
     const full = m.text.replace(/^\[|\]$/g, '');
@@ -1376,6 +1383,7 @@ function messageEl(threadId, m) {
   }
   const body = h('div', { class: 'msg-body' });
   partsInto(body, threadId, m.parts || []);
+  markLines(body);
   const el = h('article', { class: 'msg msg-claude' }, body);
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
   if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
@@ -1510,6 +1518,14 @@ function renderHead() {
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
+  }
+  if (t.kind === 'event' && t.event?.started) {
+    const on = S.panel?.kind === 'notes' && S.panel.threadId === t.id;
+    actions.unshift(h('button', {
+      class: `btn btn-quiet${on || t.notes?.text?.trim() ? ' is-on' : ''}`, type: 'button',
+      title: 'Notes during the call: Enter makes a new line, saved as you type. Also under the briefing when it is open.',
+      onclick: () => { if (on) closePanel(); else openPanel({ kind: 'notes', threadId: t.id }); renderHead(); },
+    }, 'Notes'));
   }
   const files = t.kind === 'card' ? [] : S.view?.artifacts || [];
   if (files.length) {
@@ -2183,6 +2199,7 @@ function step(direction) {
 let panelTimer = 0;
 
 function closePanel() {
+  flushNotes();
   S.panel = null;
   els.app.classList.remove('has-panel');
   clearTimeout(panelTimer);
@@ -2214,13 +2231,68 @@ const TEXT_TYPES = ['md', 'txt', 'csv', 'json', 'js', 'mjs', 'ts', 'py', 'css', 
 const IMAGE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
 
 async function openPanel(panel) {
+  flushNotes();
   if (phone.matches) setRail(false);
   S.panel = panel;
   if (panel.kind === 'artifact') return showArtifact(panel);
   if (panel.kind === 'note') return showNote(panel);
   if (panel.kind === 'run') return showRun(panel.run);
   if (panel.kind === 'repo') return showRepo(panel);
+  if (panel.kind === 'notes') return panelFrame('Notes during the call', [], notesBox(panel.threadId, { alone: true }));
   return showFiles();
+}
+
+// Notes during an event (Florian, 23-11-2026): "give me a way to enter notes during the
+// meeting, like a text field. the chat field is not really viable for that because it
+// sends with enter." Under the file in the side panel of an event thread, or alone from
+// the Notes button. Enter makes a new line; the text is saved as he types, with the
+// thread, and the brain update reads it even if he never sends it.
+
+function notesBox(threadId, { alone = false } = {}) {
+  const t = S.threads.get(threadId);
+  const state = h('span', { class: 'notes-state' }, t?.notes?.ts ? `saved ${stamp(t.notes.ts)}` : 'Enter makes a new line · saved as you type');
+  const area = h('textarea', { class: 'notes-text', placeholder: 'Type during the call…', 'aria-label': 'Notes during the call', spellcheck: 'true' });
+  area.value = notesDraft.get(threadId) ?? t?.notes?.text ?? '';
+  let timer = 0;
+  const save = async () => {
+    clearTimeout(timer);
+    if (!notesDraft.has(threadId)) return;
+    const text = notesDraft.get(threadId);
+    try {
+      const out = await api('PUT', `/api/threads/${threadId}/notes`, { text });
+      if (notesDraft.get(threadId) === text) notesDraft.delete(threadId);
+      const meta = S.threads.get(threadId);
+      if (meta && out.notes) S.threads.set(threadId, { ...meta, notes: out.notes });
+      if (state.isConnected && !notesDraft.has(threadId)) state.textContent = out.notes?.ts ? `saved ${stamp(out.notes.ts)}` : 'saved';
+    } catch (err) {
+      if (state.isConnected) state.textContent = `not saved: ${err.message}`;
+    }
+  };
+  flushNotes = save;
+  area.addEventListener('input', () => {
+    notesDraft.set(threadId, area.value);
+    state.textContent = 'saving…';
+    clearTimeout(timer);
+    timer = setTimeout(save, 700);
+  });
+  area.addEventListener('blur', save);
+  const send = h('button', {
+    class: 'btn', type: 'button', title: 'Send the notes as your message, and Claude starts the debrief',
+    onclick: async () => {
+      const text = area.value.trim();
+      if (!text) { toast('No notes yet.'); return; }
+      notesDraft.set(threadId, area.value);
+      await save();
+      try {
+        await api('POST', `/api/threads/${threadId}/messages`, { text: `My notes from ${S.threads.get(threadId)?.title || 'the call'}, for the debrief:\n\n${text}` });
+        toast('Sent to Claude.');
+      } catch (err) { toast(err.message); }
+    },
+  }, 'Send to Claude for the debrief');
+  return h('section', { class: `notes-box${alone ? ' is-alone' : ''}` },
+    h('div', { class: 'notes-head' }, h('span', {}, 'Notes during the call'), state),
+    area,
+    h('div', { class: 'notes-acts' }, send));
 }
 
 function toggleFiles() {
@@ -2402,6 +2474,7 @@ async function showArtifact(panel) {
 
   const body = h('div', { class: 'panel-body quotable', dataset: { quoteSource: source } });
   panelFrame(name, tools, body);
+  if (S.threads.get(threadId)?.kind === 'event') els.panel.append(notesBox(threadId));
 
   try {
     if (isText) {
@@ -3245,8 +3318,46 @@ document.addEventListener('click', (e) => {
       copy.textContent = 'Copied';
       setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
     });
+    return;
   }
+  const yesNo = e.target.closest('.confirm-btn');
+  if (yesNo && els.messages.contains(yesNo)) answerLine(yesNo);
 });
+
+// Yes or No on a line Claude proposed. The answer shows on the line at once; the app
+// writes it into the thread, where the next turn and the brain update read it.
+async function answerLine(btn) {
+  const li = btn.closest('li.confirm-line');
+  const threadId = S.current;
+  if (!li || !threadId) return;
+  const answer = btn.dataset.answer;
+  const before = li.classList.contains('is-yes') ? 'yes' : li.classList.contains('is-no') ? 'no' : '';
+  if (before === answer) return;
+  setLineState(li, answer);
+  try {
+    await api('POST', `/api/threads/${threadId}/confirm`, { line: li.dataset.line, group: li.dataset.group || '', answer });
+  } catch (err) {
+    setLineState(li, before);
+    toast(err.message);
+  }
+}
+
+function setLineState(li, answer) {
+  li.classList.toggle('is-yes', answer === 'yes');
+  li.classList.toggle('is-no', answer === 'no');
+}
+
+// The last answer to each line in this thread, from its notes.
+function lineAnswers() {
+  const out = new Map();
+  for (const m of S.view?.messages || []) if (m.confirm?.line) out.set(m.confirm.line, m.confirm.answer);
+  return out;
+}
+
+function markLines(root = els.messages) {
+  const answers = lineAnswers();
+  for (const li of root.querySelectorAll('li.confirm-line')) setLineState(li, answers.get(li.dataset.line) || '');
+}
 
 let lastKeyAt = 0;
 
@@ -3375,6 +3486,8 @@ function onThread(t) {
 function onMessage({ threadId, message }) {
   if (threadId !== S.current || !S.view || S.threads.get(threadId)?.kind === 'card') return;
   S.view.messages.push(message);
+  // His Yes or No, perhaps clicked on another device: it shows on the line.
+  if (message.confirm) { markLines(); return; }
   const stick = nearBottom();
   if (message.role === 'assistant') {
     S.live = null;

@@ -748,6 +748,51 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .md .callout-danger, .md .callout-bug, .md .callout-failure { border-left-color: var(--bad); background: rgba(255, 143, 143, 0.08); }
 .md .callout-danger .callout-title, .md .callout-bug .callout-title, .md .callout-failure .callout-title { color: var(--bad); }
 
+/* The blocks of a reply (Florian, 23-11-2026): square, a thin rule and a coloured label;
+   only "Your move" and the lines to confirm are tinted, so the eye lands there first. */
+.md .block { border-radius: 0; background: none; border-left: 2px solid var(--b); padding: 0.1em 0 0.1em 0.9em; margin: 0 0 1em; color: var(--read); }
+.md .block .callout-title { font: 700 0.72em/1.4 var(--sans); text-transform: uppercase; letter-spacing: 0.08em; color: var(--b); margin-bottom: 0.25em; }
+.md .callout-move, .md .callout-confirm { --b: var(--you); border-left-width: 4px; padding: 0.7em 1em; background: color-mix(in srgb, var(--you) 12%, transparent); }
+.md .callout-take { --b: var(--work); }
+.md .callout-found { --b: var(--bad); }
+.md details.callout-done { --b: var(--done); border-left: 2px solid var(--b); background: color-mix(in srgb, var(--done) 8%, transparent); padding: 0.4em 0.9em; margin: 0 0 1em; font-size: 0.88em; }
+.md details.callout-done > summary { display: flex; align-items: baseline; gap: 0.6em; cursor: pointer; list-style: none; }
+.md details.callout-done > summary::-webkit-details-marker { display: none; }
+.md details.callout-done > summary .callout-title { margin: 0; flex: none; }
+.md details.callout-done .done-hint { color: var(--muted); flex: 1; min-width: 0; }
+.md details.callout-done > summary::after { content: '▸'; color: var(--faint); margin-left: auto; }
+.md details.callout-done[open] > summary::after { content: '▾'; }
+.md details.callout-done.is-empty > summary { cursor: default; }
+.md details.callout-done.is-empty > summary::after { content: none; }
+.md details.callout-done .done-body { margin-top: 0.5em; color: var(--text); }
+.md details.callout-done .done-body > :last-child { margin-bottom: 0; }
+.md .block > :last-child { margin-bottom: 0; }
+:root .md blockquote.block, :root .md details.block { color: var(--read); }
+
+/* Lines to confirm: Yes and No on each. The click goes into the thread (app.js). */
+.md li.confirm-line { position: relative; min-height: 2.1em; padding: 0.35em 7.4em 0.35em 0; margin: 0; border-top: 1px solid color-mix(in srgb, var(--you) 18%, transparent); }
+.md li.confirm-line:first-child { border-top: 0; }
+.md li.confirm-line > .confirm-btns { position: absolute; right: 0; top: 0.3em; display: inline-flex; gap: 0.35em; }
+.md .confirm-btn { font: 600 0.78em/1 var(--sans); padding: 0.38em 0.8em; border: 1px solid var(--you); background: transparent; color: var(--you); cursor: pointer; border-radius: 0; }
+.md .confirm-btn.confirm-no { border-color: var(--faint); color: var(--muted); }
+.md .confirm-btn:hover { background: color-mix(in srgb, var(--you) 16%, transparent); }
+.md .confirm-btn:disabled { opacity: 0.5; cursor: default; }
+.md li.confirm-line.is-yes .confirm-yes { background: var(--you); color: var(--you-ink); }
+.md li.confirm-line.is-no .confirm-no { background: var(--faint); color: var(--ground); border-color: var(--faint); }
+.md li.confirm-line.is-no { color: var(--muted); text-decoration: line-through; }
+.panel .md .confirm-btns, .msg-you .confirm-btns { display: none !important; }
+
+/* Notes during an event, under the file in the side panel. Enter makes a new line. */
+.notes-box { flex: none; border-top: 1px solid var(--line); padding: 12px 26px 16px; display: flex; flex-direction: column; gap: 8px; background: var(--rail); }
+.notes-box.is-alone { flex: 1; border-top: 0; padding-top: 22px; }
+.notes-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font: 650 0.85em/1.4 var(--sans); color: var(--head); }
+.notes-state { font: 400 0.82em/1.4 var(--sans); color: var(--muted); }
+.notes-box textarea { width: 100%; min-height: 120px; height: 22vh; resize: vertical; border: 1px solid var(--line); border-radius: 0; background: var(--sunken); color: var(--read); padding: 10px 12px; font: 0.95em/1.5 var(--sans); }
+.notes-box.is-alone textarea { flex: 1; height: auto; }
+.notes-box textarea:focus { outline: none; border-color: var(--you); }
+.notes-acts { display: flex; justify-content: flex-end; }
+@media (max-width: 760px) { .notes-box { padding: 10px 16px 14px; } }
+
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 1.6em 0; }
 .md img { max-width: 100%; border-radius: 6px; }
 

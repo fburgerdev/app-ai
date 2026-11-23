@@ -26,7 +26,9 @@ export function showAtFor(start, important) {
   return Math.min(morning.getTime(), s - 3600_000);
 }
 
-const LEAD = (t) => `This is the thread for an entry in Florian's calendar: ${t.title}, ${new Date(t.event.start).toString().slice(0, 21)}${t.event.where ? `, ${t.event.where}` : ''}. The app made it by itself; it is not in his inbox but in Events, where it stays until he closes it. He uses it to prepare before the entry and to debrief after it, so this thread is also where what came out of it gets recorded for the brain update. Do what the brief says, then end your turn with the first question of the preparation session.`;
+const LEAD = (t) => `This is the thread for an entry in Florian's calendar: ${t.title}, ${new Date(t.event.start).toString().slice(0, 21)}${t.event.where ? `, ${t.event.where}` : ''}. The app made it by itself; it is not in his inbox but in Events, where it stays until he closes it. He uses it to prepare before the entry and to debrief after it, so this thread is also where what came out of it gets recorded for the brain update. Do what the brief says, then end your turn with the first question of the preparation session.
+
+How the briefing is written (Florian, 23-11-2026): it goes into a file, and the file holds everything; he reads it beside the chat during the entry. The file starts with an "Abstract" of three to five lines: what the entry is (when, where, who), what he wants out of it, what is open with the people there, and what to have on screen. The rest follows below it. Your reply does not retell the file: one line naming it, then only the \`> [!move]\` block with the first question of the preparation session, and a folded \`> [!done]\` line for what you checked; what you found goes into the briefing, not into the reply. On a new version of the briefing, the same: one line on what changed, then the move. During the entry he types notes into a notes field under the briefing (Enter makes a new line); they come to you when he sends them for the debrief, as his message.`;
 
 export function createEvent(card) {
   const start = Date.parse(card.start);
