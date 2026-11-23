@@ -100,6 +100,10 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   // count of what the app retried by itself back (retry.js).
   // A turn that broke a repo's shared folders is merged once he has written (repos.saveWork).
   if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0, repoBreach: '' });
+  // His first message after an event ended is the debrief: the event leaves Events and
+  // goes on as an ordinary thread, until the follow-ups are out (Florian, 23-11-2026). A
+  // pin he set himself stays.
+  if (!auto && thread.kind === 'event' && thread.event && Date.now() >= thread.event.end && thread.pinned == null) store.updateThread(threadId, { pinned: false, debriefAt: Date.now() });
   // What he sent with "send and done" goes in first, so Claude has it too.
   const withUnsent = [...(thread.unsent || []), ...heldQueued, prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
@@ -798,6 +802,11 @@ async function runTurn(threadId, prompt) {
       spinOff,
       continueLater,
       steer: run.steer,
+      // A reply to a mail says whether it has to go out today, so it reaches him in Focus.
+      ...(store.getThread(threadId)?.kind === 'mail-reply' ? { markPressing: ({ pressing, why }) => {
+        store.updateThread(threadId, { pressing: Boolean(pressing), pressingWhy: pressing ? String(why || '').trim().slice(0, 120) : '' });
+        return pressing ? 'Marked pressing: it reaches Florian in Focus too.' : 'Marked not pressing: in Focus it waits for Catch-up.';
+      } } : {}),
       // His secrets reach a script on the workbench as APP_SECRET_<NAME>, and his
       // encrypted documents through use_document. Only when this computer has the key.
       ...(secrets.secretsEnabled() ? { secretsKey: threadId, useDocument } : {}),

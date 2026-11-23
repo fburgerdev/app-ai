@@ -71,11 +71,21 @@ A new thread is named by the first line of what you wrote. After Claude's first 
 
 The top of the inbox is **Pinned**. Events from the calendar are there from the start; any other thread gets there with **Pin** in its header or by dragging it onto the section. Pinned threads are not part of the queue: the app never jumps to one by itself, and each shows "Claude…" or "yours". Events always come first, by date, and cannot be reordered; below a thin line are the threads you pinned, which you drag into your own order. That order is kept with the thread, so every device shows the same. Unpin (the button, or drag it into Next up) puts a thread back among the others. Done or Defer takes the pin off.
 
-## Focus
+## Catch-up and Focus
 
-The switch in the top bar ("Everything" / "Focus") is for working through your own threads only. In Focus, what the app started by itself and you have not answered yet waits under one folded line in the inbox ("3 waiting for later"): opportunity and chase cards, proposals, the brain update's questions, mail to answer, check-ins, repairs. The card run makes no new cards; "Look for opportunities" still works when you click it. Events stay pinned, and your own threads, next actions you woke and spin-offs stay in the queue. Focus ends by itself at your sleep time (midnight if the sleep screen is off), so a day never starts in it by accident.
+The switch in the top bar opens a small menu with three ways of working:
 
-When the app sorts a thread wrongly, correct it with **Later** in the thread's header: in Focus the thread then waits under "waiting for later", even if it is your own and you keep writing in it. On a thread that waits there, the same button says **Back to focus** and keeps it in your queue, even a card. Dragging a thread onto the "waiting for later" line marks it Later, and dragging one out of it into the queue brings it back to focus. Your mark stays until you flip it. In "Everything" it changes nothing; threads you marked Later are only shown dimmed.
+- **Catch-up**: everything. Piled-up work, mail to answer, cards and opportunities, in the queue's order.
+- **Focus: deep work**: your own threads, on anything. What the app started by itself and you have not answered yet waits under one folded line in the inbox ("3 waiting for later"): opportunity and chase cards, proposals, the brain update's questions, mail that can wait, check-ins, repairs. Ends by itself at your sleep time (midnight if the sleep screen is off), so a day never starts in it by accident.
+- **Focus: one project**: only the threads of one project, or of an area and its projects. Everything else waits under "waiting for later", your own threads on other things included. It lasts until you end it, until tonight, or until a day you pick.
+
+In both kinds of Focus, events come through, and so does mail that has to go out today: Claude marks a reply **Today** when it drafts it (a deadline today or tomorrow, a call with the sender today, someone already waiting too long), with the reason on the tag. No new cards are made; "Look for opportunities" still works when you click it.
+
+When the app sorts a thread wrongly, correct it with **Later** in the thread's header: in Focus the thread then waits under "waiting for later", even if it is your own and you keep writing in it. On a thread that waits there, the same button says **Back to focus** and keeps it in your queue, even a card. Dragging a thread onto the "waiting for later" line marks it Later, and dragging one out of it into the queue brings it back to focus. Your mark stays until you flip it, and wins in both kinds of Focus. In Catch-up it changes nothing; threads you marked Later are only shown dimmed.
+
+## Events after they happen
+
+When an event is over, its thread asks "how was it?". Your first message after the end is the debrief: Claude turns it into follow-up mails and lines for your lists, and the thread leaves Events for your queue as an ordinary thread until you close it. Messages during the event (notes from a conference) do not unpin it. An event you never debrief leaves Events by itself at 20:00 the day after. A pin you set yourself stays.
 
 ## Next actions, Done and Defer
 

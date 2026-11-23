@@ -175,7 +175,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -235,6 +235,12 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
           why: z.string().describe('What you are waiting for, in a few words ("the v14 render", "npm install on the Pi")'),
         },
         async (args) => { try { return ok(await continueLater(args)); } catch (err) { return fail(err); } })] : []),
+      ...(markPressing ? [tool('mark_pressing', 'In a thread answering a mail: say whether the reply has to go out today. A pressing reply reaches Florian even while he focuses on one project or on deep work; any other waits for Catch-up. Pressing means: a deadline today or tomorrow, a call or meeting with the sender today, or the sender already waiting longer than they should. Not pressing just because it is polite to answer soon. Call it once, after reading the mail, with a one-line reason he sees beside the thread ("call with her at 15:00"); call it again with pressing false if that changes.',
+        {
+          pressing: z.boolean().describe('true when the reply has to go out today'),
+          why: z.string().describe('One short line, the reason'),
+        },
+        async (args) => { try { return ok(markPressing(args)); } catch (err) { return fail(err); } })] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -312,6 +318,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__github_describe_repo': return `Described the repo ${input.repo}`;
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__app__move_event': return `Moved ${input.event ? `the event "${clip(input.event, 50)}"` : 'this event'} in Events`;
+    case 'mcp__app__mark_pressing': return input.pressing ? `Marked the reply as pressing: ${clip(input.why || '', 60)}` : 'Marked the reply as not pressing';
     case 'mcp__app__continue_later': return `Carries on by itself in ${Math.round(Number(input.minutes) || 10)} min: ${clip(input.why || 'work still running', 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
@@ -371,8 +378,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer, markPressing }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -622,7 +629,7 @@ function resultText(content) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fakeBrainLimited = false;
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title, markPressing }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -842,6 +849,11 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   if (moveAsk) {
     onEvent?.({ type: 'tool', name: 'mcp__app__move_event', summary: `Moved the event "${moveAsk[1]}" in Events` });
     try { moveEvent({ event: moveAsk[1], start: moveAsk[2] }); } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
+  }
+  // "PRESSING-TEST": a mail to answer today; the stand-in marks it, as the real Claude would.
+  if (markPressing && /PRESSING-TEST/.test(newest)) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__mark_pressing', summary: 'Marked the reply as pressing: call today' });
+    markPressing({ pressing: true, why: 'call with them today' });
   }
   const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
   if (wanted) {
