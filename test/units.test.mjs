@@ -259,6 +259,35 @@ test('only the computer that runs a turn can call it lost; the other leaves it b
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('a merge into main cut off when the app stopped is tried again; the other computer\'s is left', async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-merging-'));
+  const threadsDir = path.join(dir, 'threads');
+  const write = (id, meta) => { fs.mkdirSync(path.join(threadsDir, id), { recursive: true }); fs.writeFileSync(path.join(threadsDir, id, 'thread.json'), JSON.stringify({ id, title: id, state: 'done', updatedAt: Date.now(), repo: 'fburgerdev/app-ai', repoBranch: `claude/${id}`, ...meta })); };
+  const later = Date.now() + 10 * 60_000;
+  write('here', { merging: { at: Date.now(), on: os.hostname() } });
+  write('planned', { merging: { at: Date.now(), on: os.hostname() }, remerge: { at: later } });
+  write('there', { merging: { at: Date.now(), on: 'the-other-computer' } });
+  write('quiet', {});
+  const { execFileSync } = await import('node:child_process');
+  const script = `
+    const store = await import(${JSON.stringify(new URL('../server/store.js', import.meta.url).href)});
+    store.loadThreads();
+    const g = (id) => { const t = store.getThread(id); return { merging: Boolean(t.merging), remerge: t.remerge?.at || 0 }; };
+    console.log(JSON.stringify({ here: g('here'), planned: g('planned'), there: g('there'), quiet: g('quiet') }));`;
+  const before = Date.now();
+  const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, APP_AI_DATA: dir }, encoding: 'utf8' }).trim().split('\n').pop());
+  assert.equal(out.here.merging, false);
+  assert.ok(out.here.remerge >= before && out.here.remerge < before + 5 * 60_000, 'its own cut-off merge runs again shortly');
+  assert.deepEqual(out.planned, { merging: false, remerge: later }, 'a merge already planned for later keeps its time');
+  assert.deepEqual(out.there, { merging: true, remerge: 0 }, 'a merge on the other computer is left as it is');
+  assert.deepEqual(out.quiet, { merging: false, remerge: 0 });
+  const saved = JSON.parse(fs.readFileSync(path.join(threadsDir, 'here', 'thread.json'), 'utf8'));
+  assert.ok(saved.remerge && !saved.merging, 'written to disk, so a second restart does not lose it either');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('a turn the other computer finished shows its answer here, never a false error', async () => {
   const os = await import('node:os');
   const fs = await import('node:fs');

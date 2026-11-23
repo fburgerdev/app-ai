@@ -80,6 +80,8 @@ test('tests pass: the branch is merged into main by itself, and what testing lef
   assert.ok(!onMain(good).includes('test-output.txt'), 'what the tests wrote is not');
   assert.equal(git(good, 'branch', '--list', 'claude/*').trim(), '', 'the merged branch is gone from GitHub');
   assert.equal((await thread(t.id)).thread.repoBranch, '');
+  // The mark that a merge is running (for a restart in the middle of it) is gone once it is done.
+  await until(async () => ((await thread(t.id)).thread.merging === null ? true : null), 'merge mark cleared', 10000);
 });
 
 test('tests fail: nothing is merged, Claude tries to fix it by itself, then the thread says why', async () => {
