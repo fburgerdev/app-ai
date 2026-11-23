@@ -2,13 +2,16 @@
 // type "go on" or "try again" (his wish, 22-11-2026: "i dont need to pay attention to the
 // thread all the time and it just retries itself").
 //
-// Three ways a thread stalls, and what the app does about each:
+// Four ways a thread stalls, and what the app does about each:
 //
 //   retry     the turn ended on an error (the API timed out, the stream closed, the
 //             network was away). It runs again by itself after a pause that grows.
 //   continue  Claude could not finish because something still runs (a render, a build,
 //             an install) and called continue_later. The app starts a turn by itself
 //             when it asked, to look again.
+//   goahead   the turn ended fine, but Claude's reply only waited for a go-ahead ("say go
+//             on when you're back") with no decision in it. The supervisor (supervise.js)
+//             saw that, and the app carries on by itself a minute later.
 //   merge     the branch could not go into main: the tests failed, or main clashes with
 //             it. A turn starts by itself to fix that, and the merge is tried again after.
 //             When the merge failed for another reason (GitHub not reachable), only the
@@ -30,7 +33,7 @@
 import { dateTimeDMY } from './util.js';
 import { clock } from './limits.js';
 
-export const DEFAULTS = { enabled: true, maxRuns: 20, errorTries: 3, backoffMin: [1, 4, 15], mergeFixes: 2, remerges: 3, remergeMin: 5, mergeFixDelayMs: 20_000, continueMinMin: 1, continueMaxMin: 60 };
+export const DEFAULTS = { enabled: true, maxRuns: 10, goaheadDelayMs: 60_000, errorTries: 3, backoffMin: [1, 4, 15], mergeFixes: 2, remerges: 3, remergeMin: 5, mergeFixDelayMs: 20_000, continueMinMin: 1, continueMaxMin: 60 };
 const settings = (opts) => ({ ...DEFAULTS, ...(opts || {}) });
 
 // Errors another try cannot fix: he has to sign in, or the conversation is too long.
@@ -42,7 +45,7 @@ export const retryable = (error) => Boolean(String(error || '').trim()) && !HOPE
 //   { kind: 'retry' | 'continue', until, tries, reason, auto }   held, runs again at `until`
 //   { stop: why, auto }                                         a safety handle was reached
 //   null                                                        nothing to do
-export function turnPlan({ auto, error = '', carryOn = null, didWork = false, opts, now = Date.now() }) {
+export function turnPlan({ auto, error = '', carryOn = null, goahead = '', didWork = false, opts, now = Date.now() }) {
   const o = settings(opts);
   if (!o.enabled) return null;
   const a = { ...(auto || {}) };
@@ -61,6 +64,12 @@ export function turnPlan({ auto, error = '', carryOn = null, didWork = false, op
     if (runs >= o.maxRuns) return { stop: `it already ran ${runs} times by itself since your last message`, auto: a };
     const minutes = Math.min(Math.max(Number(carryOn.minutes) || 10, o.continueMinMin), o.continueMaxMin);
     return { kind: 'continue', until: now + minutes * 60_000, tries: runs + 1, reason: String(carryOn.why || '').trim().slice(0, 300) || 'work still running', auto: { ...a, runs: runs + 1, fails: 0 } };
+  }
+  // Only a go-ahead was missing, and Claude did get something done this turn (a reply
+  // that only asks again, with no work in it, is left to him).
+  if (goahead && didWork) {
+    if (runs >= o.maxRuns) return { stop: `it already ran ${runs} times by itself since your last message`, auto: a };
+    return { kind: 'goahead', until: now + (Number(o.goaheadDelayMs) || 0), tries: runs + 1, reason: String(goahead).trim().slice(0, 300), auto: { ...a, runs: runs + 1, fails: 0 } };
   }
   return null;
 }
@@ -99,6 +108,7 @@ export function holdLine(held, now = Date.now()) {
   if (held.kind === 'retry') return `Ended on an error: tries again by itself at ${at}`;
   if (held.kind === 'continue') return `Waiting (${held.reason}): carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge: Claude fixes it by itself at ${at}`;
+  if (held.kind === 'goahead') return `Claude only needed a go-ahead: the supervisor carries on at ${at}`;
   if (held.kind === 'repo') return `Waiting for ${held.repo || held.reason}${held.mode === 'exclusive' ? ' (alone)' : ''}${held.holder ? `, held by ${held.holder}` : ''}: carries on by itself when it is free`;
   return '';
 }
@@ -115,6 +125,14 @@ export function resumeText(held, now = Date.now()) {
     return {
       prompt: `[The app: at the end of the last turn you called continue_later ("${held.reason}"). It is ${dateTimeDMY(now)} now, and the app started this turn by itself; Florian has not written anything since, unless a message follows below. Check on what you were waiting for and carry on with the work. If it is still running and has moved on since your last look, call continue_later again. If it has not moved, or it failed, do not wait again: find out why and fix it if you can; otherwise tell Florian what is stuck. The message the work is about:]\n\n${held.prompt}`,
       note: `[Claude was waiting for ${held.reason}; the app carried on by itself on ${dateTimeDMY(now)}.]`,
+    };
+  }
+  if (held.kind === 'goahead') {
+    return {
+      prompt: `[Supervisor (the app, not Florian): your last reply only waited for a go-ahead (${held.reason}). Carry on with the work. Florian has not written since, unless a message follows below. If you do need a decision from him, ask it in one line and stop. The message the work is about:]
+
+${held.prompt}`,
+      note: `[Claude only needed a go-ahead (${held.reason}); the supervisor told it to carry on on ${dateTimeDMY(now)}.]`,
     };
   }
   if (held.kind === 'merge') {
@@ -138,6 +156,9 @@ export function resumeText(held, now = Date.now()) {
 export function interruptedText(held, message) {
   if (held.kind === 'retry') return `[The app: the turn about the message below ended on an error ("${held.reason}") and was waiting to be tried again by itself. Florian has written since, so this turn starts now, with his new message at the end. Carry on with the work where it stopped, in the light of what he says.]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   if (held.kind === 'continue') return `[The app: you had called continue_later ("${held.reason}"), and Florian wrote before the app looked again. Answer him, and check on that work too.]\n\n${message}`;
+  if (held.kind === 'goahead') return `[The app: your last reply waited for a go-ahead, and the supervisor was about to tell you to carry on. Florian wrote first. Answer him, in the light of the work you were on.]
+
+${message}`;
   if (held.kind === 'merge') return `[The app: the merge of this thread's branch into main had failed, and a turn to fix it was about to start by itself. Florian wrote first. Answer him; unless he says otherwise, also fix what stopped the merge. What the app had for that turn:]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   if (held.kind === 'repo') return `[The app: the turn about the message below was parked, waiting for ${held.repo || held.reason}, and Florian wrote meanwhile. Answer him. This thread keeps its place in the queue for the repo: if the work needs it, open_repo waits for it, and parks the turn again if the wait is long. What the parked turn was about:]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   return message;

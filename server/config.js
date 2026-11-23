@@ -155,7 +155,7 @@ const DEFAULTS = {
   // at most `maxRuns` automatic turns, `errorTries` errors in a row in which Claude got
   // nothing done, `mergeFixes` fixing turns and `remerges` plain retries of the merge.
   // continue_later waits between `continueMinMin` and `continueMaxMin` minutes.
-  autoRetry: { enabled: true, maxRuns: 20, errorTries: 3, backoffMin: [1, 4, 15], mergeFixes: 2, remerges: 3, remergeMin: 5, mergeFixDelayMs: 20_000, continueMinMin: 1, continueMaxMin: 60 },
+  autoRetry: { enabled: true, maxRuns: 10, goaheadDelayMs: 60_000, errorTries: 3, backoffMin: [1, 4, 15], mergeFixes: 2, remerges: 3, remergeMin: 5, mergeFixDelayMs: 20_000, continueMinMin: 1, continueMaxMin: 60 },
 
   // How many threads may be worked on at once. More than this wait in line.
   maxParallel: 6,
