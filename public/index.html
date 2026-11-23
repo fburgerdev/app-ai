@@ -31,7 +31,10 @@
         <span class="top-label">Inbox</span><span id="inbox-count" class="top-count"></span>
       </button>
       <span class="top-space"></span>
-      <button id="focus-toggle" class="top-btn top-focus" type="button" aria-pressed="false"></button>
+      <div class="focus-wrap">
+        <button id="focus-toggle" class="top-btn top-focus" type="button" aria-haspopup="dialog" aria-expanded="false"></button>
+        <div id="focus-pop" class="status-pop focus-pop" hidden role="dialog" aria-label="Catch-up or Focus"></div>
+      </div>
       <div class="laptop-wrap">
         <button id="laptop-status" class="top-btn top-laptop" type="button" hidden aria-haspopup="dialog" aria-expanded="false"></button>
         <div id="status-pop" class="status-pop" hidden role="dialog" aria-label="This computer"></div>

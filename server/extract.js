@@ -592,6 +592,7 @@ async function fileAll(id, changed, pressedAt, mailOnly, dir, state) {
         `What it is about: ${m.why}`,
         '',
         'Read the conversation with the mail tools and the notes in the vault that it concerns. Then draft the reply as a mail file, with this thread id in `reply-to-thread:`. In your message, tell Florian in two or three sentences who wrote and what they want, say that a draft is ready, and ask the one thing you need from him, if any.',
+        'If the reply has to go out today (a deadline today or tomorrow, a call or meeting with the sender today, or they have waited too long already; check his calendar when a date matters), call mark_pressing with a one-line reason, so it reaches him while he focuses. Otherwise do not call it: the reply waits for Catch-up.',
       ].join('\n'), { auto: true });
       replyThreads.push(thread.id);
     }

@@ -16,9 +16,12 @@ about how it behaves, and about the one extra for renaming and creating repos.
 
 - The repo is cloned **the moment Claude opens it**, into `repos/<owner>/<name>` in the app's
   data folder, and fetched again every time a thread opens it. Never before.
-- **One thread at a time per repo.** A thread holds the repo from when Claude opens it until its
-  turn ends. Another thread that wants it waits, and says so in the inbox ("Waiting for
-  fburgerdev/app-ai: "Tidy the server code" is working in it"), for up to 20 minutes.
+- **One thread at a time per repo**, unless the repo says otherwise (see "Threads side by side"
+  below). A thread holds the repo from when Claude opens it until its turn ends. Another thread
+  that wants it waits, and says so in the inbox ("Waiting for fburgerdev/app-ai: "Tidy the server
+  code" is working in it"). After a few minutes (`repoWaitMs` in `config.json`, default three) its
+  turn is parked: it ends, keeps its place in the queue, and the app starts it again by itself the
+  moment the repo is free. Nobody has to say "go on".
 - **Every thread gets a branch of its own**, `claude/<thread name>-<id>`, from the repo's main
   branch. Claude commits there; what it leaves uncommitted is committed for it when the turn
   ends, and the app then pushes the branch to GitHub by itself, so the work is never on one
@@ -37,6 +40,48 @@ about how it behaves, and about the one extra for renaming and creating repos.
 - **Only the repo open at the end of a turn is merged by itself.** A thread that switches repos
   mid-turn leaves the first one's branch pushed but unmerged; it is merged once the thread
   ends a turn in it again.
+
+## Threads side by side in one repo
+
+Florian's decision, 23-11-2026. A repo can let several threads work in it at the same time. It
+says so in a file on its main branch, `.app/repo.json`:
+
+```json
+{
+  "parallel": true,
+  "shared": {
+    "readonly": ["fonts"],
+    "addonly": ["takes", "broll", "renders/versions"]
+  }
+}
+```
+
+- **Each thread gets a worktree of its own**, in `worktrees/<owner>/<name>/<thread>` in the app's
+  data folder, on its own branch. The main copy in `repos/` stays on main, for Video Kit and the
+  merges. A worktree goes once its branch is merged, or when the thread is deleted.
+- **The lock has two forms.** A normal turn shares the repo with the others. A turn that needs the
+  repo quiet takes it alone: `open_repo` with `exclusive: true`, which Claude does by itself for
+  migrations, renames, dependency upgrades, changes to `.app/repo.json` and writing into a
+  read-only folder, and says so in the thread. It waits until the turns already working there
+  have ended, and no new one starts meanwhile. Waiting longer than a few minutes parks the turn,
+  as above.
+- **Merges go one at a time.** Before its tests, a branch gets what main has now merged in, so
+  what is tested is what main will be. An exclusive turn holds the merges back until it ends.
+- **Shared folders** are folders git ignores (takes, B-roll, finished renders) that live once, in
+  `shared/<owner>/<name>/`, and are linked into every worktree and the main copy. A folder the
+  repo already had is moved in the first time. They are never synced to the Pi.
+  - **add-only**: new files go in, from a thread or from you dropping them in; a file once written
+    is never changed, renamed or deleted. A finished render goes in as a copy under a new version
+    number. Tools that write a temporary file and rename it (render caches) need a folder of the
+    worktree instead.
+  - **read-only**: nothing goes in or out, except in a turn that holds the repo alone.
+  - On Windows, Windows' own access rules hold this, against Claude's tools, scripts and git
+    alike: a plain read-only flag does not, and git following a link would empty the folder. The
+    app takes its links out before it deletes a worktree. At the end of every turn the app also
+    checks what changed; a turn that broke the rules, or changed `.app/repo.json` without the repo
+    to itself, is noted in the thread and not merged until you have written there.
+- Without `.app/repo.json`, or without `"parallel": true`, a repo works as before: one thread at a
+  time, in the one copy.
 
 ## Into main by itself
 

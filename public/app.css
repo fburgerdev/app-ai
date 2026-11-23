@@ -1807,3 +1807,24 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 .queued-x { border: 0; background: none; color: var(--faint); cursor: pointer; font-size: 16px; padding: 0 2px; }
 .queued-x:hover { color: var(--bad); }
 .queued-actions { margin-top: 6px; display: flex; justify-content: flex-end; }
+
+/* ---------- Catch-up / Focus: the menu under the switch (23-11-2026) ---------- */
+.focus-wrap { position: relative; flex: none; }
+.focus-pop { width: min(360px, 92vw); gap: 4px; padding: 6px; }
+.focus-opt, .focus-project {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; padding: 8px 10px; border: 0; border-radius: 7px;
+  background: none; color: var(--text); text-align: left;
+}
+.focus-opt { cursor: pointer; }
+.focus-opt:hover, .focus-opt:focus-visible { background: var(--raised); outline: none; }
+.focus-opt.is-on .focus-opt-title, .focus-project.is-on > .focus-opt-title { color: var(--you); }
+.focus-opt.is-on .focus-opt-title::after, .focus-project.is-on > .focus-opt-title::after { content: ' ✓'; font-size: 12px; }
+.focus-project { border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; gap: 6px; }
+.focus-opt-title { font-size: 13.5px; font-weight: 600; }
+.focus-opt-sub { font-size: 12.5px; color: var(--muted); white-space: normal; }
+.focus-row { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.focus-row .select { margin: 0; max-width: 100%; }
+.focus-row .select[hidden] { display: none; }
+.focus-project .btn { align-self: flex-start; }
+.tag-today { background: rgba(255, 170, 90, 0.18); color: var(--you); }

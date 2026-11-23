@@ -17,7 +17,7 @@ import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { runAgent } from './agent.js';
 import * as store from './store.js';
-import { getState, inFocus, readPad, writePad } from './state.js';
+import { focusNow, getState, readPad, writePad } from './state.js';
 import { readPrompt } from './util.js';
 
 const DIR = path.join(DATA_DIR, 'queue');
@@ -56,9 +56,12 @@ export function reloadQueue() {
 }
 
 // Pinned threads (events, and what he pinned himself) are not part of the queue.
-// In focus, what the app started, or what he marked "Later", waits outside the queue
-// (store.isLater).
-const waiting = () => store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t) && !(inFocus() && store.isLater(t))).sort((a, b) => a.queuedAt - b.queuedAt);
+// In focus, what does not belong to it waits outside the queue (store.isLater): what the
+// app started, or for a project's focus everything of other projects.
+const waiting = () => {
+  const focus = focusNow();
+  return store.listThreads().filter((t) => t.state === 'ready' && !t.hidden && !store.isPinned(t) && !(focus && store.isLater(t, focus))).sort((a, b) => a.queuedAt - b.queuedAt);
+};
 
 const requeuedLately = (t) => t.requeuedAt > Date.now() - (Number(config.queue.requeueMinutes) || 20) * 60_000;
 
@@ -123,7 +126,7 @@ function describe(t) {
   let kind = 'thread';
   if (t.kind === 'card') kind = `${t.card?.type === 'chase' ? 'chase card' : 'opportunity card'} (${t.card?.channel})`;
   else if (t.kind === 'brain-update') kind = 'brain update (its questions or a problem)';
-  else if (t.kind === 'mail-reply') kind = 'mail to answer';
+  else if (t.kind === 'mail-reply') kind = t.pressing ? 'mail to answer, has to go out today' : 'mail to answer';
   const bits = [`[${kind}${store.isDeep(t) ? ', deep work' : ''}]`, t.title];
   if (t.project) bits.push(`project: ${t.project}`);
   bits.push(`waiting ${waited}`);
@@ -137,7 +140,7 @@ async function rank() {
   if (ranking) { again = true; return; }
   const ready = waiting();
   const mood = getState().mood.trim();
-  const key = crypto.createHash('sha1').update(JSON.stringify([ready.map((t) => [t.id, t.requeuedAt]), mood, inFocus()])).digest('hex');
+  const key = crypto.createHash('sha1').update(JSON.stringify([ready.map((t) => [t.id, t.requeuedAt]), mood, focusNow()])).digest('hex');
   if (key === lastKey) return;
   if (ready.length < 2) {
     order = ready.map((t) => t.id);

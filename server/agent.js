@@ -62,9 +62,24 @@ function deny(message) {
   return { behavior: 'deny', message };
 }
 
+// What the file tools may do in a repo's shared folders (repos.js): read-only ones are
+// written only by an exclusive turn, add-only ones take new files but no change to an
+// existing one, and the repo's settings file is changed only by an exclusive turn.
+// Shell commands are not checked here; Windows' access rules and the check at the end of
+// the turn hold them. Returns a reason to refuse, or null.
+export function sharedRefusal(file, rules) {
+  if (!rules || rules.exclusive) return null;
+  if (rules.parallel && rules.settingsFile && path.resolve(file).toLowerCase() === path.resolve(rules.settingsFile).toLowerCase()) {
+    return 'The repo\'s settings (.app/repo.json) are changed only with the repo to yourself: open it again with open_repo and exclusive: true.';
+  }
+  if ((rules.readonly || []).some((d) => isInside(file, d))) return 'That folder is shared by every thread in this repo and read-only: nothing in it is changed, added or deleted, except by a turn that holds the repo alone (open_repo with exclusive: true).';
+  if ((rules.addonly || []).some((d) => isInside(file, d)) && fs.existsSync(file)) return 'That folder is shared by every thread in this repo and add-only: new files go in, but a file already there is never changed or deleted. Write a new file with a new name (a new version number), or work on a copy in a folder of this worktree.';
+  return null;
+}
+
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', secretsKey = '', vaultWrite = false }) {
-  const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir].filter(Boolean);
+export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', repoRoots = [], repoShared = () => null, secretsKey = '', vaultWrite = false }) {
+  const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir, ...repoRoots].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
     return p ? path.resolve(cwd, String(p)) : null;
@@ -80,9 +95,16 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
         const repo = repoDir();
         if (repo && isInside(file, repo)) {
           if (isInside(file, path.join(repo, '.git'))) return deny('The .git folder is the app\'s to manage.');
-          return allow(input);
+          const refused = sharedRefusal(file, repoShared());
+          return refused ? deny(refused) : allow(input);
         }
-        if (reposDir && isInside(file, reposDir)) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed.');
+        // A shared store reached by its own path rather than through the worktree's link.
+        const rules = repo ? repoShared() : null;
+        if (rules && [...(rules.readonly || []), ...(rules.addonly || [])].some((d) => isInside(file, d))) {
+          const refused = sharedRefusal(file, rules);
+          return refused ? deny(refused) : allow(input);
+        }
+        if ((reposDir && isInside(file, reposDir)) || repoRoots.some((r) => r && isInside(file, r))) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed, in the folder open_repo names.');
         if (vaultWrite && isInside(file, cwd)) {
           if (isInside(file, path.join(cwd, '.git'))) return deny('The .git folder is the app\'s to manage.');
           for (const p of protectedPaths) {
@@ -161,7 +183,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, rerunBrain }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing, rerunBrain }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -170,12 +192,19 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
     instructions: 'Tools of Florian\'s inbox app itself.',
     tools: [
       ...(repoTools ? [
-        tool('open_repo', 'Open one of Florian\'s GitHub repos to work in it during this turn: the app clones or updates it and puts this thread on its own branch. Call it before reading or changing the code, in every turn that needs the code. Only one thread can hold a repo at a time; if another thread holds it, this waits until that thread\'s turn ends. Returns the folder to work in.',
-          { repo: z.string().optional().describe('owner/name or just the name (owner fburgerdev); leave out for this thread\'s own repo') },
-          async ({ repo }) => {
+        tool('open_repo', 'Open one of Florian\'s GitHub repos to work in it during this turn: the app clones or updates it and puts this thread on its own branch. Call it before reading or changing the code, in every turn that needs the code. Most repos take one thread at a time; a repo whose .app/repo.json says "parallel": true lets threads work side by side, each in a worktree of its own. If the repo is in use, this waits a few minutes; after that the turn is parked: end it with one line, and the app starts it again by itself the moment the repo is free. Set exclusive: true when the work needs nobody else working in the repo at the same time: a migration, renaming or moving folders, a dependency upgrade, changing .app/repo.json, writing into a shared read-only folder. Take it on your own judgement, without asking Florian, and say in your reply that you took it and why. Returns the folder to work in.',
+          {
+            repo: z.string().optional().describe('owner/name or just the name (owner fburgerdev); leave out for this thread\'s own repo'),
+            exclusive: z.boolean().optional().describe('Hold the repo alone: other threads wait until this turn ends. Only for work that needs the repo quiet.'),
+          },
+          async ({ repo, exclusive }) => {
             try {
-              const r = await repoTools.open(repo);
-              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push, merge or switch branches yourself: when the turn ends the app commits whatever you left uncommitted, pushes this branch, runs the repo's tests and, if they pass, merges it into main by itself. End the turn only with work that may go live.`);
+              const r = await repoTools.open(repo, { exclusive: exclusive === true });
+              const shared = r.shared && (r.shared.readonly.length || r.shared.addonly.length)
+                ? ` Shared folders, the same for every thread: ${[...r.shared.readonly.map((p) => `${p} (read-only${r.exclusive ? ', open to you while you hold the repo alone' : ''})`), ...r.shared.addonly.map((p) => `${p} (add-only: new files go in, an existing file is never changed or deleted)`)].join(', ')}.`
+                : '';
+              const how = r.parallel ? (r.exclusive ? ' You hold this repo alone until the turn ends; other threads wait.' : ' Other threads may work in this repo at the same time, each in a worktree of its own; this one is yours.') : '';
+              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}).${how}${shared} Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push, merge or switch branches yourself: when the turn ends the app commits whatever you left uncommitted, pushes this branch, runs the repo's tests and, if they pass, merges it into main by itself. End the turn only with work that may go live.`);
             } catch (err) { return fail(err); }
           }),
         tool('list_repos', 'List Florian\'s GitHub repos.', {}, async () => {
@@ -217,6 +246,12 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
       ...(rerunBrain ? [tool('run_brain_update_again', 'Run the brain update again in this thread, after it failed or when Florian asks for it ("retry"). It starts once this turn has ended; end the turn right after calling it, with one short line.',
         {},
         async () => { try { return ok(await rerunBrain()); } catch (err) { return fail(err); } })] : []),
+      ...(markPressing ? [tool('mark_pressing', 'In a thread answering a mail: say whether the reply has to go out today. A pressing reply reaches Florian even while he focuses on one project or on deep work; any other waits for Catch-up. Pressing means: a deadline today or tomorrow, a call or meeting with the sender today, or the sender already waiting longer than they should. Not pressing just because it is polite to answer soon. Call it once, after reading the mail, with a one-line reason he sees beside the thread ("call with her at 15:00"); call it again with pressing false if that changes.',
+        {
+          pressing: z.boolean().describe('true when the reply has to go out today'),
+          why: z.string().describe('One short line, the reason'),
+        },
+        async (args) => { try { return ok(markPressing(args)); } catch (err) { return fail(err); } })] : []),
       tool('spin_off', 'Start a new thread that begins as a copy of this conversation and works on one task by itself. Use it only when Florian asks in his message for something to be spun off into its own thread or task. The new thread sees the conversation so far and its files, then gets `task` as its instruction, so write `task` to stand alone: what to do, what to hand back, and what to leave to this thread.',
         { title: z.string().describe('A short name for the new thread, at most eight words'), task: z.string().describe('The complete instruction for the new thread') },
         async (args) => {
@@ -295,6 +330,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__app__move_event': return `Moved ${input.event ? `the event "${clip(input.event, 50)}"` : 'this event'} in Events`;
     case 'mcp__app__run_brain_update_again': return 'Runs the brain update again';
+    case 'mcp__app__mark_pressing': return input.pressing ? `Marked the reply as pressing: ${clip(input.why || '', 60)}` : 'Marked the reply as not pressing';
     case 'mcp__app__continue_later': return `Carries on by itself in ${Math.round(Number(input.minutes) || 10)} min: ${clip(input.why || 'work still running', 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
@@ -354,8 +390,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, secretsKey, useDocument, continueLater, steer, vaultWrite, rerunBrain }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, rerunBrain }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer, markPressing, vaultWrite, rerunBrain }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing, rerunBrain }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -392,7 +428,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, secretsKey: mode === 'thread' ? secretsKey : '', vaultWrite: mode === 'thread' && Boolean(vaultWrite) }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, repoRoots, repoShared, secretsKey: mode === 'thread' ? secretsKey : '', vaultWrite: mode === 'thread' && Boolean(vaultWrite) }),
     additionalDirectories: [artifactsDir, workDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
@@ -605,7 +641,7 @@ function resultText(content) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fakeBrainLimited = false;
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, vaultWrite, rerunBrain }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title, markPressing, vaultWrite, rerunBrain }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -799,8 +835,10 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   if (repoAsk) {
     onEvent?.({ type: 'tool', name: 'mcp__app__open_repo', summary: `Opened the repo ${repoAsk[1] || ''}`.trim() });
     try {
-      const r = await repoTools.open(repoAsk[1]);
-      fs.writeFileSync(path.join(r.dir, 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
+      // "REPO-EXCL": the repo alone, as the real Claude asks for it with exclusive: true.
+      const r = await repoTools.open(repoAsk[1], { exclusive: /REPO-EXCL/.test(newest) });
+      // In a parallel repo each thread writes a file of its own, so two branches do not clash.
+      fs.writeFileSync(path.join(r.dir, r.parallel ? `CHANGED-BY-${(title || 'thread').replace(/[^\w]+/g, '-')}.md` : 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
       // "REPO-HOLD=name": stay in the repo for as long as the file hold-<name> is in the data
       // folder, so a test decides when the turn ends instead of racing a clock.
       const hold = /REPO-HOLD=([\w-]+)/.exec(newest);
@@ -838,6 +876,11 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     onEvent?.({ type: 'tool', name: 'Edit', summary: 'Edited Core/App Test.md' });
     const said = await say('Filed.');
     return { sessionId, text: said, finalText: said, error: '', aborted: false };
+  }
+  // "PRESSING-TEST": a mail to answer today; the stand-in marks it, as the real Claude would.
+  if (markPressing && /PRESSING-TEST/.test(newest)) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__mark_pressing', summary: 'Marked the reply as pressing: call today' });
+    markPressing({ pressing: true, why: 'call with them today' });
   }
   const wanted = spinOff && /spin off (?:a |another )?(?:new )?(?:task|thread)s? (?:only )?(?:about|for|on) ([^.\n]+)/i.exec(newest);
   if (wanted) {

@@ -52,7 +52,7 @@ let armedDeferTimer = 0;
 // still work. Saved with the app's state, so laptop, Pi and phone look the same; a copy
 // in this browser hides them before the page has loaded.
 const PARTS = [
-  { group: 'Top bar', key: 'focus', label: 'Focus switch (Everything / Focus)', sel: '#focus-toggle' },
+  { group: 'Top bar', key: 'focus', label: 'Focus switch (Catch-up / Focus)', sel: '#focus-toggle' },
   { group: 'Top bar', key: 'computer', label: 'Which computer works (Laptop / Pi)', sel: '.laptop-wrap' },
   { group: 'Top bar', key: 'usage', label: 'What Claude used today', sel: '#usage' },
   { group: 'Top bar', key: 'videokit', label: 'Video Kit', sel: '#videokit-link' },
@@ -284,15 +284,24 @@ const pinPlace = (t) => t.pinAt ?? t.event?.start ?? t.createdAt ?? 0;
 const pinnedEvents = () => all().filter((t) => isPinned(t) && t.event && t.state !== 'done').sort((a, b) => a.event.start - b.event.start);
 const pinnedThreads = () => all().filter((t) => isPinned(t) && !t.event && t.state !== 'done').sort((a, b) => pinPlace(a) - pinPlace(b));
 const pinned = () => [...pinnedEvents(), ...pinnedThreads()];
-// Focus: only his own threads in the queue. What the app started and he has not
-// answered (cards, proposals, the brain update's questions, mail to answer, check-ins,
-// repairs) waits under "waiting for later". His "Later" mark corrects that both ways:
-// `later` true sends any thread there, false keeps any in the queue. The same rule as
-// the server's (store.isLater).
+// Catch-up (focus off) shows everything. Focus has two scopes (Florian, 23-11-2026):
+// deep work, his own threads on anything; or one project (an area brings its projects,
+// `members`). In both, events and mail replies marked pressing come through and cards
+// wait. His "Later" mark corrects it both ways: `later` true sends any thread under
+// "waiting for later", false keeps any in the queue. The same rule as the server's
+// (store.isLater).
 const APP_KINDS = new Set(['card', 'brain-update', 'mail-reply', 'checkin-active', 'checkin-paused', 'checkin-areas', 'repair', 'prep']);
 const isAppThread = (t) => APP_KINDS.has(t.kind) && !(t.lastUserAt > 0);
-const isLater = (t) => (typeof t.later === 'boolean' ? t.later : isAppThread(t));
 const focusOn = () => Boolean(S.settings.focus?.on) && (!S.settings.focus.until || Date.now() < S.settings.focus.until);
+const focusNow = () => (focusOn() ? S.settings.focus : null);
+function isLater(t, focus = focusNow()) {
+  if (typeof t.later === 'boolean') return t.later;
+  if (t.kind === 'event') return false;
+  if (t.kind === 'card') return true;
+  if (t.kind === 'mail-reply' && t.pressing) return false;
+  if (focus?.scope === 'project') return !(focus.members?.length ? focus.members : [focus.project]).includes(t.project);
+  return isAppThread(t);
+}
 const later = () => (focusOn() ? all().filter((t) => t.state === 'ready' && !isPinned(t) && isLater(t)).sort((a, b) => a.queuedAt - b.queuedAt) : []);
 // Mark a thread "Later" (true) or "keep in focus" (false). The mark stays, also once he
 // writes in the thread, until he flips it.
@@ -346,7 +355,7 @@ function railItem(t) {
     h('span', { class: 'item-mark', 'aria-hidden': 'true' }),
     h('span', { class: 'item-text' },
       h('span', { class: 'item-title' }, t.title),
-      h('span', { class: 'item-sub' }, label ? h('span', { class: 'tag' }, label) : null, t.project ? `${t.project}, ` : '', sub),
+      h('span', { class: 'item-sub' }, label ? h('span', { class: 'tag' }, label) : null, t.kind === 'mail-reply' && t.pressing && t.state !== 'done' ? h('span', { class: 'tag tag-today', title: `Has to go out today${t.pressingWhy ? `: ${t.pressingWhy}` : ''}. Reaches you in Focus too.` }, 'Today') : null, t.project ? `${t.project}, ` : '', sub),
     ),
   );
 }
@@ -383,7 +392,7 @@ function queueLists() {
   // Dropping a thread on this line marks it "Later"; dragging one out into the queue
   // keeps it in focus.
   const laterLine = waits.length ? hoverFold(h('div', { class: `coming later${laterOpen ? ' is-open' : ''}`, dataset: { drop: 'later' } },
-    h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Started by the app (cards, proposals, questions, mail to answer, check-ins) or marked "Later" by you. They come back into the queue when focus ends. Drop a thread here to mark it "Later".', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
+    h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Outside your focus: started by the app (cards, proposals, questions, mail that can wait, check-ins), on another project, or marked "Later" by you. They come back into the queue in Catch-up. Drop a thread here to mark it "Later".', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
       `${waits.length} waiting for later`, h('span', { class: 'coming-next' }, ' · focus')),
     h('div', { class: 'coming-list' }, ...waits.map(railItem))), 'later') : null;
   parts.push(section('Next up', ready.length, [
@@ -406,29 +415,105 @@ function queueLists() {
 
 let laterOpen = false;
 
-// The focus switch in the top bar. It ends by itself at his sleep time.
+// The switch in the top bar: Catch-up, or Focus on deep work (ends at his sleep time),
+// or Focus on one project or area (until he ends it, tonight, or a day he picks).
+function focusUntil(f = focusNow()) {
+  if (!f) return '';
+  if (!f.until) return 'until you end it';
+  const d = new Date(f.until);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.round((new Date(f.until).setHours(0, 0, 0, 0) - today.getTime()) / 86400_000);
+  return days <= 1 ? `until ${clock(f.until)}` : `until ${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}`;
+}
 function renderFocus() {
   const b = document.getElementById('focus-toggle');
-  const on = focusOn();
-  b.classList.toggle('is-on', on);
-  b.setAttribute('aria-pressed', String(on));
-  const until = on && S.settings.focus.until ? clock(S.settings.focus.until) : '';
-  b.title = on
-    ? `Focus: only your own threads in the queue; what the app made waits, and no new cards are made. Ends by itself at ${until}. Click to see everything again.`
-    : 'Focus: work through your own threads only. Cards, proposals, questions, mail to answer and check-ins wait until it ends (at your sleep time, or when you click again).';
+  const f = focusNow();
+  b.classList.toggle('is-on', Boolean(f));
+  b.title = f
+    ? `Focus on ${f.scope === 'project' ? f.project : 'deep work'}, ${focusUntil(f)}: ${f.scope === 'project' ? 'only its threads' : 'your own threads'}, events, and mail that has to go out today. Everything else waits; no new cards. Click to change.`
+    : 'Catch-up: everything, piled-up work, mail, cards and opportunities. Click to focus.';
+  const sub = f && f.until ? focusUntil(f) : '';
   b.replaceChildren(svg('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>'),
-    h('span', { class: 'top-label' }, on ? 'Focus' : 'Everything'), ...(on && until ? [h('span', { class: 'top-sub' }, `until ${until}`)] : []));
+    h('span', { class: 'top-label' }, f ? (f.scope === 'project' ? `Focus: ${f.project}` : 'Focus') : 'Catch-up'),
+    ...(sub ? [h('span', { class: 'top-sub' }, sub)] : []));
+  if (!document.getElementById('focus-pop').hidden) renderFocusPop();
 }
-document.getElementById('focus-toggle').addEventListener('click', async () => {
-  const on = !focusOn();
+async function setFocus(value, note) {
   try {
-    S.settings = { ...S.settings, ...(await api('PUT', '/api/settings', { focus: on })) };
+    S.settings = { ...S.settings, ...(await api('PUT', '/api/settings', { focus: value })) };
+    toggleFocusPop(false);
     renderFocus(); renderRail(); renderComposer();
-    toast(on ? 'Focus: only your own threads until your sleep time.' : 'Everything again.');
+    toast(note());
   } catch (err) { toast(err.message); }
-});
+}
+// The projects and areas to focus on, in the outline's order; paused projects left out.
+function focusChoices() {
+  const out = [];
+  for (const g of S.projects?.groups || []) {
+    if (g.isArea) out.push({ name: g.name, label: `${g.name} (area)` });
+    for (const p of g.projects || []) if (!p.paused) out.push({ name: p.name, label: g.isArea ? `\u2003${p.name}` : p.name });
+  }
+  return out;
+}
+// When a deep-work focus would end if started now: his sleep time, or midnight.
+function focusEndAt() {
+  const sl = S.settings.sleep;
+  const [hh, mm] = (sl?.on && /^\d\d:\d\d$/.test(sl.from || '') ? sl.from : '00:00').split(':').map(Number);
+  const at = new Date(); at.setHours(hh, mm, 0, 0);
+  if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+const focusPick = { project: '', until: 'open', day: '' };
+function renderFocusPop() {
+  const pop = document.getElementById('focus-pop');
+  const f = focusNow();
+  const choices = focusChoices();
+  if (!choices.some((c) => c.name === focusPick.project)) focusPick.project = f?.scope === 'project' ? f.project : (choices[0]?.name || '');
+  const opt = (on, title, sub, onclick) => h('button', { class: `focus-opt${on ? ' is-on' : ''}`, type: 'button', onclick },
+    h('span', { class: 'focus-opt-title' }, title), h('span', { class: 'focus-opt-sub' }, sub));
+  const untilOf = () => {
+    if (focusPick.until === 'tonight') { const d = new Date(); d.setHours(23, 59, 0, 0); return d.getTime(); }
+    if (focusPick.until === 'day' && focusPick.day) return new Date(`${focusPick.day}T23:59`).getTime();
+    return 0;
+  };
+  const dayInput = h('input', { class: 'select', type: 'date', value: focusPick.day, 'aria-label': 'Last day of the focus', onchange: (e) => { focusPick.day = e.target.value; } });
+  dayInput.hidden = focusPick.until !== 'day';
+  const projectSelect = h('select', { class: 'select', 'aria-label': 'Project or area', onchange: (e) => { focusPick.project = e.target.value; } },
+    ...choices.map((c) => h('option', { value: c.name }, c.label)));
+  projectSelect.value = focusPick.project;
+  const untilSelect = h('select', { class: 'select', 'aria-label': 'Until', onchange: (e) => { focusPick.until = e.target.value; dayInput.hidden = focusPick.until !== 'day'; } },
+    h('option', { value: 'open' }, 'until I end it'),
+    h('option', { value: 'tonight' }, 'until tonight'),
+    h('option', { value: 'day' }, 'until a day…'));
+  untilSelect.value = focusPick.until;
+  pop.replaceChildren(
+    opt(!f, 'Catch-up', 'Everything: piled-up work, mail, cards and opportunities.', () => setFocus(false, () => 'Catch-up: everything again.')),
+    opt(f?.scope === 'deep', 'Focus: deep work', `Your own threads, events, and mail that has to go out today. Until ${clock(focusEndAt())}.`, () => setFocus(true, () => `Focus on deep work until ${clock(focusEndAt())}.`)),
+    h('div', { class: `focus-project${f?.scope === 'project' ? ' is-on' : ''}` },
+      h('span', { class: 'focus-opt-title' }, 'Focus: one project'),
+      h('span', { class: 'focus-opt-sub' }, 'Only its threads, events, and mail that has to go out today. An area brings its projects.'),
+      ...(choices.length ? [
+        h('div', { class: 'focus-row' }, projectSelect, untilSelect, dayInput),
+        h('button', { class: 'btn', type: 'button', onclick: () => {
+          if (focusPick.until === 'day' && !focusPick.day) { toast('Pick the last day first.'); return; }
+          const name = focusPick.project;
+          setFocus({ scope: 'project', project: name, until: untilOf() }, () => `Focus on ${name}, ${focusUntil()}.`);
+        } }, f?.scope === 'project' ? 'Change focus' : 'Focus on it'),
+      ] : [h('span', { class: 'focus-opt-sub' }, 'No projects found in the Projects Index.')])));
+}
+function toggleFocusPop(open) {
+  const pop = document.getElementById('focus-pop');
+  const b = document.getElementById('focus-toggle');
+  pop.hidden = !(open ?? pop.hidden);
+  b.setAttribute('aria-expanded', String(!pop.hidden));
+  if (!pop.hidden) renderFocusPop();
+}
+document.getElementById('focus-toggle').addEventListener('click', (e) => { e.stopPropagation(); toggleFocusPop(); });
+document.getElementById('focus-pop').addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => { if (!document.getElementById('focus-pop').hidden) toggleFocusPop(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('focus-pop').hidden) toggleFocusPop(false); });
 // It ends by itself: checked every minute, like the event times.
-setInterval(() => { if (S.settings.focus?.on && !focusOn()) { S.settings = { ...S.settings, focus: { on: false, until: 0 } }; renderFocus(); renderRail(); } }, 60_000);
+setInterval(() => { if (S.settings.focus?.on && !focusOn()) { S.settings = { ...S.settings, focus: { on: false, until: 0, scope: 'deep', project: '', members: [] } }; renderFocus(); renderRail(); } }, 60_000);
 
 // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
 // brain update writes their line. Waking one asks once more, in place: a next action
@@ -1605,7 +1690,7 @@ function renderHead() {
       class: `btn btn-quiet later-btn${on ? ' is-on' : ''}`, type: 'button', 'aria-pressed': String(on),
       title: on
         ? `${mine ? 'You marked this "Later"' : 'Started by the app'}: in Focus it waits under "waiting for later". Click to keep it in your Focus queue.`
-        : `In your Focus queue${mine ? ', as you marked it' : ''}. Click to mark it "Later": in Focus it waits under "waiting for later". In Everything nothing changes.`,
+        : `In your Focus queue${mine ? ', as you marked it' : ''}. Click to mark it "Later": in Focus it waits under "waiting for later". In Catch-up nothing changes.`,
       onclick: () => setLater(t, !on),
     }, on ? 'Back to focus' : 'Later'));
   }
