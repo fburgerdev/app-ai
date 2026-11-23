@@ -24,7 +24,7 @@ import { git, gitOk } from './git.js';
 import { adoptRewritten, forgetOld, moveBranch, rewriteWithout, wasRewritten } from './purge.js';
 import { events } from './store.js';
 
-const IGNORE = [
+export const IGNORE = [
   '# Secrets and machine-local files. Never commit these.',
   'config.json',
   'google-token.json',
@@ -43,6 +43,9 @@ const IGNORE = [
   '/link.json',
   '/prune-run.json',
   '/usage-sessions.json',
+  '# Working copies of other repos and their big shared folders (films, renders): never saved.',
+  '/worktrees/',
+  '/shared/',
   '',
 ].join('\n');
 
@@ -139,6 +142,27 @@ export async function whenUnlocked(fn, { tries = 5, wait = 400 } = {}) {
   }
 }
 
+// A git step stopped by its timeout is killed, and on Windows it leaves its index.lock
+// behind: every later save is then refused until the file is gone. All writing steps on
+// the data folder run one at a time, here, and none may run longer than its timeout, so
+// a lock older than that belongs to no running step and is removed.
+export function clearStaleLock(dir = DATA_DIR, { olderThan = 150_000 } = {}) {
+  const lock = path.join(dir, '.git', 'index.lock');
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs < olderThan) return false;
+    fs.rmSync(lock);
+    log('app data: removed a git lock a stopped step had left behind');
+    return true;
+  } catch { return false; }
+}
+
+// Folders that are ignored now but were committed before the rule existed leave the
+// saved state (the files stay on disk).
+async function untrackIgnored() {
+  if (!(await git(DATA_DIR, ['ls-files', '--', 'worktrees', 'shared']).catch(() => '')).trim()) return;
+  await git(DATA_DIR, ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', 'worktrees', 'shared']).catch(() => {});
+}
+
 // A secret value in a thread's conversation (Florian typed it, or a tool's output
 // showed it) is replaced by its placeholder before it is committed, so the data repo
 // never holds one. Only the files changed since the last look are read; the read and the
@@ -168,6 +192,8 @@ export async function redactMessages() {
 
 async function commitLocal(reason) {
   await redactMessages().catch((err) => log(`app data: redacting secrets failed: ${err.message}`));
+  clearStaleLock();
+  await untrackIgnored();
   await whenUnlocked(() => git(DATA_DIR, ['add', '-A']));
   if (await gitOk(DATA_DIR, ['diff', '--cached', '--quiet'])) return false;
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
