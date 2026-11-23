@@ -330,7 +330,7 @@ body.is-dragging .group-drop { display: block; }
 .group-drop { display: none; margin: 2px 8px 6px; padding: 9px 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--faint); font-size: 12.5px; }
 
 .rail-top { padding: 14px 14px 6px; }
-/* Inbox and Folders side by side: swipe or scroll sideways and it snaps to one of them. */
+/* Inbox and Brain side by side: swipe or scroll sideways and it snaps to one of them. */
 .rail-lists {
   flex: 1; min-height: 0;
   display: flex;
@@ -1695,6 +1695,16 @@ body.is-booting .shell { visibility: hidden; }
 .slide-tab:hover { color: var(--text); }
 .slide-tab.is-on { background: var(--raised); color: var(--bright); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
 .slide-nav.is-single { background: none; padding: 3px 4px; }
+/* Four tabs in a narrow bar: a little less room around each word. */
+.slide-nav:not(.is-single) .slide-tab { padding: 6px 4px; }
+/* Its name on top, and the way to the vault on GitHub. */
+.brain-top { display: flex; align-items: center; gap: 6px; margin: 12px 14px -4px 18px; flex: none; }
+.brain-top.is-drawer { justify-content: flex-end; margin: 6px 8px 0; }
+.brain-title { flex: 1; color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; }
+.brain-gh { display: inline-flex; align-items: center; gap: 5px; padding: 3px; border-radius: 6px; color: var(--faint); font-size: 11.5px; text-decoration: none; }
+.brain-gh:hover, .brain-gh:focus-visible { color: var(--text); background: var(--panel); }
+.brain-gh svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.brain-gh.has-name { padding: 3px 6px; }
 .slide-title { color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; }
 .slide { padding: 2px 8px 28px; }
 
@@ -1745,7 +1755,7 @@ body.is-booting .shell { visibility: hidden; }
 .tree-bulk .out-start { padding: 3px 8px; border-color: var(--line); }
 .tree-foot .tree-sub { width: auto; margin: 0; padding: 0; }
 
-/* ---------- no right bar: its lists are under Folders in the drawer ---------- */
+/* ---------- no right bar: its lists are under Brain in the drawer ---------- */
 .app.no-tree { --tree-w: 0px; }
 .app.no-tree > .tree { display: none; }
 .app.no-tree .tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }
