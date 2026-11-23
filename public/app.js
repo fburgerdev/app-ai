@@ -2147,9 +2147,11 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   renderQueued();
   if (S.live) renderLive();
   upgradeMailCards();
-  // Start reading where Claude's latest message starts, not at its end.
-  const claude = [...els.messages.querySelectorAll('.msg-claude')].at(-1);
-  if (claude && !S.live) els.scroller.scrollTop = Math.max(0, claude.offsetTop - 24);
+  // Start reading at Florian's last message, so he sees what he asked before Claude's answer;
+  // without one (a thread the app started), at the start of Claude's latest message.
+  const anchor = [...els.messages.querySelectorAll('.msg-you')].at(-1)
+    || [...els.messages.querySelectorAll('.msg-claude')].at(-1);
+  if (anchor && !S.live) els.scroller.scrollTop = Math.max(0, anchor.offsetTop - 24);
   else els.scroller.scrollTop = els.scroller.scrollHeight;
 }
 
