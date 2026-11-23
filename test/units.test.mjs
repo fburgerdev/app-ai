@@ -4,7 +4,7 @@ import path from 'node:path';
 import { buildPolicy, describeTool, shortCommand, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
-import { IGNORE, pushTakingIn, whenUnlocked } from '../server/datasync.js';
+import { IGNORE, clearStaleLock, pushTakingIn, whenUnlocked } from '../server/datasync.js';
 
 test('saving state: losing the race to the other computer twice still saves', async () => {
   let sends = 0;
@@ -209,6 +209,24 @@ test('a git step refused because another git process holds the index runs again'
   calls = 0;
   assert.equal(await whenUnlocked(async () => { calls += 1; if (calls < 2) throw midWrite; return 'ok'; }, { wait: 1 }), 'ok');
   assert.equal(calls, 2);
+});
+
+test('a git lock left behind by a stopped step is removed, a fresh one is not', async () => {
+  const fsx = await import('node:fs');
+  const osx = await import('node:os');
+  const px = await import('node:path');
+  const dir = fsx.mkdtempSync(px.join(osx.tmpdir(), 'app-ai-lock-'));
+  const lock = px.join(dir, '.git', 'index.lock');
+  fsx.mkdirSync(px.dirname(lock));
+  assert.equal(clearStaleLock(dir), false, 'no lock, nothing to do');
+  fsx.writeFileSync(lock, '');
+  assert.equal(clearStaleLock(dir), false, 'a running step may hold it');
+  assert.ok(fsx.existsSync(lock));
+  const old = new Date(Date.now() - 10 * 60_000);
+  fsx.utimesSync(lock, old, old);
+  assert.equal(clearStaleLock(dir), true);
+  assert.ok(!fsx.existsSync(lock));
+  fsx.rmSync(dir, { recursive: true, force: true });
 });
 
 test('the folders the app keeps other repos in are never saved with its state', () => {
