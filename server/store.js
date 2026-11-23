@@ -311,12 +311,21 @@ export function isAppThread(thread) {
   return Boolean(thread) && APP_KINDS.has(thread.kind) && !(thread.lastUserAt > 0);
 }
 
-// Whether a thread waits outside the queue while he focuses. His own mark wins: `later`
-// true sends any thread there (even one he wrote in), false keeps any thread in the
-// queue (even one the app started). Without a mark, the rule above decides.
-export function isLater(thread) {
+// Whether a thread waits outside the queue while he focuses (Florian, 23-11-2026). Focus
+// has two scopes: `deep` (his own threads, on anything) and `project` (only the threads
+// of one project, or of an area and its projects: `focus.members`). In both, events and
+// mail replies Claude marked pressing (they have to go out today) come through, and
+// cards wait for Catch-up. His own mark wins over all of it: `later` true sends any
+// thread there (even one he wrote in), false keeps any thread in the queue (even one
+// the app started).
+export function isLater(thread, focus = null) {
   if (!thread) return false;
-  return typeof thread.later === 'boolean' ? thread.later : isAppThread(thread);
+  if (typeof thread.later === 'boolean') return thread.later;
+  if (thread.kind === 'event') return false;
+  if (thread.kind === 'card') return true;
+  if (thread.kind === 'mail-reply' && thread.pressing) return false;
+  if (focus?.scope === 'project') return !(focus.members?.length ? focus.members : [focus.project]).includes(thread.project);
+  return isAppThread(thread);
 }
 
 // Deep work: the threads he is invested in and that take Claude long, a thinking session,
