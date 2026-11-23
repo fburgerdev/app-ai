@@ -91,7 +91,8 @@ export function setState(patch) {
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   // A brain update held by the usage limit: { until, type, only } (extract.js), or null.
-  if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '' } : null;
+  // `gate` when it waits for the lock instead (gate.js): 'update' or 'handover'.
+  if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '', ...(['update', 'handover'].includes(patch.brainHeld.gate) ? { gate: patch.brainHeld.gate } : {}) } : null;
   if (Array.isArray(patch.hidden)) next.hidden = [...new Set(patch.hidden.filter((k) => typeof k === 'string' && PART.test(k)))].slice(0, 100);
   if (typeof patch.focus === 'boolean') next.focus = patch.focus ? { on: true, until: focusEnd(Date.now(), next.sleep) } : { on: false, until: 0 };
   if (patch.sleep && typeof patch.sleep === 'object') {

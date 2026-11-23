@@ -35,6 +35,7 @@ import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
 import { exportThreads } from './threadexport.js';
 import { refreshSecrets } from './secrets.js';
+import * as gate from './gate.js';
 import { report as reportFailure } from './repair.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
@@ -54,10 +55,10 @@ export function watchHold(mayRun = () => true) {
   holdTimer = setInterval(() => {
     try {
       const held = getState().brainHeld;
-      if (!held || current || Date.now() < held.until || !mayRun()) return;
+      if (!held || current || Date.now() < held.until || !mayRun() || gate.isLocked()) return;
       setState({ brainHeld: null });
       const out = startExtraction({ only: held.only === 'mail' ? 'mail' : '' });
-      log(`brain update: the ${limitLabel(held.type)} lifted, ${out.started ? 'running again' : `not run again (${out.reason})`}`);
+      log(`brain update: ${held.gate ? 'the lock is over' : `the ${limitLabel(held.type)} lifted`}, ${out.started ? 'running again' : `not run again (${out.reason})`}`);
     } catch (err) { log(`held brain update: ${err.stack || err.message}`); }
   }, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
@@ -291,6 +292,14 @@ export function startExtraction({ only = '' } = {}) {
   const status = extractionStatus();
   const mailOnly = only === 'mail';
   if (mailOnly && !status.mail) return { started: false, reason: 'Gmail is not connected. Connect it in the settings.' };
+  // Locked for an update or a handover (gate.js): it runs once that is through, on the
+  // computer that works then (watchHold).
+  if (gate.isLocked()) {
+    const why = gate.reason() === 'handover' ? 'handover' : 'update';
+    setState({ brainHeld: { until: 0, type: '', only: mailOnly ? 'mail' : '', gate: why } });
+    store.events.emit('brain', extractionStatus());
+    return { started: false, queued: true, reason: `Queued for the ${why}: the ${mailOnly ? 'Gmail update' : 'brain update'} runs once ${why === 'handover' ? 'the Pi has taken over' : 'the app has restarted'}.` };
+  }
   // What is closed and already filed is archived at once; it needs no run.
   const cleared = mailOnly ? 0 : archiveFiled();
   if (!mailOnly && !status.waiting && !status.notes && !status.cards && !status.mail) {

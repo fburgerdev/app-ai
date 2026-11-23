@@ -106,8 +106,13 @@ export function holdLine(held, now = Date.now()) {
   if (held.kind === 'continue') return `Waiting (${held.reason}): carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge: Claude fixes it by itself at ${at}`;
   if (held.kind === 'goahead') return `Claude only needed a go-ahead: the supervisor carries on at ${at}`;
+  if (held.kind === 'gate') return gateLine(held);
   return '';
 }
+
+// A turn that waits for the lock (gate.js): it starts once the app has updated, or has
+// handed over, as it was sent.
+export const gateLine = (held) => (held.reason === 'handover' ? 'Queued for the handover: starts on the Pi once it has taken over' : 'Queued for the update: starts once the app has restarted');
 
 // When the hold is over: what Claude gets, and the note the thread shows.
 export function resumeText(held, now = Date.now()) {
@@ -131,6 +136,13 @@ ${held.prompt}`,
       note: `[Claude only needed a go-ahead (${held.reason}); the supervisor told it to carry on on ${dateTimeDMY(now)}.]`,
     };
   }
+  if (held.kind === 'gate') {
+    // It never started: Claude gets the message as it was sent.
+    return {
+      prompt: held.prompt,
+      note: `[Queued for the ${held.reason === 'handover' ? 'handover' : 'update'} at ${dateTimeDMY(held.at)}; the app started it on ${dateTimeDMY(now)}.]`,
+    };
+  }
   if (held.kind === 'merge') {
     return {
       prompt: held.prompt,
@@ -148,6 +160,7 @@ export function interruptedText(held, message) {
   if (held.kind === 'goahead') return `[The app: your last reply waited for a go-ahead, and the supervisor was about to tell you to carry on. Florian wrote first. Answer him, in the light of the work you were on.]
 
 ${message}`;
+  if (held.kind === 'gate') return `${held.prompt}\n\n${message}`;
   if (held.kind === 'merge') return `[The app: the merge of this thread's branch into main had failed, and a turn to fix it was about to start by itself. Florian wrote first. Answer him; unless he says otherwise, also fix what stopped the merge. What the app had for that turn:]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   return message;
 }

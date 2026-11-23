@@ -332,7 +332,7 @@ test('network trouble is retried quietly; a real failure opens a repair thread, 
 
 test('checking for updates by hand answers at once', async () => {
   const r = (await call('POST', '/api/update/check', {})).data;
-  assert.equal(r.outcome, 'off', 'the stand-in does not update itself');
+  assert.equal(r.outcome, 'current', 'the stand-in has no new version unless a test gives it one');
 });
 
 test('a preparation made before events existed does not stop its event', async () => {

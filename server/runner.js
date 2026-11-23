@@ -32,6 +32,7 @@ import { moveEvent } from './events.js';
 import { limitLabel, resumeAt, clock } from './limits.js';
 import * as retry from './retry.js';
 import { supervise } from './supervise.js';
+import * as gate from './gate.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -212,6 +213,9 @@ function supervisorNote(threadId, text, prompt = '') {
 const slotFree = (background) => running.size < (background ? Math.max(1, config.maxParallel - 1) : config.maxParallel);
 
 function startTurn(threadId, prompt, background = false) {
+  // Locked for an update or a handover (gate.js): nothing new starts. It waits as it was
+  // sent and starts once the app has restarted or the Pi has taken over.
+  if (gate.isLocked()) { waitForGate(threadId, prompt); return; }
   // The prompt is kept with the thread, so a turn cut off by the app closing can be started
   // again by itself (retryInterrupted).
   store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null, interrupted: 0, turnPrompt: prompt });
@@ -278,13 +282,26 @@ function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries
   return held;
 }
 
+// Waiting for the lock: a hold like the others, with nothing to wait for but the lock.
+// resumeHeld starts it on whichever computer works once that one is not locked.
+function waitForGate(threadId, prompt) {
+  const t = store.getThread(threadId);
+  heldPrompt.delete(threadId);
+  // Queued again (he wrote into it while it waited): it keeps its place in the line.
+  const at = t?.held?.kind === 'gate' ? t.held.at : Date.now();
+  const held = { until: 0, type: '', kind: 'gate', reason: gate.reason(), prompt, at, tier: t?.nextTier || t?.held?.tier || '', tries: 0 };
+  store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '', archived: false, interrupted: 0, turnPrompt: prompt });
+  log(`thread "${t?.title}": queued for the ${held.reason}`);
+}
+
 // Starts every held turn whose limit has lifted. `mayRun` says whether this computer is
 // the one doing the work; the other one leaves the hold alone.
 export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
   let started = 0;
-  for (const t of store.listThreads()) {
+  // Oldest first, so what waited for the lock starts in the order it came.
+  for (const t of store.listThreads().filter((x) => x.held).sort((a, b) => (a.held.at || 0) - (b.held.at || 0))) {
     if (!t.held || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
-    if (!mayRun()) return started;
+    if (!mayRun() || gate.isLocked()) return started;
     const { held } = t;
     const added = t.pending || [];
     const kind = held.kind || 'limit';
