@@ -659,6 +659,35 @@ function keepBranch(threadId, full, branch) {
   return branch ? { ...rest, [key(full)]: branch } : rest;
 }
 
+// The thread's branch in a repo: `repoBranch` in the repo it is in now, the kept one in a
+// repo it worked in earlier (the same turn, or one before).
+export function branchIn(thread, full) {
+  if (!thread || !full) return '';
+  if (thread.repo && key(thread.repo) === key(full)) return thread.repoBranch || '';
+  return thread.repoBranches?.[key(full)] || '';
+}
+export const isCurrent = (thread, full) => Boolean(thread?.repo && full && key(thread.repo) === key(full));
+
+// The repos whose work goes into main at the end of a turn, in the order the thread opened
+// them (`repoShip`), so what must be live first goes first (the app before the vault): every
+// repo opened in the turn, not only the one it ended in. One leaves the list once it is
+// merged, or has nothing main does not have.
+export function shipList(thread) {
+  const list = [...(thread?.repoShip || [])];
+  if (thread?.repo && !list.some((r) => key(r) === key(thread.repo))) list.push(thread.repo);
+  return list;
+}
+export function addShip(threadId, full) {
+  const list = store.getThread(threadId)?.repoShip || [];
+  if (list.some((r) => key(r) === key(full))) return;
+  store.updateThread(threadId, { repoShip: [...list, full] });
+}
+export function dropShip(threadId, full) {
+  const list = store.getThread(threadId)?.repoShip || [];
+  if (!list.some((r) => key(r) === key(full))) return;
+  store.updateThread(threadId, { repoShip: list.filter((r) => key(r) !== key(full)) });
+}
+
 // Which branch the thread works on, and from what it starts if the branch is not here yet.
 //   { branch, from }   from: null (the local branch is there), or the ref to make it from
 async function pickBranch(dir, thread, threadId, full, base) {
@@ -695,7 +724,9 @@ async function worktreeList(mainDir) {
 // `exclusive`: the turn holds it alone, so the shared folders are open to it.
 // `check: false`: the app's own use (testing, merging), not a turn: nothing to check after.
 const mainUser = new Map(); // repo key -> the thread that works in the main copy of a parallel repo
-export async function openFor(threadId, full, { exclusive = false, check = true } = {}) {
+// `current: false`: the app's own use of a repo the thread is not in now (ship.js merging the
+// work of a repo it left in the same turn): the thread stays in the repo it is in.
+export async function openFor(threadId, full, { exclusive = false, check = true, current = true } = {}) {
   const thread = store.getThread(threadId);
   let { dir, base } = await ensure(full);
   if (beforeOpen && (await beforeOpen(full, thread?.title || '').catch(() => null))?.saved?.length) {
@@ -706,7 +737,7 @@ export async function openFor(threadId, full, { exclusive = false, check = true 
     // was not: its work goes onto its branch and the worktree goes, so the branch can be
     // checked out in the one copy.
     if (fs.existsSync(worktreeOf(full, threadId))) await dropWorktree(full, threadId);
-    return openMain(threadId, full, dir, base, { share: false });
+    return openMain(threadId, full, dir, base, { share: false, current });
   }
   // On demand: the main copy, unless another thread is working there right now; a thread
   // with a worktree keeps it until its branch is merged. Decided before anything waits, so
@@ -716,19 +747,24 @@ export async function openFor(threadId, full, { exclusive = false, check = true 
   const own = fs.existsSync(path.join(worktreeOf(full, threadId), '.git'));
   const busy = Boolean(user && user !== threadId && holds(full, user));
   if (!own && !busy) mainUser.set(k, threadId);
-  const opened = own || busy ? await openWorktree(threadId, full, dir, base) : await openMain(threadId, full, dir, base, { share: true });
+  const result = own || busy ? await openWorktree(threadId, full, dir, base, { current }) : await openMain(threadId, full, dir, base, { share: true, current });
   if (exclusive && holdsExclusive(full, threadId)) {
     snapshots.delete(threadId);
     const L = lockOf(full);
     if (!L.lifted && protecting() && sharedList(full).some((e) => e.kind !== 'writable')) { unprotectShared(full); L.lifted = true; }
   } else if (check) {
-    await snapshot(threadId, full, opened.dir);
+    await snapshot(threadId, full, result.dir);
   }
-  return opened;
+  return result;
 }
 
 // The main copy, on the thread's branch. Whatever the thread before left behind goes onto its own branch.
-function openMain(threadId, full, dir, base, { share }) {
+// What a thread that opened a repo records: the repo it is in now, or only the branch kept.
+const openedPatch = (threadId, full, branch, base, current) => (current
+  ? { repo: full, repoBranch: branch, repoMain: base, repoBranches: keepBranch(threadId, full, branch) }
+  : { repoBranches: keepBranch(threadId, full, branch) });
+
+function openMain(threadId, full, dir, base, { share, current = true }) {
   const thread = store.getThread(threadId);
   return serial(full, async () => {
     const on = await currentBranch(dir);
@@ -737,12 +773,12 @@ function openMain(threadId, full, dir, base, { share }) {
     if (from) await git(dir, ['checkout', '--quiet', '-B', branch, from]);
     else if (on !== branch) await git(dir, ['checkout', '--quiet', branch]);
     if (share) await linkShared(full, dir);
-    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base, repoBranches: keepBranch(threadId, full, branch) });
+    store.updateThread(threadId, openedPatch(threadId, full, branch, base, current));
     return { dir, branch, base, worktree: false };
   });
 }
 
-async function openWorktree(threadId, full, mainDir, base) {
+async function openWorktree(threadId, full, mainDir, base, { current = true } = {}) {
   const thread = store.getThread(threadId);
   const wt = worktreeOf(full, threadId);
   return serial(full, async () => {
@@ -761,7 +797,7 @@ async function openWorktree(threadId, full, mainDir, base) {
       log(`repos: "${thread.title}" got a worktree of its own in ${full}, as another thread works in the main copy`);
     }
     await linkShared(full, wt);
-    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base, repoBranches: keepBranch(threadId, full, branch) });
+    store.updateThread(threadId, openedPatch(threadId, full, branch, base, current));
     return { dir: wt, branch, base, worktree: true };
   });
 }
@@ -819,7 +855,7 @@ export async function saveWork(threadId) {
   const found = await breaches(threadId).catch((err) => { log(`repos: could not check the shared folders of ${full}: ${err.message}`); return []; });
   if (found.length) {
     const text = found.join('; ');
-    store.updateThread(threadId, { repoBreach: text });
+    store.updateThread(threadId, { repoBreach: `${full}: ${text}` });
     store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[The app found that this turn broke the rules of ${full}'s shared folders: ${text}. It does not merge this branch into main until Florian has written in this thread.]` });
     log(`repos: "${title}" broke the shared folders of ${full}: ${text}`);
   }
@@ -942,13 +978,14 @@ const CLASH = (base) => `Main has changed in a way that clashes with this branch
 
 // In a parallel repo, before the tests: main as it is now goes into the thread's branch, in
 // its worktree, so what is tested is what main will be. A clash stops it (ship.js: a turn fixes it).
-export async function catchUp(threadId) {
+export async function catchUp(threadId, { full: which = '', base: main = '' } = {}) {
   const thread = store.getThread(threadId);
-  const full = thread?.repo;
-  if (!full || !thread.repoBranch || !isParallel(full)) return false;
+  const full = which || thread?.repo;
+  const branch = branchIn(thread, full);
+  if (!full || !branch || !isParallel(full)) return false;
   const dir = dirFor(threadId, full);
-  if ((await currentBranch(dir)) !== thread.repoBranch) return false;
-  const base = thread.repoMain || 'main';
+  if ((await currentBranch(dir)) !== branch) return false;
+  const base = main || (isCurrent(thread, full) && thread.repoMain) || 'main';
   return serial(full, async () => {
     if (!(await hasRef(dir, `refs/remotes/origin/${base}`))) return false;
     if (await git(dir, ['merge-base', '--is-ancestor', `origin/${base}`, 'HEAD']).then(() => true, () => false)) return false;
@@ -958,7 +995,7 @@ export async function catchUp(threadId) {
       await git(dir, ['merge', '--abort']).catch(() => {});
       throw new Error(CLASH(base));
     }
-    log(`repos: brought ${base} into ${thread.repoBranch} of ${full} before testing it`);
+    log(`repos: brought ${base} into ${branch} of ${full} before testing it`);
     return true;
   });
 }
@@ -987,17 +1024,19 @@ async function mergeTree(full, base) {
 // this needs the working copy, so the repo must not be in another thread's hands at that
 // moment; in a parallel repo it is done in a worktree of its own (mergeTree), and only an
 // exclusive holder stops it. `locked`: the caller holds the merge lock already.
-export async function merge(threadId, { locked = false } = {}) {
+// `full`: a repo the thread left earlier (ship.js), instead of the one it is in now.
+export async function merge(threadId, { locked = false, full: which = '' } = {}) {
   const thread = store.getThread(threadId);
-  if (!thread?.repo || !thread.repoBranch) throw new Error('This thread has no branch to merge.');
+  const full = which || thread?.repo;
+  const current = isCurrent(thread, full);
+  if (!full || !branchIn(thread, full)) throw new Error('This thread has no branch to merge.');
   if (thread.state === 'working') throw new Error('Claude is still working in this thread. Merge when it is done.');
-  const full = thread.repo;
   if (!(await acquire(full, threadId, { wait: false, mode: 'shared' }))) throw new Error(`${(holderName(full, threadId) || 'A thread waiting to work in it alone').replace(/^the /, 'The ')} ${holders(full).length ? 'is working' : 'goes first'} in ${full} right now. Merge when it is done.`);
   try {
     const { dir, base } = await ensure(full);
     const parallel = isParallel(full);
     const run = () => serial(full, async () => {
-      const branch = thread.repoBranch;
+      const branch = branchIn(thread, full);
       const own = dirFor(threadId, full);
       const apart = own !== dir; // the thread has a worktree of its own
       if ((await currentBranch(own)) === branch) await commitLeftovers(own, `Work in progress: ${thread.title}`);
@@ -1025,7 +1064,9 @@ export async function merge(threadId, { locked = false } = {}) {
         await git(dir, ['checkout', '--quiet', '-B', base, `origin/${base}`]);
       }
       await git(dir, ['branch', '-D', branch]).catch(() => {});
-      store.updateThread(threadId, { repoBranch: '', repoMerged: Date.now(), repoBranches: keepBranch(threadId, full, '') });
+      store.updateThread(threadId, current
+        ? { repoBranch: '', repoMerged: Date.now(), repoBranches: keepBranch(threadId, full, '') }
+        : { repoBranches: keepBranch(threadId, full, '') });
       log(`repos: merged ${branch} into ${full} ${base}`);
       return { base };
     });
@@ -1133,6 +1174,7 @@ export async function rename(fromInput, toName) {
     const patch = {};
     if (t.repo && key(t.repo) === k) patch.repo = to;
     if (t.repoBranches?.[k]) { const { [k]: branch, ...rest } = t.repoBranches; patch.repoBranches = { ...rest, [key(to)]: branch }; }
+    if (t.repoShip?.some((r) => key(r) === k)) patch.repoShip = t.repoShip.map((r) => (key(r) === k ? to : r));
     if (Object.keys(patch).length) store.updateThread(t.id, patch);
   }
   // The brain and the app's data are repos too. GitHub forwards the old address, but the

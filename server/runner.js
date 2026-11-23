@@ -859,6 +859,8 @@ async function runTurn(threadId, prompt) {
       try {
         const { dir, branch, base } = await repos.openFor(threadId, full, { exclusive: alone });
         store.updateThread(threadId, { repoSet: true });
+        // Merged at the end of the turn even if the turn goes on to another repo (ship.js).
+        repos.addShip(threadId, full);
         if (alone && exclusive && repos.isParallel(full)) store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude took ${full} alone (the exclusive lock) on ${dateTimeDMY(Date.now())}; other threads wait until this turn ends.]` });
         return { dir, branch, base, full, parallel: repos.isParallel(full), exclusive: alone, shared: repos.repoSettings(full).shared };
       } catch (err) {
@@ -1146,7 +1148,7 @@ async function runTurn(threadId, prompt) {
 // ship.js calls this when the branch could not go into main. Returns what the app does
 // about it, for the note in the thread: { fix: true } (a turn fixes it, then the merge
 // runs again), { remerge: at } (only the merge runs again), { stop: why }, or null.
-export function mergeFailed(threadId, { failure, detail = '' }) {
+export function mergeFailed(threadId, { failure, detail = '', repo = '', branch = '', main = '' }) {
   const t = store.getThread(threadId);
   if (!t || !failure) return null;
   if (t.state === 'working' || isRunning(threadId)) return null; // he answered: that turn's end merges again
@@ -1158,7 +1160,8 @@ export function mergeFailed(threadId, { failure, detail = '' }) {
     return { remerge: plan.at };
   }
   store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
-  const prompt = retry.mergeFixPrompt({ repo: t.repo, branch: t.repoBranch, main: t.repoMain || 'main', failure, detail });
+  // The repo whose merge failed, which need not be the one the thread ended in.
+  const prompt = retry.mergeFixPrompt({ repo: repo || t.repo, branch: branch || t.repoBranch, main: main || t.repoMain || 'main', failure, detail });
   holdAuto(threadId, { kind: 'merge', until: plan.until, reason: failure === 'clash' ? 'main clashes with the branch' : 'the tests failed', prompt, tier: t.lastTier || '', tries: plan.tries });
   return { fix: true };
 }

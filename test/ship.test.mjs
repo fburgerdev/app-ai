@@ -39,6 +39,12 @@ const vault = bare('brain', { 'CLAUDE.md': '# vault\n', 'Claude/Instructions.md'
 const good = bare('good', { 'package.json': JSON.stringify({ name: 'good', private: true, scripts: { test: 'node -e "require(\'fs\').writeFileSync(\'test-output.txt\', \'x\')"' } }) });
 const bad = bare('bad', { 'package.json': JSON.stringify({ name: 'bad', private: true, scripts: { test: 'node -e "console.log(\'1 failing\'); process.exit(1)"' } }) });
 const plain = bare('plain', { 'README.md': '# plain\n' });
+// One turn in two repos: both go in, in the order it opened them; behind one whose tests
+// fail, the next waits.
+const firstOf2 = bare('first-of-two', { 'README.md': '# first\n' });
+const secondOf2 = bare('second-of-two', { 'package.json': JSON.stringify({ name: 'second-of-two', private: true, scripts: { test: 'node -e "0"' } }) });
+const badFirst = bare('bad-first', { 'package.json': JSON.stringify({ name: 'bad-first', private: true, scripts: { test: 'node -e "process.exit(1)"' } }) });
+const waitsBehind = bare('waits-behind', { 'README.md': '# waits\n' });
 // Repos GitHub Actions tests. Their tests fail here, or pass here, the other way round from
 // GitHub's run, so a note can only be right if the app took GitHub's word for it.
 const workflow = { '.github/workflows/test.yml': 'on: push\n' };
@@ -127,4 +133,27 @@ test('a workflow but no run on GitHub: the tests run here after a while, as befo
   const said = await until(async () => { const n = await notes(t.id); return /merged the branch|did not pass/.test(n) ? n : null; }, 'merged', 60000);
   assert.match(said, /The app ran the tests, they passed/);
   assert.ok(onMain(ciNone).includes('CHANGED-BY-CLAUDE.md'));
+});
+
+test('one turn in two repos: both are merged, the first opened first, and the thread stays in the last', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'REPO-TEST=first-of-two REPO-TEST=second-of-two change both' })).data.thread;
+  const said = await until(async () => { const n = await notes(t.id); return (n.match(/merged the branch/g) || []).length === 2 ? n : null; }, 'both merged', 60000);
+  assert.ok(onMain(firstOf2).includes('CHANGED-BY-CLAUDE.md'), 'the repo it left is merged');
+  assert.ok(onMain(secondOf2).includes('CHANGED-BY-CLAUDE.md'), 'the repo it ended in is merged');
+  assert.ok(said.indexOf('first-of-two') < said.indexOf('second-of-two'), 'in the order it opened them');
+  const after = (await thread(t.id)).thread;
+  assert.equal(after.repo.toLowerCase(), 'fburgerdev/second-of-two', 'the thread is still in the repo it ended in');
+  assert.deepEqual(after.repoShip || [], [], 'nothing left to merge');
+  assert.deepEqual(after.repoBranches || {}, {}, 'no branch kept');
+});
+
+test('one turn in two repos, the first fails its tests: the second waits and is not merged', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'REPO-TEST=bad-first REPO-TEST=waits-behind change both' })).data.thread;
+  const said = await until(async () => { const n = await notes(t.id); return /did not pass/.test(n) ? n : null; }, 'refused', 60000);
+  assert.match(said, /The work in fburgerdev\/waits-behind waits on its branch until this is in main/);
+  assert.match(said, /bad-first/);
+  assert.ok(!onMain(badFirst).includes('CHANGED-BY-CLAUDE.md'), 'the failing repo is untouched');
+  assert.ok(!onMain(waitsBehind).includes('CHANGED-BY-CLAUDE.md'), 'the one behind it is not merged');
+  assert.match(git(waitsBehind, 'branch', '--list', 'claude/*'), /claude\//, 'its branch is on GitHub');
+  assert.deepEqual((await thread(t.id)).thread.repoShip.map((r) => r.toLowerCase()), ['fburgerdev/bad-first', 'fburgerdev/waits-behind'], 'both still to merge, in order');
 });

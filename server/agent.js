@@ -831,8 +831,8 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     return { sessionId, text: '', finalText: '', error: 'Stream closed: the line between the app and Claude Code broke mid-turn.', aborted: false };
   }
   // "REPO-TEST" or "REPO-TEST=name": open the repo and change a file in it, as the real Claude would.
-  const repoAsk = repoTools && /REPO-TEST(?:=([\w./-]+))?/.exec(newest);
-  if (repoAsk) {
+  // Several ("REPO-TEST=a REPO-TEST=b"): one after the other in the same turn.
+  for (const repoAsk of repoTools ? newest.matchAll(/REPO-TEST(?:=([\w./-]+))?/g) : []) {
     onEvent?.({ type: 'tool', name: 'mcp__app__open_repo', summary: `Opened the repo ${repoAsk[1] || ''}`.trim() });
     try {
       // "REPO-EXCL": the repo alone, as the real Claude asks for it with exclusive: true.
