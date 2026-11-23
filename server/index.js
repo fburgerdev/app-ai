@@ -1003,6 +1003,31 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
   }
 });
 
+// ---------- Yes and No on a proposed line, and notes during an event ----------
+app.post('/api/threads/:id/confirm', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const line = cleanText(req.body.line).replace(/\s+/g, ' ').slice(0, 400);
+  const group = cleanText(req.body.group).replace(/\s+/g, ' ').slice(0, 120);
+  const answer = req.body.answer === 'yes' || req.body.answer === 'no' ? req.body.answer : '';
+  if (!line || !answer) return res.status(400).json({ error: 'A line and Yes or No.' });
+  if (thread.kind === 'card') return res.status(409).json({ error: 'A card is accepted or declined as a whole.' });
+  const message = runner.recordConfirm(thread.id, { line, group, answer });
+  res.json({ ok: true, message });
+});
+
+// What he types into the notes field during an event, saved as he types. The brain
+// update reads it (extract.js), and the Threads/ file holds it (threadexport.js).
+app.put('/api/threads/:id/notes', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const text = String(req.body.text ?? '').replace(/\r\n/g, '\n').slice(0, 100_000);
+  if ((thread.notes?.text || '') === text) return res.json({ ok: true, notes: thread.notes || null });
+  const notes = { text, ts: Date.now() };
+  store.updateThread(thread.id, { notes });
+  res.json({ ok: true, notes });
+});
+
 // ---------- cards ----------
 app.post('/api/threads/:id/card', (req, res) => {
   const thread = need(req, res);

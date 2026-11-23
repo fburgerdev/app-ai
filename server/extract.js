@@ -151,6 +151,22 @@ export function extractionStatus() {
   };
 }
 
+// What Florian typed into the notes field during an event: his own words, filed like
+// anything he said in the thread. New since the last update, or context only.
+export function notesSection(thread) {
+  const text = thread.notes?.text?.trim();
+  if (!text) return [];
+  const fresh = (thread.notes.ts || 0) > (thread.extractedAt || 0);
+  return [
+    `## Florian's notes during the entry (typed by him in the app's notes field, last changed ${dateTimeDMY(thread.notes.ts)}; ${fresh ? 'new since the last brain update: file them' : 'filed by a previous brain update; context only, do not file again'})`,
+    '',
+    'If he also sent these notes as a message in the conversation, they are the same notes: file them once.',
+    '',
+    text,
+    '',
+  ];
+}
+
 function speaker(m) {
   if (m.role !== 'user') return 'Claude';
   if (m.auto) return 'The app (automatic, not Florian)';
@@ -233,6 +249,7 @@ async function writeThreads(dir, changed) {
       artifactLines.length ? artifactLines.join('\n') : 'None.',
       '',
       ...(mailLines.length ? ['## Mail attachments Claude downloaded in this thread', '', ...mailLines, ''] : []),
+      ...notesSection(thread),
       '## Earlier (filed by a previous brain update; context only, do not file again)',
       '',
       earlier || 'Nothing.',
