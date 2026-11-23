@@ -1844,6 +1844,11 @@ function askChoice({ label, aria, items, def, go }) {
     move(by) { this.sel = (this.sel + by + items.length) % items.length; this.mark(); },
     mark() { buttons.forEach((b, i) => b.classList.toggle('is-last', i === this.sel)); },
     take() { this.pick(items[this.sel].key); },
+    // One press of Send or Enter only opens the row. The Enter that opened it must be let
+    // go before Enter can take a choice (a held key repeats), and a second Send within a
+    // moment of the first is the same press bouncing, not his second click.
+    openedAt: performance.now(),
+    enterFree: !enterDown,
   };
   ask.mark();
   els.composer.prepend(row);
@@ -1871,6 +1876,16 @@ function askWhen(go) {
   });
 }
 function closeTierAsk() { tierAsk?.row.remove(); tierAsk = null; }
+// Whether Enter is held down right now, so the row knows if the press that opened it is
+// still going on.
+let enterDown = false;
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter') enterDown = true; }, true);
+document.addEventListener('keyup', (e) => {
+  if (e.key !== 'Enter') return;
+  enterDown = false;
+  if (tierAsk) tierAsk.enterFree = true;
+}, true);
+window.addEventListener('blur', () => { enterDown = false; if (tierAsk) tierAsk.enterFree = true; });
 
 // One button for both, always called "Done": with text it keeps the message and closes
 // (Claude does not answer), with an empty box it just closes.
@@ -2305,7 +2320,10 @@ async function openPad() {
 // `done` is "send and done": the message is kept, the thread closes, Claude does not answer.
 async function send(done = false, tier = '', mode = '') {
   // Send once more while quick select asks: the highlighted choice.
-  if (tierAsk && !done && !tier && !mode) { tierAsk.take(); return; }
+  if (tierAsk && !done && !tier && !mode) {
+    if (performance.now() - tierAsk.openedAt > 350) tierAsk.take();
+    return;
+  }
   const text = els.input.value.trim();
   if (S.pad) return;
   const files = filesToSend();
@@ -3554,7 +3572,12 @@ els.input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); tierAsk.move(1); return; }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); tierAsk.move(-1); return; }
     // Plain Enter takes the highlighted one. Ctrl Enter (Done) and Alt Enter (spin-off) go on below.
-    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); tierAsk.take(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      // Only a fresh press: not the held Enter that opened the row, not a key repeat.
+      if (!e.repeat && tierAsk.enterFree) tierAsk.take();
+      return;
+    }
     if (e.key === 'Escape') { e.preventDefault(); closeTierAsk(); return; }
   }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
