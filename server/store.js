@@ -81,6 +81,8 @@ export function loadThreads() {
     // tier picked for a message that started no turn, which the next message would get.
     delete meta.tier;
     if (meta.nextTier) meta.nextTier = '';
+    // Background jobs of a turn that ran here ended with the app.
+    if (meta.background?.length && mine(meta)) meta.background = [];
     threads.set(id, meta);
   }
   log(`loaded ${threads.size} threads`);

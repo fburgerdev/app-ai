@@ -61,9 +61,24 @@ function deny(message) {
   return { behavior: 'deny', message };
 }
 
+// What the file tools may do in a repo's shared folders (repos.js): read-only ones are
+// written only by an exclusive turn, add-only ones take new files but no change to an
+// existing one, and the repo's settings file is changed only by an exclusive turn.
+// Shell commands are not checked here; Windows' access rules and the check at the end of
+// the turn hold them. Returns a reason to refuse, or null.
+export function sharedRefusal(file, rules) {
+  if (!rules || rules.exclusive) return null;
+  if (rules.parallel && rules.settingsFile && path.resolve(file).toLowerCase() === path.resolve(rules.settingsFile).toLowerCase()) {
+    return 'The repo\'s settings (.app/repo.json) are changed only with the repo to yourself: open it again with open_repo and exclusive: true.';
+  }
+  if ((rules.readonly || []).some((d) => isInside(file, d))) return 'That folder is shared by every thread in this repo and read-only: nothing in it is changed, added or deleted, except by a turn that holds the repo alone (open_repo with exclusive: true).';
+  if ((rules.addonly || []).some((d) => isInside(file, d)) && fs.existsSync(file)) return 'That folder is shared by every thread in this repo and add-only: new files go in, but a file already there is never changed or deleted. Write a new file with a new name (a new version number), or work on a copy in a folder of this worktree.';
+  return null;
+}
+
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', secretsKey = '' }) {
-  const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir].filter(Boolean);
+export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', repoRoots = [], repoShared = () => null, secretsKey = '' }) {
+  const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir, ...repoRoots].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
     return p ? path.resolve(cwd, String(p)) : null;
@@ -79,9 +94,16 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
         const repo = repoDir();
         if (repo && isInside(file, repo)) {
           if (isInside(file, path.join(repo, '.git'))) return deny('The .git folder is the app\'s to manage.');
-          return allow(input);
+          const refused = sharedRefusal(file, repoShared());
+          return refused ? deny(refused) : allow(input);
         }
-        if (reposDir && isInside(file, reposDir)) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed.');
+        // A shared store reached by its own path rather than through the worktree's link.
+        const rules = repo ? repoShared() : null;
+        if (rules && [...(rules.readonly || []), ...(rules.addonly || [])].some((d) => isInside(file, d))) {
+          const refused = sharedRefusal(file, rules);
+          return refused ? deny(refused) : allow(input);
+        }
+        if ((reposDir && isInside(file, reposDir)) || repoRoots.some((r) => r && isInside(file, r))) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed, in the folder open_repo names.');
         return deny(
           `Threads in this app cannot write there. Write files only into the artifacts folder: ${artifactsDir}. ` +
           'The vault is written by the brain update, which Florian starts himself.',
@@ -162,12 +184,19 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
     instructions: 'Tools of Florian\'s inbox app itself.',
     tools: [
       ...(repoTools ? [
-        tool('open_repo', 'Open one of Florian\'s GitHub repos to work in it during this turn: the app clones or updates it and puts this thread on its own branch. Call it before reading or changing the code, in every turn that needs the code. Only one thread can hold a repo at a time; if another thread holds it, this waits until that thread\'s turn ends. Returns the folder to work in.',
-          { repo: z.string().optional().describe('owner/name or just the name (owner fburgerdev); leave out for this thread\'s own repo') },
-          async ({ repo }) => {
+        tool('open_repo', 'Open one of Florian\'s GitHub repos to work in it during this turn: the app clones or updates it and puts this thread on its own branch. Call it before reading or changing the code, in every turn that needs the code. Most repos take one thread at a time; a repo whose .app/repo.json says "parallel": true lets threads work side by side, each in a worktree of its own. If the repo is in use, this waits a few minutes; after that the turn is parked: end it with one line, and the app starts it again by itself the moment the repo is free. Set exclusive: true when the work needs nobody else working in the repo at the same time: a migration, renaming or moving folders, a dependency upgrade, changing .app/repo.json, writing into a shared read-only folder. Take it on your own judgement, without asking Florian, and say in your reply that you took it and why. Returns the folder to work in.',
+          {
+            repo: z.string().optional().describe('owner/name or just the name (owner fburgerdev); leave out for this thread\'s own repo'),
+            exclusive: z.boolean().optional().describe('Hold the repo alone: other threads wait until this turn ends. Only for work that needs the repo quiet.'),
+          },
+          async ({ repo, exclusive }) => {
             try {
-              const r = await repoTools.open(repo);
-              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}). Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push, merge or switch branches yourself: when the turn ends the app commits whatever you left uncommitted, pushes this branch, runs the repo's tests and, if they pass, merges it into main by itself. End the turn only with work that may go live.`);
+              const r = await repoTools.open(repo, { exclusive: exclusive === true });
+              const shared = r.shared && (r.shared.readonly.length || r.shared.addonly.length)
+                ? ` Shared folders, the same for every thread: ${[...r.shared.readonly.map((p) => `${p} (read-only${r.exclusive ? ', open to you while you hold the repo alone' : ''})`), ...r.shared.addonly.map((p) => `${p} (add-only: new files go in, an existing file is never changed or deleted)`)].join(', ')}.`
+                : '';
+              const how = r.parallel ? (r.exclusive ? ' You hold this repo alone until the turn ends; other threads wait.' : ' Other threads may work in this repo at the same time, each in a worktree of its own; this one is yours.') : '';
+              return ok(`Opened ${r.full} at ${r.dir}, on the branch ${r.branch} (made from ${r.base}).${how}${shared} Work only inside that folder: start shell commands with cd "${r.dir}". Commit as you go with clear messages. Do not push, merge or switch branches yourself: when the turn ends the app commits whatever you left uncommitted, pushes this branch, runs the repo's tests and, if they pass, merges it into main by itself. End the turn only with work that may go live.`);
             } catch (err) { return fail(err); }
           }),
         tool('list_repos', 'List Florian\'s GitHub repos.', {}, async () => {
@@ -349,7 +378,7 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, secretsKey, useDocument, continueLater, markPressing }) {
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer, markPressing }) {
   const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
@@ -387,7 +416,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, secretsKey: mode === 'thread' ? secretsKey : '' }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, repoRoots, repoShared, secretsKey: mode === 'thread' ? secretsKey : '' }),
     additionalDirectories: [artifactsDir, workDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
@@ -397,9 +426,38 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   if (model) options.model = model;
   if (effort && !plain) options.effort = effort;
 
-  // The permission callback needs the streaming form of the prompt.
+  // Background jobs Claude started (a render, a long build) keep the turn going: Claude
+  // Code wakes Claude when one ends. The SDK stops waiting for that after 10 minutes and
+  // closes the line to Claude Code, after which every tool call failed with "Stream
+  // closed" (22-11-2026, hour-long renders). Its ceiling goes up, and the line is kept open
+  // by the app itself until Claude Code says the session is idle (input() below).
+  if (!plain) options.env = { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_MS), ...(options.env || {}) };
+
+  // The prompt as a stream that stays open while the turn runs: what Florian adds
+  // mid-turn ("Add") goes in here, and Claude reads it at its next step.
+  const queue = [];
+  let wake = null;
+  let closed = false;
+  const close = () => { closed = true; wake?.(); };
   async function* input() {
     yield { type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null, session_id: resume || '' };
+    while (true) {
+      while (queue.length) yield queue.shift();
+      if (closed) return;
+      await new Promise((r) => { wake = r; });
+      wake = null;
+    }
+  }
+  if (abortController.signal.aborted) close();
+  else abortController.signal.addEventListener('abort', close, { once: true });
+  if (steer) {
+    steer.push = (text) => {
+      if (closed || plain) return false;
+      queue.push({ type: 'user', message: { role: 'user', content: String(text) }, parent_tool_use_id: null, session_id: sessionId || resume || '', priority: 'next' });
+      resultSeen = false; // the session runs on with it
+      wake?.();
+      return true;
+    };
   }
 
   let sessionId = resume || null;
@@ -413,11 +471,50 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let code = ''; // its kind, e.g. 'rate_limit'
   let rejected = null; // the last limit Claude Code reported as reached
   let context = 0; // how many tokens the conversation held at Claude's last step
+  let resultSeen = false;
+  let stateSeen = false; // whether this Claude Code reports its session state at all
+  let broken = ''; // set when the app ends the run itself: the line broke, or nothing moved
+  let lastAt = Date.now();
+  const inFlight = new Set(); // tool calls Claude is waiting on
+  const outputs = new Map(); // tool_use_id -> the file a background command writes to
+  const taskFiles = new Map(); // task_id -> that file
+  const taskOfTool = new Map(); // tool_use_id -> the task it started
+  let background = [];
+  const reportBackground = () => onEvent?.({ type: 'background', tasks: background.map((t) => ({ ...t, outputFile: taskFiles.get(t.id) || '' })) });
+  const endRun = (why) => { if (broken) return; broken = why; log(`run ended by the app: ${why}`); abortController.abort(); };
 
+  // Nothing at all from Claude Code for a long time, while it waits on no tool and no
+  // background job: it hangs. Ended, so the app tries again (retry.js).
+  const watchdog = plain ? null : setInterval(() => {
+    const quiet = Date.now() - lastAt;
+    // The reply is there, nothing runs, and Claude Code never said "idle": the turn is over.
+    if (resultSeen && !background.length && !inFlight.size && !queue.length && quiet > 30_000) close();
+    const limit = background.length ? Infinity : inFlight.size ? WATCHDOG_TOOL_MS : WATCHDOG_MS;
+    if (quiet > limit) endRun(`No sign of life from Claude Code for ${Math.round(quiet / 60_000)} minutes, so the app ended the run.`);
+  }, 15_000);
+  watchdog?.unref?.();
+
+  try {
   for await (const msg of query({ prompt: input(), options })) {
+    lastAt = Date.now();
     if (msg.session_id && msg.session_id !== sessionId) {
       sessionId = msg.session_id;
       onEvent?.({ type: 'session', sessionId });
+    }
+    if (msg.type === 'system') {
+      if (msg.subtype === 'session_state_changed') {
+        stateSeen = true;
+        // Idle after the reply: nothing runs any more, the turn is over.
+        if (msg.state === 'idle' && resultSeen && !queue.length) close();
+      } else if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
+        background = msg.tasks.filter((t) => !t.ambient && !t.parent_task_id).map((t) => ({ id: t.task_id, description: t.description || t.task_type || 'a job', type: t.task_type || '' }));
+        reportBackground();
+      } else if (msg.subtype === 'task_started' && msg.tool_use_id) {
+        // The task and the tool result that names its file arrive in either order.
+        taskOfTool.set(msg.tool_use_id, msg.task_id);
+        if (outputs.has(msg.tool_use_id)) { taskFiles.set(msg.task_id, outputs.get(msg.tool_use_id)); reportBackground(); }
+      }
+      continue;
     }
     if (msg.type === 'rate_limit_event') {
       // Which limit, and exactly when it lifts. A later "allowed" takes it back.
@@ -449,6 +546,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       if (u) context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
+          if (!msg.parent_tool_use_id) inFlight.add(block.id);
           const summary = describeTool(block.name, block.input, cwd);
           onEvent?.({ type: 'tool-input', name: block.name, input: block.input || {} });
           if (summary) onEvent?.({ type: 'tool', name: block.name, summary, helper: Boolean(msg.parent_tool_use_id) });
@@ -462,8 +560,26 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       }
       sawDelta = false;
     } else if (msg.type === 'user' && !msg.parent_tool_use_id) {
+      for (const block of Array.isArray(msg.message?.content) ? msg.message.content : []) {
+        if (block.type !== 'tool_result') continue;
+        inFlight.delete(block.tool_use_id);
+        const said = resultText(block.content);
+        // A command sent to the background says where its output goes.
+        const file = backgroundOutput(said);
+        if (file) {
+          outputs.set(block.tool_use_id, file);
+          const task = taskOfTool.get(block.tool_use_id);
+          if (task) { taskFiles.set(task, file); reportBackground(); }
+        }
+        // The line to Claude Code broke: nothing Claude does from here can work. The run
+        // ends as an error, and the app starts it again by itself (retry.js).
+        if (block.is_error && STREAM_CLOSED.test(said)) endRun('Stream closed: the line between the app and Claude Code broke mid-turn.');
+      }
       onEvent?.({ type: 'tool-result' });
     } else if (msg.type === 'result') {
+      resultSeen = true;
+      // An older Claude Code that does not say when it is idle: the reply is the end.
+      if (!stateSeen && !queue.length) close();
       if (msg.is_error || msg.subtype !== 'success') {
         raw = msg.result || (msg.errors || []).join(' ') || raw || msg.subtype;
         error = friendlyError(raw);
@@ -476,8 +592,33 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       cost = msg.total_cost_usd || 0;
     }
   }
+  } catch (err) {
+    if (!broken) throw err;
+  } finally {
+    clearInterval(watchdog);
+    close();
+    if (steer) steer.push = () => false;
+  }
+  if (broken) return { sessionId, text, finalText: lastText, error: broken, aborted: false, usage, cost, limit: null, context };
   const limit = error ? limitOf({ error: raw, code, seen: rejected }) : null;
   return { sessionId, text, finalText: lastText, error, aborted: abortController.signal.aborted, usage, cost, limit, context };
+}
+
+const BG_WAIT_MS = 3 * 3600_000;
+const WATCHDOG_MS = 20 * 60_000;
+const WATCHDOG_TOOL_MS = 70 * 60_000; // a tool may run long (pi_shell up to 60 minutes)
+const STREAM_CLOSED = /stream closed|Tool permission (stream closed|request failed)/i;
+
+// Where a command sent to the background writes its output, from what the tool said.
+export function backgroundOutput(said) {
+  const m = /Output is being written to:?\s*(\S+)/i.exec(said) || /((?:[A-Za-z]:[\\/]|\/)[^\s"'`]*?\.output)\b/.exec(said);
+  return m ? m[1].replace(/[.,;)`]+$/, '') : '';
+}
+
+function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((c) => (typeof c === 'string' ? c : c?.text || '')).join(' ');
+  return '';
 }
 
 // ---------- a stand-in for Claude, for trying the app without an account ----------
@@ -488,7 +629,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fakeBrainLimited = false;
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, markPressing }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title, markPressing }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -655,16 +796,37 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   }
 
   let text = '';
+  // What he adds mid-turn ("Add") is read at the next step, as the real Claude would.
+  const added = [];
+  if (steer) steer.push = (t) => { added.push(String(t)); return true; };
+  const readAdded = async () => (added.length ? say(`Read what you added: ${added.splice(0).join(' / ')}\n\n`) : '');
   // "…spin off a new task about X": the stand-in does it, as the real Claude would with its tool.
   const newest = userPrompt.split('The new message:').pop();
-  if (/SLOW-TEST/.test(newest)) await new Promise((res) => setTimeout(res, 2500));
+  if (/SLOW-TEST/.test(newest)) {
+    onEvent?.({ type: 'background', tasks: [{ id: 'fake-task', description: 'the slow test job', type: 'local_bash', outputFile: '' }] });
+    await new Promise((res) => setTimeout(res, 2500));
+    onEvent?.({ type: 'background', tasks: [] });
+  }
+  // "GOAHEAD-TEST": the reply only asks for a go-ahead; the turn the supervisor starts finishes.
+  if (/GOAHEAD-TEST/.test(userPrompt) && !/only waited for a go-ahead/.test(userPrompt)) {
+    onEvent?.({ type: 'tool', name: 'Bash', summary: 'Ran the first half' });
+    const said = await say('The first half is rendered. When you\'re back, say go on and I\'ll do the second half.');
+    return { sessionId, text: said, finalText: said, error: '', aborted: false };
+  }
+  // "STREAM-TEST": the line to Claude Code breaks mid-turn; the try the app starts by itself goes through.
+  if (/STREAM-TEST/.test(userPrompt) && !/ended on an error/.test(userPrompt)) {
+    onEvent?.({ type: 'tool', name: 'Bash', summary: 'Ran the render' });
+    return { sessionId, text: '', finalText: '', error: 'Stream closed: the line between the app and Claude Code broke mid-turn.', aborted: false };
+  }
   // "REPO-TEST" or "REPO-TEST=name": open the repo and change a file in it, as the real Claude would.
   const repoAsk = repoTools && /REPO-TEST(?:=([\w./-]+))?/.exec(newest);
   if (repoAsk) {
     onEvent?.({ type: 'tool', name: 'mcp__app__open_repo', summary: `Opened the repo ${repoAsk[1] || ''}`.trim() });
     try {
-      const r = await repoTools.open(repoAsk[1]);
-      fs.writeFileSync(path.join(r.dir, 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
+      // "REPO-EXCL": the repo alone, as the real Claude asks for it with exclusive: true.
+      const r = await repoTools.open(repoAsk[1], { exclusive: /REPO-EXCL/.test(newest) });
+      // In a parallel repo each thread writes a file of its own, so two branches do not clash.
+      fs.writeFileSync(path.join(r.dir, r.parallel ? `CHANGED-BY-${(title || 'thread').replace(/[^\w]+/g, '-')}.md` : 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
       // "REPO-HOLD=name": stay in the repo for as long as the file hold-<name> is in the data
       // folder, so a test decides when the turn ends instead of racing a clock.
       const hold = /REPO-HOLD=([\w-]+)/.exec(newest);
@@ -698,6 +860,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     onEvent?.({ type: 'tool', name: 'mcp__app__spin_off', summary: `Spun off a thread: ${wanted[1].trim()}` });
     await spinOff({ title: `Only ${wanted[1].trim()}`, task: `Work only on ${wanted[1].trim()}.` });
   }
+  text += await readAdded();
   text += await say('Let me look at what the vault has on this.\n\n');
   onEvent?.({ type: 'tool-input', name: 'Read', input: { file_path: path.join(cwd, 'Core', 'Next Actions.md'), offset: 1, limit: 40 } });
   onEvent?.({ type: 'tool', name: 'Read', summary: 'Read Core/Next Actions.md' });
@@ -707,6 +870,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   await sleep(400 * speed);
   onEvent?.({ type: 'tool', name: 'WebSearch', summary: 'Searched the web for "example query"' });
   await sleep(400 * speed);
+  text += await readAdded();
 
   if (/SCRIPT-TEST/.test(prompt) && workDir && showFile) {
     // A careless install into the artifacts folder, a script on the workbench, its result.
@@ -762,7 +926,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       'const ready = threads.filter((t) => t.state === "ready");',
       '```',
       '',
-      'Which of the two options do you want me to work out?',
+      /DECIDE-TEST/.test(newest) ? 'Which of the two options do you want me to work out? DECIDE-TEST' : 'Which of the two options do you want me to work out?',
     ].join('\n'));
   }
   return { sessionId, text, finalText: text, error: '', aborted: false };

@@ -31,6 +31,7 @@ import { piShell } from './pi.js';
 import { moveEvent } from './events.js';
 import { limitLabel, resumeAt, clock } from './limits.js';
 import * as retry from './retry.js';
+import { supervise } from './supervise.js';
 
 let config;
 const running = new Map(); // threadId -> { abort: AbortController, parts: [] }
@@ -40,6 +41,7 @@ const heldPrompt = new Map(); // threadId -> the message a turn started again af
 export function initRunner(cfg) {
   config = cfg;
   ship.onMergeFailed(mergeFailed);
+  repos.onGranted((full, threadId) => resumeParked(full, threadId));
 }
 
 // Whether a turn of this thread runs in this process right now.
@@ -68,9 +70,15 @@ function promptFor(threadId, text, files) {
 // the message is kept and the thread closes, without a turn. He is closing it, so an
 // answer would only cost usage; the brain update reads the message like any other, and
 // if he reopens the thread, Claude gets it with his next message.
-export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false, tier = '' } = {}) {
+export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false, tier = '', mode = '' } = {}) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
+  // Claude is on it right here: "Add" goes into the running turn, "Next" waits for its end.
+  const run = running.get(threadId);
+  if (!auto && !doneAfter && thread.state === 'working' && !thread.held && run?.steer) return addMidTurn(threadId, thread, run, { text, files, tier, mode });
+  // What he had queued as "Next" and the supervisor held: he writes again, so it goes in
+  // first, before this message, as he sent it.
+  const heldQueued = !auto && !doneAfter && thread.state !== 'working' && thread.queued?.length ? takeQueued(threadId) : [];
   const stored = { role: 'user', text };
   if (auto) stored.auto = true;
   if (files.length) stored.files = files;
@@ -90,13 +98,14 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   // A plain message after "send and done" means he wants to see the answer after all.
   // A message into a deferred thread wakes it again. A message of his also sets the
   // count of what the app retried by itself back (retry.js).
-  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0 });
+  // A turn that broke a repo's shared folders is merged once he has written (repos.saveWork).
+  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0, repoBreach: '' });
   // His first message after an event ended is the debrief: the event leaves Events and
   // goes on as an ordinary thread, until the follow-ups are out (Florian, 23-11-2026). A
   // pin he set himself stays.
   if (!auto && thread.kind === 'event' && thread.event && Date.now() >= thread.event.end && thread.pinned == null) store.updateThread(threadId, { pinned: false, debriefAt: Date.now() });
   // What he sent with "send and done" goes in first, so Claude has it too.
-  const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
+  const withUnsent = [...(thread.unsent || []), ...heldQueued, prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
   // Waiting to carry on by itself (not for the usage limit): his message starts the turn now.
   if (thread.state === 'working' && thread.held?.kind && thread.held.kind !== 'limit' && !isRunning(threadId)) {
@@ -115,6 +124,93 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   }
   startTurn(threadId, withUnsent, auto);
   return message;
+}
+
+// ---------- what he adds while Claude works ----------
+//
+// Two ways, his choice when sending (23-11-2026):
+//   add   Claude reads it at its next step, in the running turn, as in the Claude app.
+//         In the conversation it stands where Claude read it: what Claude had written
+//         so far is kept as an answer of its own above it, and the rest follows below.
+//   next  a command for after the turn. It waits on the thread (`queued`), shown under
+//         the live reply, and goes into the conversation only when it starts. When the
+//         turn ends, the supervisor (supervise.js) reads the reply: the command runs,
+//         unless the reply asks him something first or the turn went wrong; then it
+//         waits (`queuedHeld`) until he runs it, changes it or writes again.
+// "Add" falls back to "next" when the turn cannot take it in (it is just starting or
+// already ending).
+
+const qid = () => `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+function addMidTurn(threadId, thread, run, { text, files, tier, mode }) {
+  store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0 }, { quiet: true });
+  const prompt = promptFor(threadId, text, files);
+  if (mode !== 'next' && run.steer.push?.(`[Florian added this while you were working. Take it into account from your next step on:]\n\n${prompt}`)) {
+    splitLive(threadId, run);
+    const stored = { role: 'user', text, steered: true };
+    if (files.length) stored.files = files;
+    return store.appendMessage(threadId, stored);
+  }
+  const item = { id: qid(), text, files, prompt, tier: TIER_NAMES.includes(tier) ? tier : '', ts: Date.now() };
+  store.updateThread(threadId, { queued: [...(thread.queued || []), item], queuedHeld: '' });
+  return null;
+}
+
+// What Claude wrote so far in this turn becomes an answer of its own, so his message
+// shows where Claude read it, and the live reply starts again below it.
+function splitLive(threadId, run) {
+  const parts = run.parts.filter((p) => p.type !== 'text' || p.text.trim());
+  if (parts.length) store.appendMessage(threadId, { role: 'assistant', parts, partial: true, durationMs: Date.now() - run.segStart, tier: run.tier || '' });
+  run.parts = [];
+  run.segStart = Date.now();
+  store.events.emit('live', { threadId, op: 'parts', parts: [] });
+}
+
+// The queued commands go into the conversation, in the order he sent them, and leave
+// the queue. `into: 'pending'` hands them to the turn that comes next; otherwise their
+// prompts are returned.
+function takeQueued(threadId, { into = '' } = {}) {
+  const t = store.getThread(threadId);
+  const items = t?.queued || [];
+  if (!items.length) return [];
+  for (const q of items) {
+    const stored = { role: 'user', text: q.text, queuedAt: q.ts };
+    if (q.files?.length) stored.files = q.files;
+    store.appendMessage(threadId, stored);
+  }
+  const prompts = items.map((q) => q.prompt);
+  store.updateThread(threadId, { queued: [], queuedHeld: '', ...(into === 'pending' ? { pending: [...(store.getThread(threadId).pending || []), ...prompts] } : {}) });
+  return prompts;
+}
+
+// "Run it": what the supervisor held starts now, as he queued it.
+export function runQueued(threadId) {
+  const t = store.getThread(threadId);
+  if (!t) throw new Error('No such thread');
+  if (!t.queued?.length) throw new Error('Nothing is queued here.');
+  if (t.state === 'working') throw new Error('Claude is still working on this thread; it runs when the turn ends.');
+  const tierPick = t.queued.find((q) => q.tier)?.tier || '';
+  store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0, ...(tierPick ? { nextTier: tierPick } : {}) }, { quiet: true });
+  const prompts = takeQueued(threadId);
+  startTurn(threadId, prompts.join('\n\n'));
+  return store.getThread(threadId);
+}
+
+// Takes one queued command back (to change it, or because it is no longer wanted).
+export function dropQueued(threadId, id) {
+  const t = store.getThread(threadId);
+  if (!t) throw new Error('No such thread');
+  const item = (t.queued || []).find((q) => q.id === id);
+  if (!item) throw new Error('That is no longer queued.');
+  const left = t.queued.filter((q) => q.id !== id);
+  store.updateThread(threadId, { queued: left, ...(left.length ? {} : { queuedHeld: '' }) });
+  return { thread: store.getThread(threadId), item };
+}
+
+// What the app did by itself, as the supervisor: shown in the thread in its own colour,
+// with what Claude got when it started a turn. Not something Florian said.
+function supervisorNote(threadId, text, prompt = '') {
+  return store.appendMessage(threadId, { role: 'user', event: true, auto: true, supervisor: true, text, ...(prompt ? { prompt } : {}) });
 }
 
 // How many turns may run at once. Work the app started by itself (`background`) leaves
@@ -153,6 +249,8 @@ export function stopTurn(threadId) {
     const thread = store.getThread(threadId);
     if (!thread?.held) return false;
     heldPrompt.delete(threadId);
+    // Parked for a repo: its place in the queue goes too.
+    if (thread.held.kind === 'repo') repos.forget(threadId);
     store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false, stoppedAt: Date.now() });
     log(`thread "${thread.title}": hold cancelled`);
     return true;
@@ -181,8 +279,8 @@ function hold(threadId, limit, { prompt, tier, tries = 0 }) {
 
 // Held to carry on by itself (retry.js): after an error, when Claude asked to look again,
 // or to fix a merge. The same data as a hold for the usage limit, with its `kind`.
-function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries = 1 }) {
-  const held = { until, type: '', kind, reason, prompt, at: Date.now(), tier, tries };
+function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries = 1, extra = {} }) {
+  const held = { ...extra, until, type: '', kind, reason, prompt, at: Date.now(), tier, tries };
   store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '' });
   log(`thread "${store.getThread(threadId)?.title}": ${kind}, carries on by itself at ${new Date(until).toISOString()}`);
   return held;
@@ -192,26 +290,54 @@ function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries
 // the one doing the work; the other one leaves the hold alone.
 export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
   let started = 0;
-  for (const t of store.listThreads()) {
-    if (!t.held || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
+  // Turns parked for a repo carry on when the repo is free for them, not by the clock. After
+  // a restart they join the queue again, in the order they were parked.
+  const parked = store.listThreads().filter((t) => t.held?.kind === 'repo' && t.state === 'working' && !isRunning(t.id)).sort((a, b) => a.held.at - b.held.at);
+  for (const t of parked) {
     if (!mayRun()) return started;
-    const { held } = t;
-    const added = t.pending || [];
-    const kind = held.kind || 'limit';
-    const own = kind === 'limit' ? null : retry.resumeText(held, now);
-    const prompt = [
-      own ? own.prompt : `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
-      ...(own ? [] : [held.prompt]),
-      ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
-    ].join('\n\n');
-    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
-    heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
-    store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
-    log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
-    startTurn(t.id, prompt);
+    if (repos.holds(t.held.repo, t.id)) { startHeld(t, now); started += 1; }
+    else if (!repos.queued(t.held.repo, t.id)) repos.park(t.held.repo, t.id, t.held.mode, t.held.at);
+  }
+  for (const t of store.listThreads()) {
+    if (!t.held || t.held.kind === 'repo' || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
+    if (!mayRun()) return started;
+    startHeld(t, now);
     started += 1;
   }
   return started;
+}
+
+function startHeld(t, now = Date.now()) {
+  const { held } = t;
+  const added = t.pending || [];
+  const kind = held.kind || 'limit';
+  const own = kind === 'limit' ? null : retry.resumeText(held, now);
+  const prompt = [
+    own ? own.prompt : `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
+    ...(own ? [] : [held.prompt]),
+    ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
+  ].join('\n\n');
+  supervisorNote(t.id, own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]`, prompt);
+  heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
+  store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
+  log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
+  startTurn(t.id, prompt);
+}
+
+// The lock of a repo was given to a parked turn (repos.js): it starts now. True when the
+// thread takes the lock: started, about to carry on (its parked turn is still ending), or
+// already running again (his message started a turn, which opens the repo next).
+// False lets the lock go on to the next in the queue.
+function resumeParked(full, threadId) {
+  const t = store.getThread(threadId);
+  if (!t) return false;
+  const r = running.get(threadId);
+  if (r?.park && r.park.repo.toLowerCase() === String(full).toLowerCase()) { r.parkGranted = true; return true; }
+  if (isRunning(threadId)) return true;
+  if (t.held?.kind !== 'repo' || t.state !== 'working' || String(t.held.repo).toLowerCase() !== String(full).toLowerCase()) return false;
+  if (!mayRunHere()) return false;
+  startHeld(t);
+  return true;
 }
 
 // Merges that failed for a reason a turn cannot fix (GitHub not reachable) are tried
@@ -242,7 +368,7 @@ export function retryInterrupted({ mayRun = () => true, now = Date.now() } = {})
     const plan = retry.turnPlan({ auto: t.auto, error: reason, didWork: false, opts: config.autoRetry, now });
     if (plan?.stop) {
       store.updateThread(t.id, { auto: plan.auto }, { quiet: true });
-      store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]` });
+      supervisorNote(t.id, `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]`);
       continue;
     }
     if (!plan?.kind) continue;
@@ -254,7 +380,9 @@ export function retryInterrupted({ mayRun = () => true, now = Date.now() } = {})
 }
 
 let holdTimer = null;
+let mayRunHere = () => true; // whether this computer does the work now (watchHolds)
 export function watchHolds(mayRun) {
+  mayRunHere = () => { try { return mayRun ? Boolean(mayRun()) : true; } catch { return false; } };
   clearInterval(holdTimer);
   holdTimer = setInterval(() => {
     try { retryInterrupted({ mayRun }); } catch (err) { log(`interrupted turns: ${err.stack || err.message}`); }
@@ -282,7 +410,7 @@ export function watchHolds(mayRun) {
 export function leftOver(messages, { stoppedAt = 0, slackMs = 5000 } = {}) {
   let lastStart = 0;
   for (const m of messages) if (m.role === 'assistant') lastStart = Math.max(lastStart, (m.ts || 0) - (m.durationMs || 0));
-  return messages.filter((m) => m.role === 'user' && !m.auto && !m.event && !m.unanswered && (m.ts || 0) > stoppedAt && (m.ts || 0) - slackMs > lastStart);
+  return messages.filter((m) => m.role === 'user' && !m.auto && !m.event && !m.unanswered && !m.steered && !m.queuedAt && (m.ts || 0) > stoppedAt && (m.ts || 0) - slackMs > lastStart);
 }
 
 // Starts a turn for every waiting thread that holds such messages. Only on the computer
@@ -305,12 +433,53 @@ export function answerLeftOver({ mayRun = () => true, now = Date.now() } = {}) {
       `[The app: Florian sent the message${owed.length > 1 ? 's' : ''} below ${owed.length > 1 ? 'between' : 'at'} ${owed.length > 1 ? `${clock(owed[0].ts)} and ${clock(newest.ts)}` : clock(newest.ts)}, while the work was moving between his two computers, and no turn took ${owed.length > 1 ? 'them' : 'it'} up. The app noticed and started this turn by itself; he has not written anything since. Answer ${owed.length > 1 ? 'them' : 'it'} now, in the light of everything said before.]`,
       ...owed.map((m) => promptFor(t.id, m.text || '', m.files || [])),
     ].join('\n\n');
-    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: `[${owed.length > 1 ? `${owed.length} messages` : 'A message'} here had not been answered; the app started the turn by itself on ${dateTimeDMY(now)}.]` });
+    supervisorNote(t.id, `[${owed.length > 1 ? `${owed.length} messages` : 'A message'} here had not been answered; the app started the turn by itself on ${dateTimeDMY(now)}.]`, prompt);
     log(`thread "${t.title}": ${owed.length} message(s) no turn took up; answering now`);
     startTurn(t.id, prompt);
     started += 1;
   }
   return started;
+}
+
+// ---------- background jobs: their last line, for the page ----------
+//
+// While Claude waits on a job it runs in the background (a render), the thread shows the
+// last line the job wrote, so he can see it is alive and how far it is.
+
+export function lastLine(file, max = 160) {
+  if (!file) return '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, 8192);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      // eslint-disable-next-line no-control-regex
+      const lines = buf.toString('utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+      const last = lines.at(-1) || '';
+      return last.length > max ? `${last.slice(0, max - 1)}…` : last;
+    } finally { fs.closeSync(fd); }
+  } catch { return ''; }
+}
+
+let bgTimer = null;
+export function watchBackground(everyMs = 15_000) {
+  clearInterval(bgTimer);
+  bgTimer = setInterval(() => {
+    for (const id of running.keys()) {
+      const t = store.getThread(id);
+      if (!t?.background?.length) continue;
+      let changed = false;
+      const jobs = t.background.map((j) => {
+        const tail = lastLine(j.outputFile) || j.tail || '';
+        if (tail !== j.tail) changed = true;
+        return { ...j, tail };
+      });
+      if (changed) store.updateThread(id, { background: jobs }, { quiet: true });
+    }
+  }, everyMs);
+  bgTimer.unref?.();
 }
 
 let leftOverTimer = null;
@@ -393,10 +562,17 @@ function recap(threadId, newPrompt) {
 async function runTurn(threadId, prompt) {
   const thread = store.getThread(threadId);
   const abort = new AbortController();
-  const run = { abort, parts: [] };
+  // steer: what he adds mid-turn goes in through it (agent.js). text: everything Claude
+  // wrote this turn, for the supervisor. segStart: when the live reply last started.
+  const run = { abort, parts: [], steer: {}, text: '', didWork: false, segStart: Date.now(), tier: '' };
   running.set(threadId, run);
   const emitLive = (payload) => store.events.emit('live', { threadId, ...payload });
-  const activity = (text) => store.updateThread(threadId, { activity: text }, { quiet: true });
+  // What it is doing, and since when: the page shows how long that has been going on.
+  const activity = (text) => {
+    const t = store.getThread(threadId);
+    if (t && t.activity === text) return;
+    store.updateThread(threadId, { activity: text, activityAt: Date.now() }, { quiet: true });
+  };
 
   // Which new files Claude means to show: those it writes into the artifacts folder with
   // its file tools, and those it hands over with show_file. Anything else a script leaves
@@ -429,9 +605,11 @@ async function runTurn(threadId, prompt) {
         run.parts.push(last);
       }
       last.text += ev.delta;
+      run.text += ev.delta;
       emitLive({ op: 'text', index: run.parts.length - 1, delta: ev.delta });
     } else if (ev.type === 'tool') {
       run.parts.push({ type: 'tool', name: ev.name, summary: ev.summary });
+      run.didWork = true;
       emitLive({ op: 'parts', parts: run.parts });
       activity(ev.summary);
     } else if (ev.type === 'tool-input') {
@@ -441,6 +619,14 @@ async function runTurn(threadId, prompt) {
       recordArtifacts();
     } else if (ev.type === 'activity') {
       activity(ev.text);
+    } else if (ev.type === 'background') {
+      // Jobs Claude runs in the background (a render): the page shows them, with the last
+      // line each one wrote (watchBackground below).
+      const before = store.getThread(threadId)?.background || [];
+      const jobs = (ev.tasks || []).map((j) => ({ id: j.id, description: String(j.description || 'a job').slice(0, 120), outputFile: j.outputFile || '', since: before.find((b) => b.id === j.id)?.since || Date.now(), tail: before.find((b) => b.id === j.id)?.tail || '' }));
+      store.updateThread(threadId, { background: jobs }, { quiet: true });
+      if (jobs.length) activity(`Running in the background: ${jobs.map((j) => j.description).join(', ')}`);
+      else if (before.length) activity('Working');
     }
   };
 
@@ -495,33 +681,62 @@ async function runTurn(threadId, prompt) {
 
   // Code. A thread on a project with a `repo:` line starts out with that repo; Claude
   // opens it (or any other repo of Florian's) when the work needs the code. Opening it
-  // takes it for this turn: one thread at a time per repo.
+  // takes it for this turn: alone, or, in a repo that lets threads work side by side,
+  // shared with the others unless Claude asks for it alone (repos.js).
   const repoDir = () => {
     const t = store.getThread(threadId);
-    return t?.repo && repos.holder(t.repo) === threadId ? repos.dirOf(t.repo) : null;
+    return t?.repo && repos.holds(t.repo, threadId) ? repos.dirFor(threadId, t.repo) : null;
   };
+  // What the file tools may do in the shared folders of the repo this turn holds (agent.js).
+  const repoShared = () => {
+    const t = store.getThread(threadId);
+    if (!t?.repo || !repos.holds(t.repo, threadId)) return null;
+    const dir = repos.dirFor(threadId, t.repo);
+    const { readonly, addonly } = repos.repoSettings(t.repo).shared;
+    const at = (p) => [path.join(dir, ...p.split('/')), path.join(repos.sharedRoot(t.repo), ...p.split('/'))];
+    return {
+      exclusive: repos.holdsExclusive(t.repo, threadId),
+      parallel: repos.isParallel(t.repo),
+      readonly: readonly.flatMap(at),
+      addonly: addonly.flatMap(at),
+      settingsFile: path.join(dir, ...repos.SETTINGS_FILE.split('/')),
+    };
+  };
+  // A wait for a repo longer than this parks the turn instead (repos.js, "the lock").
+  const waitMs = Number(config.repoWaitMs ?? 3 * 60_000);
   const repoTools = {
-    open: async (input) => {
+    open: async (input, { exclusive = false } = {}) => {
       const full = repos.repoName(input || store.getThread(threadId)?.repo);
       if (!full) throw new Error(input ? `"${input}" is not a repo name. Give it as owner/name or just the name.` : 'Name the repo to open.');
       const before = store.getThread(threadId);
-      if (before.repo && repos.holder(before.repo) === threadId && before.repo.toLowerCase() !== full.toLowerCase()) {
+      if (before.repo && repos.holds(before.repo, threadId) && before.repo.toLowerCase() !== full.toLowerCase()) {
         await repos.saveWork(threadId);
         await repos.autoPush(threadId);
         repos.release(before.repo, threadId);
       }
-      const other = repos.holder(full);
-      if (other && other !== threadId) {
-        activity(`Waiting for ${full}: ${repos.holderName(full) || 'another thread'} is working in it`);
-        const got = await repos.acquire(full, threadId, { timeoutMs: 20 * 60_000 });
-        if (!got) throw new Error(`${full} is still in use by ${repos.holderName(full) || 'another thread'}. Tell Florian; he can come back to this when it is done.`);
-      } else await repos.acquire(full, threadId);
+      // Cloned or fetched first, so the lock knows whether the repo lets threads work side by side.
+      await repos.ensure(full);
+      const mode = exclusive ? 'exclusive' : 'shared';
+      const got = await repos.acquire(full, threadId, { mode, wait: false });
+      if (!got) {
+        const who = repos.holderName(full, threadId) || 'a thread that asked before';
+        activity(`Waiting for ${full}${exclusive ? ' (alone)' : ''}: ${who} ${repos.holders(full).length ? 'is working in it' : 'goes first'}`);
+        const later = await repos.acquire(full, threadId, { mode, timeoutMs: waitMs, park: true });
+        if (!later) {
+          // Parked: the turn ends now, keeps its place in the queue, and the app starts it
+          // again by itself the moment the repo is free for it (the end of runTurn).
+          run.park = { repo: full, mode, holder: repos.holderName(full, threadId) || 'another thread' };
+          throw new Error(`${full} is still in use by ${run.park.holder}. This turn is parked: end it now, with one line for Florian saying it waits for ${full}. The app keeps this thread's place in the queue and starts the next turn by itself the moment the repo is free; do not call continue_later and do not ask him to say "go on". Do not change anything in the meantime.`);
+        }
+      }
       if (abort.signal.aborted) { repos.release(full, threadId); throw new Error('Stopped.'); }
-      activity(`Opening ${full}`);
+      const alone = repos.holdsExclusive(full, threadId);
+      activity(`Opening ${full}${alone && repos.isParallel(full) ? ' alone' : ''}`);
       try {
-        const { dir, branch, base } = await repos.openFor(threadId, full);
+        const { dir, branch, base } = await repos.openFor(threadId, full, { exclusive: alone });
         store.updateThread(threadId, { repoSet: true });
-        return { dir, branch, base, full };
+        if (alone && exclusive && repos.isParallel(full)) store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude took ${full} alone (the exclusive lock) on ${dateTimeDMY(Date.now())}; other threads wait until this turn ends.]` });
+        return { dir, branch, base, full, parallel: repos.isParallel(full), exclusive: alone, shared: repos.repoSettings(full).shared };
       } catch (err) {
         repos.release(full, threadId);
         throw err;
@@ -557,6 +772,7 @@ async function runTurn(threadId, prompt) {
     }
     activity('Starting');
     const tier = await tierFor(threadId, prompt);
+    run.tier = tier.name;
     store.updateThread(threadId, { lastTier: tier.name }, { quiet: true });
 
     const base = {
@@ -564,6 +780,7 @@ async function runTurn(threadId, prompt) {
       systemAppend: threadInstructions(store.getThread(threadId)),
       repoDir,
       reposDir: config.reposDir,
+      repoRoots: [repos.dirsForPolicy().worktrees, repos.dirsForPolicy().shared],
       repoTools,
       model: tier.model,
       effort: tier.effort,
@@ -575,6 +792,7 @@ async function runTurn(threadId, prompt) {
       protectedPaths: config.protectedPaths,
       shell: config.threadShell,
       artifactsShell: config.artifactsShell !== false,
+      repoShared,
       piShell: config.pi?.enabled === false ? undefined : piShell,
       moveEvent: (args) => moveEvent({ ref: args.event, start: args.start, end: args.end, where: args.where, fromThreadId: threadId }),
       signal: abort.signal,
@@ -583,6 +801,7 @@ async function runTurn(threadId, prompt) {
       onEvent,
       spinOff,
       continueLater,
+      steer: run.steer,
       // A reply to a mail says whether it has to go out today, so it reaches him in Focus.
       ...(store.getThread(threadId)?.kind === 'mail-reply' ? { markPressing: ({ pressing, why }) => {
         store.updateThread(threadId, { pressing: Boolean(pressing), pressingWhy: pressing ? String(why || '').trim().slice(0, 120) : '' });
@@ -614,6 +833,7 @@ async function runTurn(threadId, prompt) {
     if (thread.sessionId && result.error && /no conversation found|session.*(not found|does not exist)/i.test(result.error)) {
       log(`session ${thread.sessionId} is gone; continuing thread ${threadId} from its transcript`);
       run.parts.length = 0;
+      run.text = '';
       store.updateThread(threadId, { sessionId: null });
       result = await runAgent({ ...base, prompt: recap(threadId, prompt), resume: undefined });
     }
@@ -642,30 +862,56 @@ async function runTurn(threadId, prompt) {
     // The branch goes to GitHub by itself, so the work is not on this computer only.
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
-    repos.releaseAll(threadId);
+    repos.releaseAll(threadId, run.parkGranted ? run.park.repo : null);
+    // Parked waiting for a repo: held until the repo is free for it, then started again by
+    // itself (resumeParked). What he added meanwhile waits in `pending` as with any hold.
+    // The slot stays taken until the cleanup below is done: a grant meanwhile only marks
+    // `parkGranted`, so no second turn of this thread starts while this one still ends.
+    if (run.park && !result.aborted && !limited && store.getThread(threadId) && (run.parkGranted || repos.queued(run.park.repo, threadId))) {
+      run.parked = true;
+      if ((store.getThread(threadId)?.queued || []).length) takeQueued(threadId, { into: 'pending' });
+      holdAuto(threadId, { kind: 'repo', until: Date.now() + 7 * 24 * 60 * 60_000, reason: run.park.repo, prompt: again?.prompt || prompt, tier: tier.name, tries: 1, extra: { repo: run.park.repo, mode: run.park.mode, holder: run.park.holder } });
+      return;
+    }
+    if (run.park) repos.unpark(threadId);
     // Ended on an error, or Claude asked to look again later: it carries on by itself
     // (retry.js), unless he added something meanwhile (that goes first) or a safety
     // handle is reached.
     const latest = store.getThread(threadId);
-    const plan = !limited && !result.aborted && latest && !(latest.pending || []).length
-      ? retry.turnPlan({ auto: latest.auto, error: result.error, carryOn: run.carryOn, didWork: parts.some((p) => p.type === 'tool'), opts: config.autoRetry })
+    const queued = latest?.queued || [];
+    const didWork = run.didWork;
+    const clean = latest && !limited && !result.aborted && !result.error && !run.carryOn;
+    let verdict = null;
+    if (clean && (queued.length || (didWork && !latest.doneAfter && latest.kind !== 'card'))) {
+      activity('The supervisor looks at the reply');
+      verdict = await supervise({ reply: run.text, queued: queued.map((q) => q.text || '(only files)'), model: config.queue?.pickModel || 'haiku', fake: config.fake });
+    }
+    // Ended on an error, Claude asked to look again later, or the reply only waited for a
+    // go-ahead: it carries on by itself (retry.js), unless he added something meanwhile
+    // (that goes first) or a safety handle is reached.
+    const goahead = verdict?.verdict === 'goahead' && !queued.length ? (verdict.why || 'it only asked for a go-ahead') : '';
+    const plan = !limited && !result.aborted && latest && !(latest.pending || []).length && !(clean && queued.length)
+      ? retry.turnPlan({ auto: latest.auto, error: result.error, carryOn: run.carryOn, goahead, didWork, opts: config.autoRetry })
       : null;
     if (plan?.kind) {
       // Like a hold for the usage limit: half-done work is not merged into main meanwhile.
+      // What he queued goes in with the turn that carries on.
       running.delete(threadId);
       store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
+      if (queued.length && plan.kind !== 'retry') takeQueued(threadId, { into: 'pending' });
       holdAuto(threadId, { kind: plan.kind, until: plan.until, reason: plan.reason, prompt: again?.prompt || prompt, tier: tier.name, tries: plan.tries });
       return;
     }
     if (plan?.stop) {
       store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
-      store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]` });
+      supervisorNote(threadId, `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]`);
       log(`thread "${latest.title}": stopped carrying on by itself (${plan.stop})`);
     }
     if (limited) {
       // The work so far is on its branch on GitHub, but half-done work is not merged into
       // main. What he added meanwhile stays in `pending` and goes in with the next try.
       running.delete(threadId);
+      if (queued.length) takeQueued(threadId, { into: 'pending' });
       hold(threadId, limited, { prompt: again?.prompt || prompt, tier: tier.name, tries: again?.tries || 0 });
       return;
     }
@@ -674,6 +920,19 @@ async function runTurn(threadId, prompt) {
     const fresh = store.getThread(threadId);
     // Deleted while Claude was working: nothing is left to update.
     if (!fresh) return;
+    // The queued "Next" runs now, unless the supervisor holds it for him. After an error
+    // or a stop it waits for him too.
+    let nextTier = '';
+    if (fresh.queued?.length) {
+      const why = result.aborted ? 'you stopped Claude' : result.error ? 'the turn ended on an error' : verdict?.next === 'hold' ? (verdict.why || 'Claude asked you something first') : '';
+      if (why) {
+        store.updateThread(threadId, { queuedHeld: why });
+        if (!result.aborted) supervisorNote(threadId, `[The supervisor held what you queued as "Next": ${why}. Run it as it is, change it, or write something else.]`);
+      } else {
+        nextTier = fresh.queued.find((q) => q.tier)?.tier || '';
+        takeQueued(threadId, { into: 'pending' });
+      }
+    }
     const pending = fresh.pending || [];
     // With a follow-up the slot stays taken until the cleanup hands it over, so a message
     // sent meanwhile is added to it rather than starting a second turn.
@@ -681,20 +940,21 @@ async function runTurn(threadId, prompt) {
     if (!followsUp) running.delete(threadId);
     if (followsUp) {
       // What he added while Claude was working belongs to that work: it runs on the
-      // same tier, without asking him or the picker again.
-      store.updateThread(threadId, { pending: [], nextTier: fresh.nextTier || fresh.lastTier || '' });
+      // same tier, without asking him or the picker again, unless he picked one for it.
+      store.updateThread(threadId, { pending: [], nextTier: nextTier || fresh.nextTier || fresh.lastTier || '' });
       followUp = pending.join('\n\n');
     } else {
       const lastText = parts.filter((p) => p.type === 'text').at(-1)?.text || '';
       // "Send and done": the thread closes with Claude's answer in it. If the turn went
       // wrong or was stopped, it comes back to the inbox instead, so he sees it.
-      const close = fresh.doneAfter && !result.error && !result.aborted;
+      const close = fresh.doneAfter && !result.error && !result.aborted && !fresh.queued?.length;
       store.updateThread(threadId, {
         state: close ? 'done' : 'ready',
         ...(close ? { doneAt: Date.now() } : { queuedAt: Date.now() }),
         doneAfter: false,
         requeuedAt: 0,
         activity: '',
+        background: [],
         pending: [],
         error: result.error || '',
         gist: lastText.replace(/[#*_`>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(-220),
@@ -712,9 +972,14 @@ async function runTurn(threadId, prompt) {
     // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
-    repos.releaseAll(threadId);
+    repos.releaseAll(threadId, run.parkGranted && run.parked ? run.park.repo : null);
+    if (run.park && !run.parked) repos.unpark(threadId);
     running.delete(threadId);
+    // Its background jobs ended with it.
+    if (store.getThread(threadId)?.background?.length) store.updateThread(threadId, { background: [] }, { quiet: true });
     emitLive({ op: 'end' });
+    // The repo came free while this parked turn was still ending: it carries on at once.
+    if (run.parked && run.parkGranted) setImmediate(() => { const t = store.getThread(threadId); if (t) resumeParked(run.park.repo, threadId); });
     // The follow-up takes the slot this turn had; the waiting line moves only if it is free.
     if (followUp && store.getThread(threadId)) { startTurn(threadId, followUp); if (!slotFree(false)) return; }
     // His own messages first; background work only into a slot it may have.
