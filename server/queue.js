@@ -122,7 +122,7 @@ function describe(t) {
   const waited = mins < 90 ? `${mins} min` : mins < 2880 ? `${Math.round(mins / 60)} h` : `${Math.round(mins / 1440)} d`;
   let kind = 'thread';
   if (t.kind === 'card') kind = `${t.card?.type === 'chase' ? 'chase card' : 'opportunity card'} (${t.card?.channel})`;
-  else if (t.kind === 'brain-update') kind = 'questions from the brain update';
+  else if (t.kind === 'brain-update') kind = 'brain update (its questions or a problem)';
   else if (t.kind === 'mail-reply') kind = 'mail to answer';
   const bits = [`[${kind}${store.isDeep(t) ? ', deep work' : ''}]`, t.title];
   if (t.project) bits.push(`project: ${t.project}`);

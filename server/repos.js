@@ -44,6 +44,14 @@ export function repoName(input) {
   return /^[\w.-]+\/[\w.-]+$/.test(s) && !s.split('/').some((p) => p === '.' || p === '..') ? s : null;
 }
 
+// The vault's repo (`brainRepo` in the config) as "owner/name", the way a thread opens it.
+// A test's vault is a folder on disk ending in "<owner>/<name>.git"; its last two parts
+// are the name.
+export function vaultRepo(brainRepo) {
+  const src = String(brainRepo || '');
+  return repoName(src) || src.replace(/\.git$/i, '').split(/[\\/]/).filter(Boolean).slice(-2).join('/') || null;
+}
+
 function serial(full, fn) {
   const k = key(full);
   const run = (busy.get(k) || Promise.resolve()).then(fn, fn);

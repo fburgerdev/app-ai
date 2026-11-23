@@ -319,7 +319,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { event: 'Event', repair: 'Repair', 'next-action': 'Next action', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
+const KIND = { event: 'Event', repair: 'Repair', 'next-action': 'Next action', 'brain-update': 'Brain update', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 // What kind of work a thread he started himself is; the app works it out with the name.
 const TYPE = { thinking: 'Thinking', mail: 'Mail', build: 'Build', document: 'Document', question: 'Question' };
 function kindLabel(t) {
@@ -1074,7 +1074,11 @@ function renderBrain() {
     rows.push(h('p', { class: 'brain-line is-error' }, b.brain.error || 'Cloning the brain…'));
     if (b.brain.error) rows.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', '/api/brain/refresh', {}).then(setBrain).catch((e) => toast(e.message)) }, 'Try again'));
   } else if (b.running) {
-    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'mark-live' }, svg(MARK)), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'));
+    // It runs in a thread of its own: a click opens it.
+    const label = [h('span', { class: 'mark-live' }, svg(MARK)), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'];
+    rows.push(b.threadId
+      ? h('button', { class: 'link brain-line is-running', type: 'button', title: 'Open the update’s thread', onclick: () => openThread(b.threadId) }, ...label)
+      : h('p', { class: 'brain-line is-running' }, ...label));
     rows.push(h('p', { class: 'brain-sub' }, b.step || 'Starting'));
   } else {
     const bits = [];
@@ -1116,7 +1120,7 @@ function setBrain(status) {
     if (last.status === 'held') toast(last.error);
     else if (last.status === 'failed') toast(`The ${what} failed: ${last.error}`);
     else if (last.status === 'nothing') toast(last.mailOnly ? 'No new mail that needs filing.' : 'Brain update finished. Nothing needed filing.');
-    else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
+    else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you in its thread' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
     if (S.panel?.kind === 'run') openPanel({ kind: 'run', run: last });
     loadProjects();
   }
@@ -1126,6 +1130,8 @@ async function updateBrain(only = '') {
   try {
     const out = await api('POST', '/api/brain/extract', { only });
     if (!out.started) toast(out.reason);
+    // One is running already: its thread opens.
+    if (!out.started && out.threadId && S.threads.has(out.threadId)) openThread(out.threadId);
   } catch (err) {
     toast(err.message);
   }
@@ -2550,7 +2556,8 @@ function showRun(run) {
       h('p', { class: 'panel-note' }, 'Nothing counts as filed yet. You can also press Update brain yourself once the limit has lifted.'));
   } else if (run.status === 'failed') {
     body.append(h('p', { class: 'panel-note is-error' }, `This update failed and wrote nothing: ${run.error}`),
-      h('p', { class: 'panel-note' }, 'Nothing counts as filed. Update the brain again when the cause is fixed.'));
+      h('p', { class: 'panel-note' }, run.threadId ? 'Nothing counts as filed. Say “retry” in its thread, or ask Claude there to look into it.' : 'Nothing counts as filed. Update the brain again when the cause is fixed.'));
+    if (run.threadId && S.threads.has(run.threadId)) body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(run.threadId, { keepPanel: true }) }, 'Open its thread'));
   } else {
     const took = [];
     if (run.threads.length) took.push(`${run.threads.length} ${run.threads.length === 1 ? 'thread' : 'threads'} (${run.threads.join(', ')})`);
@@ -2571,8 +2578,9 @@ function showRun(run) {
         h('a', { class: 'wikilink', href: '#', dataset: { wiki: c.path } }, c.path)))));
     }
     if (run.written) body.append(renderMarkdown(run.written));
-    if (run.questionsThread && S.threads.has(run.questionsThread)) {
-      body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(run.questionsThread, { keepPanel: true }) }, 'Open Claude’s questions'));
+    const own = run.threadId || run.questionsThread;
+    if (own && S.threads.has(own)) {
+      body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(own, { keepPanel: true }) }, run.hasQuestions ? 'Open Claude’s questions' : 'Open its thread'));
     }
     if (run.replyThreads?.length) body.append(h('p', { class: 'panel-note' }, `${run.replyThreads.length} ${run.replyThreads.length === 1 ? 'mail needs' : 'mails need'} an answer. Claude is drafting; ${run.replyThreads.length === 1 ? 'it appears' : 'they appear'} in the queue.`));
     if (run.restored?.length) body.append(h('p', { class: 'panel-note' }, `Left untouched on purpose: ${run.restored.join(', ')}.`));

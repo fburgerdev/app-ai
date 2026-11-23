@@ -75,14 +75,17 @@ Each file in `Core/People/` carries a `Status:` line under `Last contacted:`, wh
 
 ## How to finish
 
-End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest.
+End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest, in this update's own thread in the app. He answers the questions there, and the thread files his answers into the vault right away, so ask them as closed questions he can answer in a few words.
+
+He wants no report: "Written" is one short sentence, at most 20 words, on what went in (Florian, 23-11-2026: "dont put a report though, or only one sentence, super short. mainly the questions").
 
 ```
 STATUS: updated | nothing | questions
 COMMIT: thinking: <subject, as "Committing to Git" in Claude/Instructions.md describes>
 
 ## Written
-- <vault file> — <a few words on what went in>
+<one short sentence, e.g. "Filed the Magdalena call, two mails and the Opatz chase.">
+
 
 ## Questions
 **<project or area>**

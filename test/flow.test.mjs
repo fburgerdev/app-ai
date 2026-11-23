@@ -129,8 +129,16 @@ test('the brain update commits once, pushes, and leaves protected paths alone', 
 
   const state = (await call('GET', '/api/state')).data;
   assert.equal(state.brain.waiting, 0);
-  const closed = state.threads.find((t) => t.state === 'done');
+  const closed = state.threads.find((t) => t.state === 'done' && t.kind !== 'brain-update');
   assert.equal(closed.archived, true, 'a closed thread that is in the brain is filed away');
+  // The update ran in a thread of its own; with no questions it closed itself.
+  const own = await thread(run.threadId);
+  assert.equal(own.thread.kind, 'brain-update');
+  assert.equal(own.thread.state, 'done');
+  assert.equal(own.thread.archived, true, 'a clean update never enters the inbox');
+  const answer = own.messages.at(-1);
+  assert.ok(answer.parts.some((p) => p.type === 'tool'), 'its steps are kept, folded like a turn');
+  assert.ok(answer.parts.at(-1).text.length < 300, 'one short sentence, no report');
   const again = await call('POST', '/api/brain/extract', {});
   assert.equal(again.data.started, false);
 });
@@ -148,10 +156,28 @@ test('only what is new since the last update is handed over, and questions come 
   assert.match(earlier, /too stiff, new draft/);
   assert.match(fresh, /QUESTION-TEST and the room is booked/);
   assert.doesNotMatch(fresh, /too stiff, new draft/);
-  const questions = await thread(run.questionsThread);
+  assert.equal(run.questionsThread, run.threadId, 'the questions are in the update\'s own thread');
+  const questions = await thread(run.threadId);
   assert.equal(questions.thread.state, 'ready');
-  assert.match(questions.messages[0].parts[0].text, /Next Actions/);
+  assert.match(questions.messages.at(-1).parts.at(-1).text, /## Questions[\s\S]*Next Actions/);
   assert.equal((await call('GET', '/api/state')).data.brain.waiting, 0, 'the questions themselves are not something to file');
+
+  // His answer there is filed by the thread itself, at once: one commit, and nothing left
+  // for the next update.
+  const before = git(remote, 'rev-parse', 'main').trim();
+  await call('POST', `/api/threads/${run.threadId}/messages`, { text: 'yes, add the call' });
+  const answered = await until(async () => { const t = await thread(run.threadId); return t.thread.state === 'ready' && t.messages.length >= 3 ? t : null; }, 'answer filed');
+  assert.equal(answered.thread.extractedCount, answered.messages.length, 'the answer counts as filed');
+  const log = git(remote, 'log', '--format=%s', `${before}..main`).trim().split('\n');
+  assert.equal(log.length, 1);
+  assert.match(log[0], /^thinking: answers in the brain update, /);
+  assert.match(git(remote, 'show', 'main:Core/App Test.md'), /stand-in answer filed: yes, add the call/);
+  assert.equal((await call('GET', '/api/state')).data.brain.waiting, 0);
+
+  // "Retry": the update runs again in the same thread; with nothing new it says so there.
+  await call('POST', `/api/threads/${run.threadId}/messages`, { text: 'RETRY-BRAIN' });
+  const again = await until(async () => { const t = await thread(run.threadId); return t.messages.some((m) => m.role === 'assistant' && /Nothing new to file/.test(m.parts?.at(-1)?.text || '')) ? t : null; }, 'update run again');
+  assert.equal(again.thread.kind, 'brain-update');
 });
 
 test('a push from elsewhere is picked up before the next turn', async () => {

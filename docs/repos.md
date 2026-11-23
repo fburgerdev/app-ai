@@ -72,7 +72,7 @@ Each push and merge is noted in the thread, so the next brain update knows.
 ## Renaming and creating repos
 
 Claude can rename a repo, create a new one or change its description, from any thread,
-including the questions thread a brain update opens. Only when you ask for it; it cannot delete
+including the thread a brain update runs in. Only when you ask for it; it cannot delete
 a repo. A rename moves the app's copy, updates every thread on that repo, and is noted in the
 thread so the next brain update fixes the `repo:` lines and mentions in the vault.
 

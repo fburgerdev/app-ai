@@ -17,9 +17,18 @@
 // vault, and only one can run at a time. It ends in one commit and a push. (A thread can
 // change the vault's structure and rules, through the vault's repo like any other repo;
 // the two never write at once, see runExtraction.)
+//
+// Each press opens a thread of its own (Florian, 23-11-2026: "maybe have the update brain
+// button create a thread in the first place … it lets me interact with the brain update").
+// The update runs as that thread's first answer: its steps show while it works, and it
+// ends in one short sentence, its questions, and any problem. A clean run closes the
+// thread by itself. What he answers there is filed by that thread's next turn, which
+// writes the vault itself (runner.js, `filesItself`), and a failed run is run again or
+// looked into from there too, instead of in a separate questions or repair thread.
 
 import { limitLabel, resumeAt, clock } from './limits.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { runAgent } from './agent.js';
 import * as brain from './brain.js';
@@ -35,15 +44,24 @@ import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
 import { exportThreads } from './threadexport.js';
 import { refreshSecrets } from './secrets.js';
-import { report as reportFailure } from './repair.js';
 import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
-let current = null; // { id, startedAt, step, threads }
+let current = null; // { id, startedAt, step, threads, threadId, parts }
 
 export function initExtraction(cfg) {
   config = cfg;
+  // "Retry" in an update's thread: Claude asks for the update to run again, in that thread.
+  runner.onRerunBrain((threadId) => {
+    const t = store.getThread(threadId);
+    const out = startExtraction({ only: t?.brainOnly === 'mail' ? 'mail' : '', threadId });
+    if (!out.started) store.appendMessage(threadId, { role: 'assistant', parts: [{ type: 'text', text: out.reason }] });
+    return out;
+  });
 }
+
+// The steps of the running update, shown in its thread like a turn's tool lines.
+export const liveParts = (threadId) => (current?.threadId && current.threadId === threadId ? current.parts : null);
 
 // A brain update the usage limit cut off starts again once the limit has lifted. The hold
 // is in the app's state, which both computers share; `mayRun` says whether this one does
@@ -56,15 +74,25 @@ export function watchHold(mayRun = () => true) {
       const held = getState().brainHeld;
       if (!held || current || Date.now() < held.until || !mayRun()) return;
       setState({ brainHeld: null });
-      const out = startExtraction({ only: held.only === 'mail' ? 'mail' : '' });
+      const out = startExtraction({ only: held.only === 'mail' ? 'mail' : '', threadId: held.threadId || '' });
       log(`brain update: the ${limitLabel(held.type)} lifted, ${out.started ? 'running again' : `not run again (${out.reason})`}`);
     } catch (err) { log(`held brain update: ${err.stack || err.message}`); }
   }, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
 }
 
-function setStep(step) {
-  if (current) current.step = step;
+function setStep(step, tool = '') {
+  if (current) {
+    current.step = step;
+    const id = current.threadId;
+    if (id && store.getThread(id)) {
+      if (tool) {
+        current.parts.push({ type: 'tool', name: tool, summary: step });
+        store.events.emit('live', { threadId: id, op: 'parts', parts: current.parts });
+      }
+      store.updateThread(id, { activity: step, activityAt: Date.now() }, { quiet: true });
+    }
+  }
   store.events.emit('brain', extractionStatus());
 }
 
@@ -109,6 +137,7 @@ export function extractionStatus() {
     mailOnly: Boolean(current?.mailOnly),
     step: current?.step || '',
     startedAt: current?.startedAt || 0,
+    threadId: current?.threadId || '',
     waiting: unfiledThreads().length, // threads not yet in the brain
     clean: filedDone().length, // closed threads already in the brain, archived by the next update
     notes: Boolean((readPad('notes') || '').trim()),
@@ -285,8 +314,66 @@ export function parseReport(text) {
 // thread files are the app's own export of what he already knows: the conversations.
 const visibleChanges = (changes) => changes.filter((c) => !c.path.startsWith('Artifacts/Thinking/') && !c.path.startsWith(`${brain.THREADS_FOLDER}/`));
 
-export function startExtraction({ only = '' } = {}) {
-  if (current) return { started: false, reason: 'A brain update is already running.' };
+// The thread an update runs in: a new one for a press, the same one when it runs again
+// (after "retry", or once the usage limit lifted).
+function threadFor(threadId, mailOnly, pressedAt) {
+  let t = threadId ? store.getThread(threadId) : null;
+  if (!t) t = store.createThread({ title: `${mailOnly ? 'Gmail update' : 'Brain update'} ${dateTimeDMY(pressedAt)}`, kind: 'brain-update' });
+  // He pressed the button, so it is his: it stays in Focus.
+  store.updateThread(t.id, {
+    state: 'working', activity: 'Starting', activityAt: Date.now(), workingOn: os.hostname(), error: '', archived: false,
+    later: false, filesItself: true, brainOnly: mailOnly ? 'mail' : '', queuedAt: Date.now(), gist: '',
+  });
+  return t.id;
+}
+
+// One short sentence on what went in (Florian, 23-11-2026: "dont put a report though, or
+// only one sentence, super short. mainly the questions").
+export function leadLine(record) {
+  if (record.status === 'failed') return `The ${record.mailOnly ? 'Gmail update' : 'update'} stopped and filed nothing: ${record.error}`;
+  if (record.status === 'held') return record.error;
+  const said = String(record.written || '').replace(/^[-*]\s+/gm, '').replace(/\s+/g, ' ').trim();
+  if (said && said.length <= 300) return said;
+  if (record.status === 'nothing') return record.mailOnly ? 'No new mail needed filing.' : 'Nothing needed filing.';
+  const n = record.changes?.length || 0;
+  return `Filed into ${n} ${n === 1 ? 'file' : 'files'}.`;
+}
+
+// The update's answer in its thread, and where the thread goes: closed by itself when
+// there is nothing for him; in the inbox when there are questions or a problem.
+function finishThread(threadId, record, parts) {
+  const t = store.getThread(threadId);
+  if (!t) return;
+  const problems = [];
+  if (record.mailError && record.status !== 'failed') problems.push(`Mail could not be read, so it waits for the next update: ${record.mailError}`);
+  if (record.pushed === false) problems.push(`Committed, but the push failed (${record.pushError}); the app pushes it the next time it reaches GitHub.`);
+  if (record.exportError) problems.push(`The threads could not be written into \`Threads/\`: ${record.exportError}`);
+  if (record.redacted?.length) problems.push(`A secret value was in ${record.redacted.join(', ')}; it went in as its placeholder.`);
+  const text = [
+    leadLine(record),
+    record.questions ? `## Questions\n\n${record.questions}` : '',
+    problems.length ? `## Problems\n\n${problems.map((p) => `- ${p}`).join('\n')}` : '',
+    record.status === 'failed' ? 'Say "retry" to run it again, or ask me to look into it.' : '',
+  ].filter(Boolean).join('\n\n');
+  store.appendMessage(threadId, { role: 'assistant', parts: [...parts, { type: 'text', text }], durationMs: (record.finishedAt || Date.now()) - record.startedAt });
+  store.events.emit('live', { threadId, op: 'end' });
+  const open = record.status === 'failed' || Boolean(record.questions) || problems.length > 0;
+  const now = Date.now();
+  const patch = {
+    activity: '', workingOn: '', error: record.status === 'failed' ? record.error : '',
+    gist: record.questions ? 'Questions from the brain update' : record.status === 'failed' ? 'The brain update stopped' : problems[0] || '',
+  };
+  if (record.sessionId) patch.sessionId = record.sessionId;
+  if (record.status === 'held') Object.assign(patch, { state: 'done', doneAt: now });
+  else if (open) Object.assign(patch, { state: 'ready', queuedAt: now, requeuedAt: 0 });
+  else Object.assign(patch, { state: 'done', doneAt: now, archived: true });
+  store.updateThread(threadId, patch);
+  // What he wrote into it while it ran is answered now.
+  runner.runPending(threadId);
+}
+
+export function startExtraction({ only = '', threadId = '' } = {}) {
+  if (current) return { started: false, reason: 'A brain update is already running.', threadId: current.threadId };
   if (!brain.brainStatus().ready) return { started: false, reason: brain.brainStatus().error || 'The brain is not cloned yet.' };
   const status = extractionStatus();
   const mailOnly = only === 'mail';
@@ -308,32 +395,36 @@ export function startExtraction({ only = '' } = {}) {
     const messages = store.readMessages(thread.id);
     return { thread: { ...thread }, messages, count: messages.length };
   });
-  current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title), mailOnly };
+  const ownThread = threadFor(threadId, mailOnly, pressedAt);
+  current = { id, startedAt: pressedAt, step: 'Starting', threads: changed.map((c) => c.thread.title), mailOnly, threadId: ownThread, parts: [] };
   runExtraction(id, changed, pressedAt, mailOnly)
     .catch((err) => {
       if (err.limit) {
         // Cut off by the usage limit: nothing is filed, and the update runs again by
         // itself when the limit lifts (watchHold), on the computer that works then.
         const until = resumeAt(err.limit, { marginMs: config.limits?.marginMs, fallbackMs: config.limits?.fallbackMs });
-        setState({ brainHeld: { until, type: err.limit.type || '', only: mailOnly ? 'mail' : '' } });
+        setState({ brainHeld: { until, type: err.limit.type || '', only: mailOnly ? 'mail' : '', threadId: ownThread } });
         log(`brain update: held by the ${limitLabel(err.limit.type)} until ${new Date(until).toISOString()}`);
         return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'held', until, pushed: true, error: `Claude's ${limitLabel(err.limit.type)} was reached. Nothing was filed; the update runs again by itself at ${clock(until)}.`, threads: current.threads, mailOnly };
       }
+      // Shown in the update's own thread, where he can have it run again or looked into.
       log(`brain update failed: ${err.stack || err.message}`);
-      reportFailure('the brain update', err.stack || err.message);
       return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {
       if (record.status === 'failed' || record.status === 'held') await brain.discardChanges();
       const runDir = path.join(EXTRACTIONS_DIR, id);
       fs.mkdirSync(runDir, { recursive: true });
-      fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(record, null, 2));
+      const { sessionId, ...kept } = record;
+      fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ ...kept, threadId: ownThread }, null, 2));
+      const parts = current?.parts || [];
       current = null;
+      try { finishThread(ownThread, { ...record, sessionId: config.fake ? null : sessionId }, parts); } catch (err) { log(`brain update: its thread could not be finished: ${err.stack || err.message}`); }
       store.events.emit('brain', extractionStatus());
       saveNow('brain update').catch(() => {});
     });
   store.events.emit('brain', extractionStatus());
-  return { started: true, threads: current.threads };
+  return { started: true, threads: current.threads, threadId: ownThread };
 }
 
 async function runExtraction(id, changed, pressedAt, mailOnly = false) {
@@ -345,7 +436,7 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
   // The vault is also a repo threads can open, to change its structure or its rules. The
   // two never write it at once: the update waits for a thread that holds the vault, and a
   // thread that opens it while the update runs waits for the update.
-  const vault = vaultRepo();
+  const vault = repos.vaultRepo(config.brainRepo);
   const job = repos.jobHolder('brain update');
   if (vault) {
     if (repos.holder(vault) && repos.holder(vault) !== job) setStep(`Waiting for ${repos.holderName(vault)}, which is changing the vault`);
@@ -358,15 +449,18 @@ async function runExtraction(id, changed, pressedAt, mailOnly = false) {
   }
 }
 
-// The vault's repo as "owner/name", the way a thread opens it. A test's vault is a folder
-// on disk ending in "<owner>/<name>.git"; its last two parts are the name.
-function vaultRepo() {
-  const src = String(config.brainRepo || '');
-  return repos.repoName(src) || src.replace(/\.git$/i, '').split(/[\\/]/).filter(Boolean).slice(-2).join('/') || null;
+async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
+  // A turn of an update's thread may be filing his answers right now: wait for it.
+  const giveBack = await brain.takeWriter('the brain update', { onWait: (who) => setStep(`Waiting for ${who}, which is filing into the brain`) });
+  try {
+    return await fileAll(id, changed, pressedAt, mailOnly, dir, state);
+  } finally {
+    giveBack();
+  }
 }
 
-async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
-  return brain.withWriter('brain update', async () => {
+async function fileAll(id, changed, pressedAt, mailOnly, dir, state) {
+  {
     setStep('Getting the vault up to date');
     await brain.pullForWriting();
 
@@ -456,7 +550,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
       fake: config.fake,
       onEvent: (ev) => {
         if (ev.type === 'tool-input') logToolRead({ vaultDir: brain.brainDir(), by: 'brain-update', tool: ev.name, input: ev.input });
-        else if (ev.type === 'tool') setStep(ev.summary);
+        else if (ev.type === 'tool') setStep(ev.summary, ev.helper ? '' : ev.name);
         else if (ev.type === 'text-start') setStep('Writing the report');
       },
     });
@@ -466,6 +560,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
     const report = parseReport(result.finalText || result.text);
     // The threads as they stand now, written into the vault by the app itself; they go
     // into the same commit. A failure here must not cost the update what it filed.
+    let exportError = '';
     if (!mailOnly) {
       setStep('Writing the threads into the vault');
       try {
@@ -474,7 +569,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
         log(`brain update: ${done.total} threads in the vault, ${done.written} written, ${done.renamed} renamed`);
       } catch (err) {
         log(`brain update: the threads could not be written into the vault: ${err.stack || err.message}`);
-        reportFailure('writing the threads into the vault', err.stack || err.message);
+        exportError = err.message;
       }
     }
     setStep('Committing and pushing');
@@ -484,24 +579,6 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
       body: `Co-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: app-ai brain update ${id}`,
     });
     finishLevels();
-
-    let questionsThread = null;
-    if (report.questions) {
-      const thread = store.createThread({
-        title: `${mailOnly ? 'Gmail update' : 'Brain update'} ${dateDMY()}: questions`,
-        kind: 'brain-update',
-        sessionId: config.fake ? null : result.sessionId,
-      });
-      store.appendMessage(thread.id, {
-        role: 'assistant',
-        parts: [{
-          type: 'text',
-          text: `These came up while filing into the brain. Nothing below has been written yet. Answer here, then update the brain again.\n\n${report.questions}`,
-        }],
-      });
-      store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'Questions from the brain update' });
-      questionsThread = thread.id;
-    }
 
     // Mail that needs an answer: one thread each, with Claude already drafting the reply.
     const replyThreads = [];
@@ -525,9 +602,12 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
       // A commit that holds nothing but thread files filed nothing new.
       status: committed && (visibleChanges(committed.changes).length || committed.changes.some((c) => c.path.startsWith('Artifacts/Thinking/'))) ? 'updated' : 'nothing',
       written: report.written,
+      questions: report.questions,
       hasQuestions: Boolean(report.questions),
-      questionsThread,
+      questionsThread: report.questions ? current?.threadId || null : null,
       replyThreads,
+      exportError,
+      sessionId: result.sessionId || null,
       commit: committed?.commit || '',
       subject: committed ? subject : '',
       pushed: committed ? committed.pushed : true,
@@ -536,5 +616,5 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
       restored: committed?.restored || [],
       redacted: committed?.redacted || [],
     };
-  });
+  }
 }

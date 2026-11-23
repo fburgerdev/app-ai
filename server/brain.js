@@ -186,6 +186,23 @@ export async function withWriter(name, fn) {
   }
 }
 
+// Takes the working tree for `name`, waiting while someone else writes. The brain update
+// and the turns of its own thread (which file Florian's answers, 23-11-2026) use this,
+// so either waits for the other. Returns the function that gives the tree back.
+export async function takeWriter(name, { onWait } = {}) {
+  let told = false;
+  while (writer) {
+    if (!told) { told = true; onWait?.(writer); }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  writer = name;
+  return () => {
+    if (writer !== name) return;
+    writer = null;
+    lastRefresh = 0;
+  };
+}
+
 // Called by the brain update, inside withWriter: start from GitHub's current state.
 export function pullForWriting() {
   return serial(async () => {
