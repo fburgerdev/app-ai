@@ -3861,6 +3861,69 @@ async function onArtifacts({ threadId }) {
   } catch { /* the next event brings it */ }
 }
 
+// ---------- the connection to the app ----------
+//
+// Florian, 23-11-2026: almost every lost connection is the app restarting for an update,
+// and the red bar made that look like a crash. So a calm pill at the top: "Updating the
+// app" when the page knew a new version was coming, "Reconnecting…" otherwise, and only
+// when the app stays away does it turn amber and say it is not answering.
+
+const conn = { lostAt: 0, updating: false, shown: '', timer: null };
+const CONN_BLIP_MS = 1500; // a blip this short shows nothing
+const CONN_STUCK_MS = 60_000; // after this it is not a restart any more
+const CONN_STUCK_UPDATE_MS = 150_000; // an update may install packages first
+
+// A new version was announced, is being taken, or the app is locked for one.
+function expectsUpdate() {
+  const u = updateNow;
+  return Boolean(u && (u.applying || u.available || (u.lock?.locked && u.lock.reason === 'update')));
+}
+
+// A merge's subject is 'Merge "Title" (branch)': the title is what he recognises.
+function versionTitle(subject) {
+  const m = /^Merge "(.+)"(?: \([^)]*\))?$/.exec(subject || '');
+  return clip(m ? m[1] : subject || '', 90);
+}
+
+function renderConn() {
+  const el = document.getElementById('conn');
+  const gone = conn.lostAt ? Date.now() - conn.lostAt : 0;
+  let state = '';
+  if (!conn.lostAt) state = '';
+  else if (gone > (conn.updating ? CONN_STUCK_UPDATE_MS : CONN_STUCK_MS)) state = 'stuck';
+  else if (conn.updating) state = 'updating';
+  else if (gone > CONN_BLIP_MS) state = 'reconnecting';
+  document.body.classList.toggle('is-offline', Boolean(state));
+  if (!el || state === conn.shown) return; // redrawing would restart the spinner
+  conn.shown = state;
+  if (!state) { el.hidden = true; return; }
+  const [title, sub] = {
+    updating: ['Updating the app', 'Back in a few seconds. This page reloads by itself.'],
+    reconnecting: ['Reconnecting…', 'Usually the app restarting. Back in a moment.'],
+    stuck: ['The app isn’t answering', 'If it does not come back, start it again with “npm start”. This page reconnects by itself.'],
+  }[state];
+  el.className = `conn${state === 'stuck' ? ' is-stuck' : ''}`;
+  el.replaceChildren(
+    h('span', { class: state === 'stuck' ? 'conn-mark' : 'conn-spin', 'aria-hidden': 'true' }),
+    h('span', { class: 'conn-text' }, h('strong', {}, title), h('span', { class: 'conn-sub' }, sub)));
+  el.hidden = false;
+}
+
+function connLost() {
+  if (conn.lostAt) return; // the browser reports every failed retry
+  conn.lostAt = Date.now();
+  conn.updating = expectsUpdate();
+  clearInterval(conn.timer);
+  conn.timer = setInterval(renderConn, 500);
+  renderConn();
+}
+
+function connBack() {
+  conn.lostAt = 0;
+  clearInterval(conn.timer);
+  renderConn();
+}
+
 function connect() {
   const source = new EventSource('/api/events');
   const on = (name, fn) => source.addEventListener(name, (e) => fn(JSON.parse(e.data)));
