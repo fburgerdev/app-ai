@@ -1556,8 +1556,9 @@ a.chip:hover { border-color: var(--muted); }
 .out-folded { margin: 2px 0 0; }
 .out-folded-head { margin: 0 8px 2px 18px; color: var(--faint); font-size: 11.5px; cursor: default; }
 .out-folded-list { max-height: 0; overflow: hidden; transition: max-height 180ms ease; }
-.out-folded:hover .out-folded-list, .out-folded:focus-within .out-folded-list { max-height: 60vh; overflow: auto; }
-.out-folded:hover .out-folded-head, .out-folded:focus-within .out-folded-head { color: var(--muted); }
+/* .is-hover is set from app.js (hoverFold) with a short dwell and a grace period, not :hover, so it does not flicker. */
+.out-folded.is-hover .out-folded-list, .out-folded:focus-within .out-folded-list { max-height: 60vh; overflow: auto; }
+.out-folded.is-hover .out-folded-head, .out-folded:focus-within .out-folded-head { color: var(--muted); }
 
 /* ---------- the status line ---------- */
 .status-dot.is-safe { background: var(--done); }
@@ -1578,8 +1579,8 @@ a.chip:hover { border-color: var(--muted); }
 .coming-head { display: block; width: 100%; margin: 2px 0 0; padding: 4px 8px 4px 21px; border: 0; background: none; text-align: left; color: var(--faint); font: 12px var(--sans); cursor: pointer; }
 .coming-next { opacity: 0.8; }
 .coming-list { max-height: 0; overflow: hidden; transition: max-height 180ms ease; }
-.coming:hover .coming-list, .coming:focus-within .coming-list, .coming.is-open .coming-list { max-height: 60vh; overflow: auto; }
-.coming:hover .coming-head, .coming.is-open .coming-head { color: var(--muted); }
+.coming.is-hover .coming-list, .coming:focus-within .coming-list, .coming.is-open .coming-list { max-height: 60vh; overflow: auto; }
+.coming.is-hover .coming-head, .coming.is-open .coming-head { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .coming-list { transition: none; } }
 .sleep-item.is-armed { opacity: 1; background: var(--raised); }
 .sleep-item.is-armed .sleep-sub { color: var(--you); }
@@ -1705,7 +1706,7 @@ body.is-booting .shell { visibility: hidden; }
 .out-folded { margin: 14px 0 0; }
 .out-folded-head { margin: 0; padding: 3px 0 3px 26px; color: var(--faint); font: 650 11px/1.3 var(--sans); letter-spacing: 0.07em; text-transform: uppercase; }
 .out-folded-head::after { content: ' ›'; letter-spacing: 0; }
-.out-folded:hover .out-folded-head::after, .out-folded:focus-within .out-folded-head::after { content: ' ⌄'; }
+.out-folded.is-hover .out-folded-head::after, .out-folded:focus-within .out-folded-head::after { content: ' ⌄'; }
 .out-folded > .out-list { margin-left: 21px; }
 
 /* Section heads (People, Someday) line up with the area captions. */

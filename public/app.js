@@ -131,6 +131,42 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+// Lists folded to one line that unfold under the pointer (events coming, waiting for later,
+// paused projects). With plain CSS :hover they snapped shut on the slightest move past an
+// edge, the jump in height put the pointer back on them, and they flickered. Now they open
+// after a short dwell and close only once the pointer has stayed away for a moment, and the
+// open state outlives the re-renders of the rail and the outline.
+const FOLD_OPEN_MS = 110;
+const FOLD_CLOSE_MS = 380;
+const foldOpen = new Set();
+const foldTimers = new Map(); // key -> { on, timer }
+function hoverFold(el, key) {
+  el.dataset.fold = key;
+  if (foldOpen.has(key)) el.classList.add('is-hover');
+  return el;
+}
+function setFold(key, on) {
+  foldTimers.delete(key);
+  if (on) foldOpen.add(key); else foldOpen.delete(key);
+  document.querySelectorAll(`[data-fold="${key}"]`).forEach((el) => el.classList.toggle('is-hover', on));
+}
+function foldLater(key, on) {
+  const pending = foldTimers.get(key);
+  if (pending && pending.on === on) return;
+  if (pending) clearTimeout(pending.timer);
+  if (foldOpen.has(key) === on) { foldTimers.delete(key); return; }
+  foldTimers.set(key, { on, timer: setTimeout(() => setFold(key, on), on ? FOLD_OPEN_MS : FOLD_CLOSE_MS) });
+}
+function foldPointer(key) {
+  if (key) foldLater(key, true);
+  for (const k of new Set([...foldOpen, ...foldTimers.keys()])) if (k !== key) foldLater(k, false);
+}
+document.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch') return;
+  foldPointer(e.target.closest?.('[data-fold]')?.dataset.fold || '');
+}, { passive: true });
+document.documentElement.addEventListener('mouseleave', () => foldPointer(''));
+
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
@@ -346,10 +382,10 @@ function queueLists() {
   const waits = later();
   // Dropping a thread on this line marks it "Later"; dragging one out into the queue
   // keeps it in focus.
-  const laterLine = waits.length ? h('div', { class: `coming later${laterOpen ? ' is-open' : ''}`, dataset: { drop: 'later' } },
+  const laterLine = waits.length ? hoverFold(h('div', { class: `coming later${laterOpen ? ' is-open' : ''}`, dataset: { drop: 'later' } },
     h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(laterOpen), title: 'Started by the app (cards, proposals, questions, mail to answer, check-ins) or marked "Later" by you. They come back into the queue when focus ends. Drop a thread here to mark it "Later".', onclick: () => { laterOpen = !laterOpen; renderRail(); } },
       `${waits.length} waiting for later`, h('span', { class: 'coming-next' }, ' · focus')),
-    h('div', { class: 'coming-list' }, ...waits.map(railItem))) : null;
+    h('div', { class: 'coming-list' }, ...waits.map(railItem))), 'later') : null;
   parts.push(section('Next up', ready.length, [
     note ? h('p', { class: 'group-note' }, note) : null,
     laterLine,
@@ -482,10 +518,10 @@ function pinnedSection() {
   soon ? null : h('span', { class: `event-phase is-${eventPhase(t.event).toLowerCase()}` }, t.state === 'working' ? 'Claude…' : t.state === 'ready' ? `${eventPhase(t.event)} · yours` : eventPhase(t.event))));
   return [section('Pinned', events.length + mine.length, [
     ...events.map((t) => item(t, false)),
-    coming.length ? h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}`, dataset: { part: 'coming' } },
+    coming.length ? hoverFold(h('div', { class: `coming${comingOpen || coming.some((t) => t.id === armedEvent) ? ' is-open' : ''}`, dataset: { part: 'coming' } },
       h('button', { class: 'coming-head', type: 'button', 'aria-expanded': String(comingOpen), title: 'Events from your calendar that open by themselves later. Hover or click to see them.', onclick: () => { comingOpen = !comingOpen; renderRail(); } },
         `${coming.length} coming`, h('span', { class: 'coming-next' }, ` · next ${eventWhen(coming[0].event).toLowerCase()}`)),
-      h('div', { class: 'coming-list' }, ...coming.map((t) => item(t, true)))) : null,
+      h('div', { class: 'coming-list' }, ...coming.map((t) => item(t, true)))), 'coming') : null,
     (events.length || coming.length) && mine.length ? h('div', { class: 'pin-divide', role: 'separator' }) : null,
     ...mine.map((t) => item(t, false)),
   ], null, 'pin')];
@@ -609,9 +645,9 @@ function treeNodes() {
       h('div', { class: 'out-list' }, ...loose.map((p) => row(p, false)))) : null,
     !projects.length && !areas.length ? h('p', { class: 'tree-note' }, 'No projects in the vault.') : null,
     // Paused means he is waiting on something, so they are folded away and unfold on hover.
-    paused.length ? h('div', { class: 'out-folded', dataset: { part: 'tree-paused' } },
+    paused.length ? hoverFold(h('div', { class: 'out-folded', dataset: { part: 'tree-paused' } },
       h('div', { class: 'out-folded-head' }, `${paused.length} paused`),
-      h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row({ ...p, sub: areaOf.get(p.name) || '' }, true)))) : null,
+      h('div', { class: 'out-list out-folded-list' }, ...paused.map((p) => row({ ...p, sub: areaOf.get(p.name) || '' }, true)))), 'paused') : null,
     // Starting many threads at once, and where the order of the areas comes from: at the
     // foot, out of the way of the list itself.
     h('div', { class: 'tree-foot' },
