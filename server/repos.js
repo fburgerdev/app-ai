@@ -970,6 +970,18 @@ async function github(method, url, body) {
   return data;
 }
 
+// For ship.js: GitHub's answer as JSON, or as text (a job's log).
+export const githubApi = (method, url, body) => github(method, url, body);
+export async function githubText(url) {
+  if (config.fake && process.env.APP_AI_FAKE_GITHUB === '1') return String(fakeGithub('GET', url) || '');
+  const t = await token();
+  if (!t) throw new Error('No GitHub token on this machine.');
+  // GitHub answers with a redirect to the file; fetch follows it and drops the token there.
+  const res = await fetch(`https://api.github.com${url}`, { headers: { Authorization: `Bearer ${t}`, 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+  return res.text();
+}
+
 let listCache = { at: 0, names: [] };
 export async function list() {
   const here = [];
@@ -1067,6 +1079,18 @@ function fakeGithub(method, url, body) {
   if (method === 'GET' && url.startsWith('/user/repos')) {
     const o = owner();
     return fs.readdirSync(path.join(baseDir, o)).filter((n) => n.endsWith('.git')).map((n) => ({ full_name: `${o}/${n.slice(0, -4)}` }));
+  }
+  // GitHub Actions: what a test writes into <repo>.checks.json under repoBase is the run of
+  // that repo's tests, { conclusion, log }; without the file no run has started.
+  const runs = /^\/repos\/([^/]+)\/([^/]+)\/commits\/[^/]+\/check-runs/.exec(url);
+  const jobLog = /^\/repos\/([^/]+)\/([^/]+)\/actions\/jobs\/\d+\/logs$/.exec(url);
+  if (method === 'GET' && (runs || jobLog)) {
+    const [, o, r] = runs || jobLog;
+    let played = null;
+    try { played = JSON.parse(fs.readFileSync(path.join(baseDir, o, `${r}.checks.json`), 'utf8')); } catch { /* no run */ }
+    if (jobLog) return played?.log || '';
+    if (!played) return { total_count: 0, check_runs: [] };
+    return { total_count: 1, check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: played.conclusion, html_url: `https://github.com/${o}/${r}/actions/runs/1/job/1` }] };
   }
   throw new Error(`fake GitHub: ${method} ${url} is not played`);
 }
