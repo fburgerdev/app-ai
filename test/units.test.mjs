@@ -229,11 +229,10 @@ test('a git lock left behind by a stopped step is removed, a fresh one is not', 
   fsx.rmSync(dir, { recursive: true, force: true });
 });
 
-test('the worktrees and shared folders of other repos are never part of the saved state', () => {
-  const lines = IGNORE.split('\n');
-  assert.ok(lines.includes('/worktrees/'));
-  assert.ok(lines.includes('/shared/'));
-  assert.ok(lines.includes('/repos/'));
+test('the folders the app keeps other repos in are never saved with its state', () => {
+  // repos.js puts all three into the data folder; shared/ held 39 GB of video when
+  // "git add -A" tried to take it in (23-11-2026).
+  for (const dir of ['repos', 'worktrees', 'shared']) assert.match(IGNORE, new RegExp(`^/${dir}/$`, 'm'), `${dir}/ is ignored`);
 });
 
 test('a git step stopped by its timeout says so, and is marked as such', async () => {
