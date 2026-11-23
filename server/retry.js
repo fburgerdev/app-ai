@@ -14,6 +14,9 @@
 //             When the merge failed for another reason (GitHub not reachable), only the
 //             merge is tried again, a few minutes later, without a turn (`remerge`).
 //
+// A fourth hold, `repo`, is a turn parked because the repo it needs is in use (repos.js);
+// it carries on when the repo is free for it, not by the clock (runner.resumeParked).
+//
 // The first three wait as a hold on the thread, like a turn cut off by the usage limit
 // (runner.js): it stays "working", travels to the other computer with everything else,
 // "Cancel the hold" stops it, and a message of his starts the turn at once instead.
@@ -96,6 +99,7 @@ export function holdLine(held, now = Date.now()) {
   if (held.kind === 'retry') return `Ended on an error: tries again by itself at ${at}`;
   if (held.kind === 'continue') return `Waiting (${held.reason}): carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge: Claude fixes it by itself at ${at}`;
+  if (held.kind === 'repo') return `Waiting for ${held.repo || held.reason}${held.mode === 'exclusive' ? ' (alone)' : ''}${held.holder ? `, held by ${held.holder}` : ''}: carries on by itself when it is free`;
   return '';
 }
 
@@ -119,6 +123,13 @@ export function resumeText(held, now = Date.now()) {
       note: `[The merge into main had failed; the app started a turn by itself on ${dateTimeDMY(now)} to fix it (try ${held.tries}).]`,
     };
   }
+  if (held.kind === 'repo') {
+    const repo = held.repo || held.reason;
+    return {
+      prompt: `[The app: the last turn was parked at ${dateTimeDMY(held.at)} because ${repo} was in use. It is free for this thread now (${dateTimeDMY(now)}), and the app started this turn by itself; Florian has not written anything since, unless a message follows below. Open the repo again with open_repo${held.mode === 'exclusive' ? ', with exclusive: true as before' : ''}, then carry on where you stopped and finish the work. The message the turn was about:]\n\n${held.prompt}`,
+      note: `[${repo} is free; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]`,
+    };
+  }
   return null;
 }
 
@@ -128,6 +139,7 @@ export function interruptedText(held, message) {
   if (held.kind === 'retry') return `[The app: the turn about the message below ended on an error ("${held.reason}") and was waiting to be tried again by itself. Florian has written since, so this turn starts now, with his new message at the end. Carry on with the work where it stopped, in the light of what he says.]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   if (held.kind === 'continue') return `[The app: you had called continue_later ("${held.reason}"), and Florian wrote before the app looked again. Answer him, and check on that work too.]\n\n${message}`;
   if (held.kind === 'merge') return `[The app: the merge of this thread's branch into main had failed, and a turn to fix it was about to start by itself. Florian wrote first. Answer him; unless he says otherwise, also fix what stopped the merge. What the app had for that turn:]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
+  if (held.kind === 'repo') return `[The app: the turn about the message below was parked, waiting for ${held.repo || held.reason}, and Florian wrote meanwhile. Answer him. This thread keeps its place in the queue for the repo: if the work needs it, open_repo waits for it, and parks the turn again if the wait is long. What the parked turn was about:]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   return message;
 }
 

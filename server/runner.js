@@ -40,6 +40,7 @@ const heldPrompt = new Map(); // threadId -> the message a turn started again af
 export function initRunner(cfg) {
   config = cfg;
   ship.onMergeFailed(mergeFailed);
+  repos.onGranted((full, threadId) => resumeParked(full, threadId));
 }
 
 // Whether a turn of this thread runs in this process right now.
@@ -90,7 +91,8 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   // A plain message after "send and done" means he wants to see the answer after all.
   // A message into a deferred thread wakes it again. A message of his also sets the
   // count of what the app retried by itself back (retry.js).
-  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0 });
+  // A turn that broke a repo's shared folders is merged once he has written (repos.saveWork).
+  if (!auto) store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0, repoBreach: '' });
   // What he sent with "send and done" goes in first, so Claude has it too.
   const withUnsent = [...(thread.unsent || []), prompt].join('\n\n');
   if (thread.unsent?.length) store.updateThread(threadId, { unsent: [] });
@@ -149,6 +151,8 @@ export function stopTurn(threadId) {
     const thread = store.getThread(threadId);
     if (!thread?.held) return false;
     heldPrompt.delete(threadId);
+    // Parked for a repo: its place in the queue goes too.
+    if (thread.held.kind === 'repo') repos.forget(threadId);
     store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', pending: [], held: null, workingOn: '', doneAfter: false, stoppedAt: Date.now() });
     log(`thread "${thread.title}": hold cancelled`);
     return true;
@@ -177,8 +181,8 @@ function hold(threadId, limit, { prompt, tier, tries = 0 }) {
 
 // Held to carry on by itself (retry.js): after an error, when Claude asked to look again,
 // or to fix a merge. The same data as a hold for the usage limit, with its `kind`.
-function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries = 1 }) {
-  const held = { until, type: '', kind, reason, prompt, at: Date.now(), tier, tries };
+function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries = 1, extra = {} }) {
+  const held = { ...extra, until, type: '', kind, reason, prompt, at: Date.now(), tier, tries };
   store.updateThread(threadId, { state: 'working', held, activity: holdLine(held), workingOn: '', error: '' });
   log(`thread "${store.getThread(threadId)?.title}": ${kind}, carries on by itself at ${new Date(until).toISOString()}`);
   return held;
@@ -188,26 +192,54 @@ function holdAuto(threadId, { kind, until, reason = '', prompt, tier = '', tries
 // the one doing the work; the other one leaves the hold alone.
 export function resumeHeld({ mayRun = () => true, now = Date.now() } = {}) {
   let started = 0;
-  for (const t of store.listThreads()) {
-    if (!t.held || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
+  // Turns parked for a repo carry on when the repo is free for them, not by the clock. After
+  // a restart they join the queue again, in the order they were parked.
+  const parked = store.listThreads().filter((t) => t.held?.kind === 'repo' && t.state === 'working' && !isRunning(t.id)).sort((a, b) => a.held.at - b.held.at);
+  for (const t of parked) {
     if (!mayRun()) return started;
-    const { held } = t;
-    const added = t.pending || [];
-    const kind = held.kind || 'limit';
-    const own = kind === 'limit' ? null : retry.resumeText(held, now);
-    const prompt = [
-      own ? own.prompt : `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
-      ...(own ? [] : [held.prompt]),
-      ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
-    ].join('\n\n');
-    store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
-    heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
-    store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
-    log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
-    startTurn(t.id, prompt);
+    if (repos.holds(t.held.repo, t.id)) { startHeld(t, now); started += 1; }
+    else if (!repos.queued(t.held.repo, t.id)) repos.park(t.held.repo, t.id, t.held.mode, t.held.at);
+  }
+  for (const t of store.listThreads()) {
+    if (!t.held || t.held.kind === 'repo' || t.state !== 'working' || isRunning(t.id) || now < t.held.until) continue;
+    if (!mayRun()) return started;
+    startHeld(t, now);
     started += 1;
   }
   return started;
+}
+
+function startHeld(t, now = Date.now()) {
+  const { held } = t;
+  const added = t.pending || [];
+  const kind = held.kind || 'limit';
+  const own = kind === 'limit' ? null : retry.resumeText(held, now);
+  const prompt = [
+    own ? own.prompt : `[The app: this turn was cut off by Claude's usage limit (the ${limitLabel(held.type)}) at ${dateTimeDMY(held.at)}. The limit has lifted now and the app started the turn again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]`,
+    ...(own ? [] : [held.prompt]),
+    ...(added.length ? ['[While the turn was held, Florian added:]', added.join('\n\n')] : []),
+  ].join('\n\n');
+  store.appendMessage(t.id, { role: 'user', event: true, auto: true, text: own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]` });
+  heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
+  store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
+  log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
+  startTurn(t.id, prompt);
+}
+
+// The lock of a repo was given to a parked turn (repos.js): it starts now. True when the
+// thread takes the lock: started, about to carry on (its parked turn is still ending), or
+// already running again (his message started a turn, which opens the repo next).
+// False lets the lock go on to the next in the queue.
+function resumeParked(full, threadId) {
+  const t = store.getThread(threadId);
+  if (!t) return false;
+  const r = running.get(threadId);
+  if (r?.park && r.park.repo.toLowerCase() === String(full).toLowerCase()) { r.parkGranted = true; return true; }
+  if (isRunning(threadId)) return true;
+  if (t.held?.kind !== 'repo' || t.state !== 'working' || String(t.held.repo).toLowerCase() !== String(full).toLowerCase()) return false;
+  if (!mayRunHere()) return false;
+  startHeld(t);
+  return true;
 }
 
 // Merges that failed for a reason a turn cannot fix (GitHub not reachable) are tried
@@ -250,7 +282,9 @@ export function retryInterrupted({ mayRun = () => true, now = Date.now() } = {})
 }
 
 let holdTimer = null;
+let mayRunHere = () => true; // whether this computer does the work now (watchHolds)
 export function watchHolds(mayRun) {
+  mayRunHere = () => { try { return mayRun ? Boolean(mayRun()) : true; } catch { return false; } };
   clearInterval(holdTimer);
   holdTimer = setInterval(() => {
     try { retryInterrupted({ mayRun }); } catch (err) { log(`interrupted turns: ${err.stack || err.message}`); }
@@ -491,33 +525,62 @@ async function runTurn(threadId, prompt) {
 
   // Code. A thread on a project with a `repo:` line starts out with that repo; Claude
   // opens it (or any other repo of Florian's) when the work needs the code. Opening it
-  // takes it for this turn: one thread at a time per repo.
+  // takes it for this turn: alone, or, in a repo that lets threads work side by side,
+  // shared with the others unless Claude asks for it alone (repos.js).
   const repoDir = () => {
     const t = store.getThread(threadId);
-    return t?.repo && repos.holder(t.repo) === threadId ? repos.dirOf(t.repo) : null;
+    return t?.repo && repos.holds(t.repo, threadId) ? repos.dirFor(threadId, t.repo) : null;
   };
+  // What the file tools may do in the shared folders of the repo this turn holds (agent.js).
+  const repoShared = () => {
+    const t = store.getThread(threadId);
+    if (!t?.repo || !repos.holds(t.repo, threadId)) return null;
+    const dir = repos.dirFor(threadId, t.repo);
+    const { readonly, addonly } = repos.repoSettings(t.repo).shared;
+    const at = (p) => [path.join(dir, ...p.split('/')), path.join(repos.sharedRoot(t.repo), ...p.split('/'))];
+    return {
+      exclusive: repos.holdsExclusive(t.repo, threadId),
+      parallel: repos.isParallel(t.repo),
+      readonly: readonly.flatMap(at),
+      addonly: addonly.flatMap(at),
+      settingsFile: path.join(dir, ...repos.SETTINGS_FILE.split('/')),
+    };
+  };
+  // A wait for a repo longer than this parks the turn instead (repos.js, "the lock").
+  const waitMs = Number(config.repoWaitMs ?? 3 * 60_000);
   const repoTools = {
-    open: async (input) => {
+    open: async (input, { exclusive = false } = {}) => {
       const full = repos.repoName(input || store.getThread(threadId)?.repo);
       if (!full) throw new Error(input ? `"${input}" is not a repo name. Give it as owner/name or just the name.` : 'Name the repo to open.');
       const before = store.getThread(threadId);
-      if (before.repo && repos.holder(before.repo) === threadId && before.repo.toLowerCase() !== full.toLowerCase()) {
+      if (before.repo && repos.holds(before.repo, threadId) && before.repo.toLowerCase() !== full.toLowerCase()) {
         await repos.saveWork(threadId);
         await repos.autoPush(threadId);
         repos.release(before.repo, threadId);
       }
-      const other = repos.holder(full);
-      if (other && other !== threadId) {
-        activity(`Waiting for ${full}: ${repos.holderName(full) || 'another thread'} is working in it`);
-        const got = await repos.acquire(full, threadId, { timeoutMs: 20 * 60_000 });
-        if (!got) throw new Error(`${full} is still in use by ${repos.holderName(full) || 'another thread'}. Tell Florian; he can come back to this when it is done.`);
-      } else await repos.acquire(full, threadId);
+      // Cloned or fetched first, so the lock knows whether the repo lets threads work side by side.
+      await repos.ensure(full);
+      const mode = exclusive ? 'exclusive' : 'shared';
+      const got = await repos.acquire(full, threadId, { mode, wait: false });
+      if (!got) {
+        const who = repos.holderName(full, threadId) || 'a thread that asked before';
+        activity(`Waiting for ${full}${exclusive ? ' (alone)' : ''}: ${who} ${repos.holders(full).length ? 'is working in it' : 'goes first'}`);
+        const later = await repos.acquire(full, threadId, { mode, timeoutMs: waitMs, park: true });
+        if (!later) {
+          // Parked: the turn ends now, keeps its place in the queue, and the app starts it
+          // again by itself the moment the repo is free for it (the end of runTurn).
+          run.park = { repo: full, mode, holder: repos.holderName(full, threadId) || 'another thread' };
+          throw new Error(`${full} is still in use by ${run.park.holder}. This turn is parked: end it now, with one line for Florian saying it waits for ${full}. The app keeps this thread's place in the queue and starts the next turn by itself the moment the repo is free; do not call continue_later and do not ask him to say "go on". Do not change anything in the meantime.`);
+        }
+      }
       if (abort.signal.aborted) { repos.release(full, threadId); throw new Error('Stopped.'); }
-      activity(`Opening ${full}`);
+      const alone = repos.holdsExclusive(full, threadId);
+      activity(`Opening ${full}${alone && repos.isParallel(full) ? ' alone' : ''}`);
       try {
-        const { dir, branch, base } = await repos.openFor(threadId, full);
+        const { dir, branch, base } = await repos.openFor(threadId, full, { exclusive: alone });
         store.updateThread(threadId, { repoSet: true });
-        return { dir, branch, base, full };
+        if (alone && exclusive && repos.isParallel(full)) store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude took ${full} alone (the exclusive lock) on ${dateTimeDMY(Date.now())}; other threads wait until this turn ends.]` });
+        return { dir, branch, base, full, parallel: repos.isParallel(full), exclusive: alone, shared: repos.repoSettings(full).shared };
       } catch (err) {
         repos.release(full, threadId);
         throw err;
@@ -571,6 +634,7 @@ async function runTurn(threadId, prompt) {
       protectedPaths: config.protectedPaths,
       shell: config.threadShell,
       artifactsShell: config.artifactsShell !== false,
+      repoShared,
       piShell: config.pi?.enabled === false ? undefined : piShell,
       moveEvent: (args) => moveEvent({ ref: args.event, start: args.start, end: args.end, where: args.where, fromThreadId: threadId }),
       signal: abort.signal,
@@ -633,7 +697,17 @@ async function runTurn(threadId, prompt) {
     // The branch goes to GitHub by itself, so the work is not on this computer only.
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
-    repos.releaseAll(threadId);
+    repos.releaseAll(threadId, run.parkGranted ? run.park.repo : null);
+    // Parked waiting for a repo: held until the repo is free for it, then started again by
+    // itself (resumeParked). What he added meanwhile waits in `pending` as with any hold.
+    // The slot stays taken until the cleanup below is done: a grant meanwhile only marks
+    // `parkGranted`, so no second turn of this thread starts while this one still ends.
+    if (run.park && !result.aborted && !limited && store.getThread(threadId) && (run.parkGranted || repos.queued(run.park.repo, threadId))) {
+      run.parked = true;
+      holdAuto(threadId, { kind: 'repo', until: Date.now() + 7 * 24 * 60 * 60_000, reason: run.park.repo, prompt: again?.prompt || prompt, tier: tier.name, tries: 1, extra: { repo: run.park.repo, mode: run.park.mode, holder: run.park.holder } });
+      return;
+    }
+    if (run.park) repos.unpark(threadId);
     // Ended on an error, or Claude asked to look again later: it carries on by itself
     // (retry.js), unless he added something meanwhile (that goes first) or a safety
     // handle is reached.
@@ -703,9 +777,12 @@ async function runTurn(threadId, prompt) {
     // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
-    repos.releaseAll(threadId);
+    repos.releaseAll(threadId, run.parkGranted && run.parked ? run.park.repo : null);
+    if (run.park && !run.parked) repos.unpark(threadId);
     running.delete(threadId);
     emitLive({ op: 'end' });
+    // The repo came free while this parked turn was still ending: it carries on at once.
+    if (run.parked && run.parkGranted) setImmediate(() => { const t = store.getThread(threadId); if (t) resumeParked(run.park.repo, threadId); });
     // The follow-up takes the slot this turn had; the waiting line moves only if it is free.
     if (followUp && store.getThread(threadId)) { startTurn(threadId, followUp); if (!slotFree(false)) return; }
     // His own messages first; background work only into a slot it may have.

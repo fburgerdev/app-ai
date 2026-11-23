@@ -1,9 +1,22 @@
 // Git repositories threads work in.
 //
 // Any thread can work in any of Florian's repos. A repo is cloned the first time a thread
-// uses it and brought up to date each time one does. There is one copy of each repo, and
-// only one thread works in it at a time: a thread holds the repo while its turn runs, and
-// any other thread that wants it waits until that turn has ended.
+// uses it and brought up to date each time one does. By default there is one copy of each
+// repo, and only one thread works in it at a time: a thread holds the repo while its turn
+// runs, and any other thread that wants it waits until that turn has ended.
+//
+// A repo can let threads work side by side instead (Florian, 23-11-2026): with
+// `.app/repo.json` on its main branch saying `"parallel": true`, every thread gets a git
+// worktree of its own, and the lock has two forms. Normal turns share it; a turn that needs
+// the repo quiet (a migration, a rename, a dependency upgrade, changing `.app/repo.json`)
+// takes it alone (`open_repo` with `exclusive: true`), after the turns already working
+// there have ended, and no new ones start meanwhile. A turn that would wait long is parked:
+// it ends, keeps its place in the queue, and the app starts it again by itself the moment
+// the repo is free for it (runner.js). Folders the repo names under `shared` live once,
+// outside the worktrees, and are linked into each: `readonly` ones no thread changes (only
+// an exclusive turn), `addonly` ones take new files but never change or lose one. Windows'
+// own access rules hold that; a check at the end of every turn catches what slipped through
+// (on the Pi), and a turn that broke it is not merged.
 //
 // Each thread works on a branch of its own, made from the repo's main branch. When a turn
 // ends, whatever Claude left uncommitted is committed onto that branch, so the copy is
@@ -16,7 +29,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { DATA_DIR, log } from './config.js';
 import { git } from './git.js';
 import * as store from './store.js';
@@ -25,11 +38,11 @@ let config;
 export function initRepos(cfg) {
   config = cfg;
   if (!config.reposDir) config.reposDir = path.join(DATA_DIR, 'repos');
+  if (!config.worktreesDir) config.worktreesDir = path.join(DATA_DIR, 'worktrees');
+  if (!config.sharedDir) config.sharedDir = path.join(DATA_DIR, 'shared');
   fs.mkdirSync(config.reposDir, { recursive: true });
 }
 
-const locks = new Map(); // repo key -> thread id holding it
-const waiters = new Map(); // repo key -> [resolve]
 const busy = new Map(); // repo key -> promise: one git operation at a time per repo
 
 const key = (full) => full.toLowerCase();
@@ -81,8 +94,60 @@ export function ensure(full) {
       await git(dir, ['fetch', '--quiet', '--prune', 'origin']).catch((err) => log(`repos: fetch ${full} failed: ${err.message}`));
     }
     await startEmpty(dir, full);
-    return { dir, base: await defaultBranch(dir) };
+    const base = await defaultBranch(dir);
+    await loadSettings(dir, full, base);
+    return { dir, base };
   });
+}
+
+// ---------- the repo's own settings: .app/repo.json on its main branch ----------
+//
+//   { "parallel": true, "shared": { "readonly": ["fonts"], "addonly": ["takes", "renders/versions"] } }
+//
+// Read from main as GitHub has it, so a branch cannot change them for itself; changing the
+// file is work for an exclusive turn (the policy in agent.js and the check at the end of a
+// turn hold that).
+
+const NO_SETTINGS = Object.freeze({ parallel: false, shared: Object.freeze({ readonly: [], addonly: [] }) });
+const settings = new Map(); // repo key -> parsed settings
+export const SETTINGS_FILE = '.app/repo.json';
+export const repoSettings = (full) => settings.get(key(full)) || NO_SETTINGS;
+export const isParallel = (full) => repoSettings(full).parallel;
+// For the tests: settings without a clone.
+export const _setSettings = (full, raw) => settings.set(key(full), parseSettings(raw));
+
+function cleanShared(p) {
+  const s = String(p || '').replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  if (!s || s.startsWith('/') || /^[a-z]:/i.test(s)) return null;
+  if (s.split('/').some((x) => !x || x === '.' || x === '..' || /^\.(git|app)$/i.test(x))) return null;
+  return s;
+}
+
+export function parseSettings(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {};
+  const list = (v) => [...new Set((Array.isArray(v) ? v : []).map(cleanShared).filter(Boolean))];
+  const readonly = list(s.shared?.readonly);
+  const addonly = list(s.shared?.addonly).filter((p) => !readonly.includes(p));
+  // A shared folder inside another would put its link into the other's shared store.
+  const all = [...readonly, ...addonly];
+  const nested = (p) => all.some((q) => q !== p && (p.startsWith(`${q}/`) || q.startsWith(`${p}/`)));
+  return {
+    parallel: s.parallel === true,
+    shared: { readonly: readonly.filter((p) => !nested(p)), addonly: addonly.filter((p) => !nested(p)) },
+  };
+}
+
+async function loadSettings(dir, full, base) {
+  const ref = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]).then(() => `origin/${base}`, () => 'HEAD');
+  const text = await git(dir, ['show', `${ref}:${SETTINGS_FILE}`]).catch(() => '');
+  let raw = null;
+  if (text.trim()) {
+    try { raw = JSON.parse(text); } catch (err) { log(`repos: ${full} has a ${SETTINGS_FILE} that is not JSON, so it is left as a repo of one thread at a time: ${err.message}`); }
+  }
+  const before = repoSettings(full);
+  const now = parseSettings(raw);
+  settings.set(key(full), now);
+  if (before.parallel !== now.parallel) log(`repos: ${full} ${now.parallel ? 'lets threads work side by side' : 'is one thread at a time'}`);
 }
 
 // A repo made on GitHub without a first commit has no branch to start from: nothing can
@@ -105,10 +170,24 @@ async function startEmpty(dir, full) {
   log(`repos: ${full} was empty; gave it a first commit on ${branch}`);
 }
 
-// ---------- one thread at a time ----------
+// ---------- the lock: shared by many, or held by one ----------
+//
+// Per repo: who holds it (`holders`), in which form (`mode`), and who waits (`queue`, first
+// come, first served). A repo that is not parallel knows only the exclusive form, which is
+// the old "one thread at a time". An exclusive request waits for the holders to finish and
+// keeps every later request behind it, so it cannot be starved. A waiting entry without a
+// `resolve` is a parked turn: when the repo is free for it, it is given the lock and the app
+// starts its turn (onGranted, runner.js). Locks live in the app's memory, never in the repo;
+// parked turns are kept on their thread (`held`) and join the queue again after a restart.
 
-export const holder = (full) => locks.get(key(full)) || null;
-export const holderTitle = (full) => store.getThread(holder(full))?.title || 'another thread';
+const locks = new Map(); // repo key -> { full, mode: '' | 'shared' | 'exclusive', holders: Set, queue: [], lifted }
+
+function lockOf(full) {
+  const k = key(full);
+  if (!locks.has(k)) locks.set(k, { full, mode: '', holders: new Set(), queue: [], lifted: false });
+  return locks.get(k);
+}
+
 // For Video Kit (server/videokit.js): its git work on a repo goes in the same queue as the threads'.
 export const serialFor = (full, fn) => serial(full, fn);
 export const identityFor = (dir) => identity(dir);
@@ -120,51 +199,346 @@ const isJob = (id) => String(id || '').startsWith('job:');
 // A thread that no longer exists holds nothing; a job holds until it gives the repo back.
 const alive = (id) => isJob(id) || Boolean(store.getThread(id));
 
-// Who holds the repo, as a sentence can name it: "Tidy the server code" (quoted, a
-// thread) or the brain update (a job). Empty when nobody does.
-export function holderName(full) {
-  const id = holder(full);
-  if (!id) return '';
-  return isJob(id) ? `the ${id.slice(4)}` : `"${store.getThread(id)?.title || 'another thread'}"`;
+// Holders that are gone (a deleted thread) let go by themselves.
+function prune(L) {
+  for (const id of [...L.holders]) if (!alive(id)) L.holders.delete(id);
+  if (!L.holders.size) settle(L);
 }
 
-// Takes the repo for a thread (or a job). With `wait`, waits until it is free; without, gives up.
-// With `timeoutMs`, gives up after that long and leaves the queue, so the repo is not
-// handed later to someone who stopped waiting (and would then hold it with nobody to give
-// it back).
-export function acquire(full, threadId, { wait = true, timeoutMs = 0 } = {}) {
-  const k = key(full);
-  const held = locks.get(k);
-  if (!held || held === threadId || !alive(held)) {
-    locks.set(k, threadId);
+// Nobody holds it any more: an exclusive turn that lifted the shared folders' protection
+// gets it back before anyone else comes in.
+function settle(L) {
+  L.mode = '';
+  if (L.lifted) {
+    try { protectShared(L.full); } catch (err) { log(`repos: could not protect the shared folders of ${L.full} again: ${err.message}`); }
+    L.lifted = false;
+  }
+}
+
+export const holders = (full) => { const L = locks.get(key(full)); if (!L) return []; prune(L); return [...L.holders]; };
+export const holder = (full) => holders(full)[0] || null;
+export const holds = (full, id) => Boolean(full) && holders(full).includes(id);
+export const lockMode = (full) => (holders(full).length ? locks.get(key(full)).mode : '');
+export const holdsExclusive = (full, id) => holds(full, id) && lockMode(full) === 'exclusive';
+const nameOf = (id) => (isJob(id) ? `the ${id.slice(4)}` : `"${store.getThread(id)?.title || 'another thread'}"`);
+export const holderTitle = (full) => store.getThread(holder(full))?.title || 'another thread';
+
+// Who holds the repo, as a sentence can name it: "Tidy the server code" (quoted, a
+// thread), the brain update (a job), or "A" and 2 more threads. Empty when nobody does.
+// `except` leaves one holder out (the thread asking).
+export function holderName(full, except = null) {
+  const ids = holders(full).filter((id) => id !== except);
+  if (!ids.length) return '';
+  if (ids.length === 1) return nameOf(ids[0]);
+  return `${nameOf(ids[0])} and ${ids.length - 1} more thread${ids.length > 2 ? 's' : ''}`;
+}
+
+const grantable = (L, mode) => (mode === 'exclusive' ? L.holders.size === 0 : L.mode !== 'exclusive');
+
+function take(L, id, mode) {
+  L.holders.add(id);
+  L.mode = mode;
+}
+
+// Hands the lock on, from the front of the queue: one exclusive, or every shared one in a row.
+let grantedHook = null;
+export const onGranted = (fn) => { grantedHook = fn; };
+function pump(L) {
+  prune(L);
+  while (L.queue.length) {
+    const head = L.queue[0];
+    if (!alive(head.id)) { L.queue.shift(); continue; }
+    if (!grantable(L, head.mode)) break;
+    L.queue.shift();
+    take(L, head.id, head.mode);
+    if (head.resolve) head.resolve(true);
+    else {
+      // A parked turn: the app starts it now. If it cannot (the thread was stopped, or is
+      // already running), the lock goes on to the next one.
+      let started = false;
+      try { started = Boolean(grantedHook?.(L.full, head.id, head.mode)); } catch (err) { log(`repos: starting a parked turn failed: ${err.message}`); }
+      if (!started) {
+        L.holders.delete(head.id);
+        if (!L.holders.size) settle(L);
+        continue;
+      }
+    }
+    if (head.mode === 'exclusive') break;
+  }
+}
+
+// The form a request gets: shared only in a repo that is parallel.
+const formFor = (full, mode) => (mode === 'shared' && isParallel(full) ? 'shared' : 'exclusive');
+
+// Takes the repo for a thread (or a job), shared or exclusive (`mode`, default exclusive).
+// With `wait`, waits until it is free; without, gives up at once. With `timeoutMs`, gives
+// up after that long: it leaves the queue, so the repo is not handed later to someone who
+// stopped waiting, unless `park` is set: then it keeps its place as a parked turn.
+export function acquire(full, id, { wait = true, timeoutMs = 0, mode = 'exclusive', park = false } = {}) {
+  const L = lockOf(full);
+  const want = formFor(full, mode);
+  prune(L);
+  if (L.holders.has(id)) {
+    if (want === 'shared' || L.mode === 'exclusive') return Promise.resolve(true);
+    // Holds it shared and wants it alone: back into the queue like anyone else.
+    release(full, id);
+  }
+  let entry = L.queue.find((q) => q.id === id);
+  if (!entry && !L.queue.length && grantable(L, want)) {
+    take(L, id, want);
     return Promise.resolve(true);
   }
   if (!wait) return Promise.resolve(false);
   return new Promise((resolve) => {
+    if (entry) entry.mode = want === 'exclusive' ? 'exclusive' : entry.mode; // a parked turn back: keeps its place
+    else { entry = { id, mode: want, at: Date.now(), resolve: null }; L.queue.push(entry); }
     let timer = null;
-    const take = () => { clearTimeout(timer); locks.set(k, threadId); resolve(true); };
-    waiters.set(k, [...(waiters.get(k) || []), take]);
+    entry.resolve = (v) => { clearTimeout(timer); entry.resolve = null; resolve(v); };
     if (timeoutMs) {
       timer = setTimeout(() => {
-        waiters.set(k, (waiters.get(k) || []).filter((w) => w !== take));
+        if (!entry.resolve) return;
+        entry.resolve = null;
+        if (!park) { L.queue = L.queue.filter((q) => q !== entry); pump(L); }
         resolve(false);
       }, timeoutMs);
       timer.unref?.();
     }
+    pump(L);
   });
 }
 
-export function release(full, threadId) {
-  const k = key(full);
-  if (locks.get(k) !== threadId) return;
-  locks.delete(k);
-  const next = (waiters.get(k) || []).shift();
-  if (next) next();
+export function release(full, id) {
+  const L = locks.get(key(full));
+  if (!L || !L.holders.has(id)) return;
+  L.holders.delete(id);
+  if (!L.holders.size) settle(L);
+  pump(L);
 }
 
-// Everything a thread holds, given back (its turn ended, or it was deleted).
-export function releaseAll(threadId) {
-  for (const [k, id] of [...locks]) if (id === threadId) release(k, threadId);
+// Everything a thread holds, given back (its turn ended). A parked place in a queue stays,
+// and so does `keep`: the repo a parked turn was given while it was still ending.
+export function releaseAll(id, keep = null) {
+  for (const L of [...locks.values()]) if (L.holders.has(id) && !(keep && key(L.full) === key(keep))) release(L.full, id);
+}
+
+// A thread deleted, or a parked turn he cancelled: out of every queue as well.
+export function forget(id) {
+  releaseAll(id);
+  unpark(id);
+}
+
+// A parked turn joins the queue (again, after a restart), in the order it was parked.
+export function park(full, id, mode = 'exclusive', at = Date.now()) {
+  const L = lockOf(full);
+  if (L.holders.has(id) || L.queue.some((q) => q.id === id)) return;
+  const entry = { id, mode: formFor(full, mode), at, resolve: null };
+  const i = L.queue.findIndex((q) => q.at > at);
+  if (i < 0) L.queue.push(entry); else L.queue.splice(i, 0, entry);
+  pump(L);
+}
+
+export function unpark(id) {
+  for (const L of locks.values()) {
+    const before = L.queue.length;
+    L.queue = L.queue.filter((q) => q.id !== id || q.resolve);
+    if (L.queue.length !== before) pump(L);
+  }
+}
+
+export const queued = (full, id) => Boolean(locks.get(key(full))?.queue.some((q) => q.id === id));
+// Where a thread waits: its place (1 = next) and who holds the repo now.
+export function waitingFor(full, id) {
+  const L = locks.get(key(full));
+  const i = L ? L.queue.findIndex((q) => q.id === id) : -1;
+  return i < 0 ? null : { place: i + 1, holder: holderName(full, id) };
+}
+
+// ---------- shared folders: one store per repo, linked into every worktree ----------
+
+const worktreesDir = () => config.worktreesDir || path.join(DATA_DIR, 'worktrees');
+const sharedBase = () => config.sharedDir || path.join(DATA_DIR, 'shared');
+export const sharedRoot = (full) => path.join(sharedBase(), ...full.split('/'));
+export const worktreeOf = (full, threadId) => path.join(worktreesDir(), ...full.split('/'), String(threadId));
+export const dirsForPolicy = () => ({ worktrees: worktreesDir(), shared: sharedBase() });
+
+const sharedList = (full) => {
+  const { readonly, addonly } = repoSettings(full).shared;
+  return [...readonly.map((p) => ({ p, kind: 'readonly' })), ...addonly.map((p) => ({ p, kind: 'addonly' }))];
+};
+const storeOf = (full, p) => path.join(sharedRoot(full), ...p.split('/'));
+const norm = (p) => { const r = path.resolve(String(p).replace(/^\\\\\?\\/, '')); return process.platform === 'win32' ? r.toLowerCase() : r; };
+
+// Who the app runs as, for Windows' access rules.
+const who = () => (process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : process.env.USERNAME || process.env.USER);
+
+function icacls(args) {
+  const r = spawnSync('icacls', args, { windowsHide: true, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`icacls ${args.slice(1).join(' ')}: ${(r.stdout || r.stderr || r.error?.message || '').trim().split('\n')[0]}`);
+}
+
+// Read-only: nothing in it is written, added, renamed or deleted, nor the folder itself.
+// Add-only: new files and folders go in; a file, once written and closed, is never changed,
+// renamed or deleted. On Windows that is held by deny rules for the app's own user (tested
+// 23-11-2026: they stop node, Git Bash's rm, and git following a link). On Linux read-only
+// is the write bit; add-only is held only by the check at the end of a turn.
+function lockStore(dir, kind) {
+  if (!fs.existsSync(dir)) return;
+  if (process.platform === 'win32') {
+    icacls([dir, '/remove:d', who()]);
+    if (kind === 'readonly') icacls([dir, '/deny', `${who()}:(OI)(CI)(DE,DC,WD,AD,WA,WEA)`]);
+    else {
+      icacls([dir, '/deny', `${who()}:(OI)(IO)(DE,WD,AD,WA,WEA)`]);
+      icacls([dir, '/deny', `${who()}:(CI)(DE,DC)`]);
+    }
+  } else if (kind === 'readonly') {
+    spawnSync('chmod', ['-R', 'a-w', dir]);
+  }
+}
+
+function unlockStore(dir) {
+  if (!fs.existsSync(dir)) return;
+  if (process.platform === 'win32') icacls([dir, '/remove:d', who()]);
+  else spawnSync('chmod', ['-R', 'u+w', dir]);
+}
+
+const protecting = () => config?.protectShared !== false;
+
+export function protectShared(full) {
+  if (!protecting()) return;
+  for (const { p, kind } of sharedList(full)) lockStore(storeOf(full, p), kind);
+}
+
+export function unprotectShared(full) {
+  if (!protecting()) return;
+  for (const { p } of sharedList(full)) unlockStore(storeOf(full, p));
+}
+
+// Moves what a real folder holds into the store (the first time a repo shares a folder its
+// main copy already has, the EA video's takes). Leaves what the store already has a file
+// of the same name for. True when the folder is empty afterwards.
+function moveInto(from, to) {
+  for (const name of fs.readdirSync(from)) {
+    const a = path.join(from, name);
+    const b = path.join(to, name);
+    if (fs.existsSync(b)) continue;
+    fs.renameSync(a, b);
+  }
+  return fs.readdirSync(from).length === 0;
+}
+
+// Links the repo's shared folders into a copy of it (a worktree, or the main copy, so Video
+// Kit sees them too), and tells git to leave the links alone. A folder git tracks files in is
+// never shared: linking it would take those files out of the branch.
+async function linkShared(full, dir) {
+  const list = sharedList(full);
+  if (!list.length) return;
+  const common = path.resolve(dir, (await git(dir, ['rev-parse', '--git-common-dir'])).trim());
+  const excludeFile = path.join(common, 'info', 'exclude');
+  fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+  const had = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, 'utf8') : '';
+  const lines = new Set(had.split(/\r?\n/));
+  const add = list.map(({ p }) => `/${p}`).filter((l) => !lines.has(l));
+  if (add.length) fs.writeFileSync(excludeFile, `${had.replace(/\s*$/, '')}\n# shared folders, linked by the app\n${add.join('\n')}\n`);
+  let lifted = false;
+  try {
+    for (const { p } of list) {
+      if ((await git(dir, ['ls-files', '--', p]).catch(() => '')).trim()) { log(`repos: ${full}: "${p}" holds files git tracks, so it is not shared`); continue; }
+      const target = storeOf(full, p);
+      const link = path.join(dir, ...p.split('/'));
+      fs.mkdirSync(target, { recursive: true });
+      let st = null;
+      try { st = fs.lstatSync(link); } catch { /* not there yet */ }
+      if (st?.isSymbolicLink()) {
+        if (norm(fs.readlinkSync(link)) === norm(target)) continue;
+        fs.unlinkSync(link);
+      } else if (st?.isDirectory()) {
+        if (!lifted && protecting()) { unprotectShared(full); lifted = true; }
+        if (!moveInto(link, target)) { log(`repos: ${full}: "${p}" in ${dir} has files the shared folder has too; left as it is, not linked`); continue; }
+        fs.rmdirSync(link);
+        log(`repos: ${full}: moved "${p}" into its shared folder`);
+      } else if (st) {
+        log(`repos: ${full}: "${p}" is a file, not a folder; not linked`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+  } finally {
+    if (lifted) protectShared(full);
+  }
+}
+
+// Every link into the shared stores inside `dir` goes, before anything deletes the folder:
+// git and rm follow such a link and would empty the store behind it.
+function unlinkShared(dir) {
+  const base = norm(sharedBase());
+  const walk = (d) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isSymbolicLink()) {
+        let to = '';
+        try { to = norm(fs.readlinkSync(p)); } catch { /* broken */ }
+        if (!to || to === base || to.startsWith(base + path.sep)) {
+          try { fs.unlinkSync(p); } catch { fs.rmdirSync(p); }
+        }
+      } else if (e.isDirectory() && e.name !== '.git') walk(p);
+    }
+  };
+  walk(dir);
+}
+
+// ---------- what a turn did to the shared folders ----------
+
+function listFiles(root) {
+  const out = new Map();
+  const walk = (d, rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(p, r);
+      else if (e.isFile()) { try { const s = fs.statSync(p); out.set(r, `${s.size}:${Math.round(s.mtimeMs)}`); } catch { /* gone meanwhile */ } }
+    }
+  };
+  walk(root, '');
+  return out;
+}
+
+const snapshots = new Map(); // threadId -> { full, stores: { p: { kind, files } }, settingsFile }
+
+async function settingsBlob(dir) {
+  const file = path.join(dir, ...SETTINGS_FILE.split('/'));
+  if (!fs.existsSync(file)) return '';
+  return (await git(dir, ['hash-object', '--', SETTINGS_FILE]).catch(() => '?')).trim();
+}
+
+async function snapshot(threadId, full, dir) {
+  const stores = {};
+  for (const { p, kind } of sharedList(full)) stores[p] = { kind, files: listFiles(storeOf(full, p)) };
+  snapshots.set(threadId, { full, dir, stores, settingsFile: await settingsBlob(dir) });
+}
+
+// At the end of a shared turn: what it must not have done. Returns sentences, empty if all is well.
+async function breaches(threadId) {
+  const snap = snapshots.get(threadId);
+  snapshots.delete(threadId);
+  if (!snap) return [];
+  const out = [];
+  for (const [p, { kind, files }] of Object.entries(snap.stores)) {
+    const now = listFiles(storeOf(snap.full, p));
+    const changed = [...files].filter(([f, sig]) => now.has(f) && now.get(f) !== sig).map(([f]) => f);
+    const gone = [...files.keys()].filter((f) => !now.has(f));
+    const added = [...now.keys()].filter((f) => !files.has(f));
+    const few = (l) => `${l.slice(0, 5).join(', ')}${l.length > 5 ? ` and ${l.length - 5} more` : ''}`;
+    if (changed.length) out.push(`changed in the ${kind === 'readonly' ? 'read-only' : 'add-only'} folder "${p}": ${few(changed)}`);
+    if (gone.length) out.push(`deleted from the ${kind === 'readonly' ? 'read-only' : 'add-only'} folder "${p}": ${few(gone)}`);
+    if (kind === 'readonly' && added.length) out.push(`added to the read-only folder "${p}": ${few(added)}`);
+  }
+  if (fs.existsSync(snap.dir) && (await settingsBlob(snap.dir)) !== snap.settingsFile) out.push(`${SETTINGS_FILE} changed without the exclusive lock`);
+  return out;
 }
 
 // ---------- the thread's branch ----------
@@ -197,54 +571,162 @@ async function commitLeftovers(dir, message) {
 let beforeOpen = null;
 export const onBeforeOpen = (fn) => { beforeOpen = fn; };
 
+// Where a thread's copy of the repo is: its worktree if it has one, otherwise the one copy.
+export function dirFor(threadId, full) {
+  const wt = worktreeOf(full, threadId);
+  return fs.existsSync(path.join(wt, '.git')) ? wt : dirOf(full);
+}
+
+const hasRef = (dir, ref) => git(dir, ['rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false);
+
+// Which branch the thread works on, and from what it starts if the branch is not here yet.
+//   { branch, from }   from: null (the local branch is there), or the ref to make it from
+async function pickBranch(dir, thread, threadId, full, base) {
+  let branch = thread.repo && key(thread.repo) === key(full) && thread.repoBranch ? thread.repoBranch : '';
+  if (branch && await hasRef(dir, `refs/heads/${branch}`)) return { branch, from: null };
+  // The thread's branch may have been made on the other computer and pushed from there.
+  if (branch && await hasRef(dir, `refs/remotes/origin/${branch}`)) return { branch, from: `origin/${branch}` };
+  branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
+  const remote = await hasRef(dir, `refs/remotes/origin/${base}`) ? `origin/${base}` : 'HEAD';
+  // A thread that worked here, went to another repo and comes back no longer knows
+  // its branch, but the branch is still there, with work main does not have (the
+  // turn ended in the other repo, so nothing merged it). It goes on from that work
+  // instead of starting over from main and dropping it.
+  const unmerged = async (ref) => (await hasRef(dir, ref)) && !(await git(dir, ['merge-base', '--is-ancestor', ref, remote]).then(() => true, () => false));
+  if (await unmerged(`refs/heads/${branch}`)) return { branch, from: null };
+  if (await unmerged(`refs/remotes/origin/${branch}`)) return { branch, from: `origin/${branch}` };
+  return { branch, from: remote };
+}
+
+// The worktrees git knows of this repo, as normalised paths.
+async function worktreeList(mainDir) {
+  const out = await git(mainDir, ['worktree', 'list', '--porcelain']).catch(() => '');
+  return out.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => norm(l.slice(9).trim()));
+}
+
 // Opens the repo for a thread that holds it: up to date, on the thread's own branch.
-export async function openFor(threadId, full) {
+// `exclusive`: the turn holds it alone, so the shared folders are open to it.
+// `check: false`: the app's own use (testing, merging), not a turn: nothing to check after.
+export async function openFor(threadId, full, { exclusive = false, check = true } = {}) {
   const thread = store.getThread(threadId);
   let { dir, base } = await ensure(full);
   if (beforeOpen && (await beforeOpen(full, thread?.title || '').catch(() => null))?.saved?.length) {
     ({ dir, base } = await ensure(full));   // main moved on with that commit: the thread starts from it
   }
+  if (isParallel(full)) return openWorktree(threadId, full, dir, base, { exclusive, check });
+  // The repo is one thread at a time again, but this thread still has a worktree from
+  // when it was not: its work goes onto its branch and the worktree goes, so the branch
+  // can be checked out in the one copy.
+  if (fs.existsSync(worktreeOf(full, threadId))) await dropWorktree(full, threadId);
   return serial(full, async () => {
     // Whatever the thread before left behind goes onto its own branch.
     const on = await currentBranch(dir);
     if (await dirty(dir)) await commitLeftovers(dir, `Work in progress, saved when another thread took the repo`);
-    let branch = thread.repo && key(thread.repo) === key(full) && thread.repoBranch ? thread.repoBranch : '';
-    const exists = branch && (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false));
-    // The thread's branch may have been made on the other computer and pushed from there.
-    const pushed = branch && !exists && (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).then(() => true, () => false));
-    if (pushed) {
-      await git(dir, ['checkout', '--quiet', '-B', branch, `origin/${branch}`]);
-    } else if (!exists) {
-      branch = `claude/${slug(thread.title)}-${threadId.slice(-4)}`;
-      const remote = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]).then(() => `origin/${base}`, () => 'HEAD');
-      // A thread that worked here, went to another repo and comes back no longer knows
-      // its branch, but the branch is still there, with work main does not have (the
-      // turn ended in the other repo, so nothing merged it). It goes on from that work
-      // instead of starting over from main and dropping it.
-      const unmerged = async (ref) => (await git(dir, ['rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false))
-        && !(await git(dir, ['merge-base', '--is-ancestor', ref, remote]).then(() => true, () => false));
-      if (await unmerged(`refs/heads/${branch}`)) await git(dir, ['checkout', '--quiet', branch]);
-      else if (await unmerged(`refs/remotes/origin/${branch}`)) await git(dir, ['checkout', '--quiet', '-B', branch, `origin/${branch}`]);
-      else await git(dir, ['checkout', '--quiet', '-B', branch, remote]);
-    } else if (on !== branch) {
-      await git(dir, ['checkout', '--quiet', branch]);
-    }
+    const { branch, from } = await pickBranch(dir, thread, threadId, full, base);
+    if (from) await git(dir, ['checkout', '--quiet', '-B', branch, from]);
+    else if (on !== branch) await git(dir, ['checkout', '--quiet', branch]);
     store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base });
     return { dir, branch, base };
   });
 }
 
-// At the end of a turn: what Claude did not commit is committed for it.
+async function openWorktree(threadId, full, mainDir, base, { exclusive, check }) {
+  const thread = store.getThread(threadId);
+  const wt = worktreeOf(full, threadId);
+  const opened = await serial(full, async () => {
+    // The main copy stays on main, for Video Kit and the merges. A thread from before the
+    // repo went parallel may have left it on its branch: that work goes onto the branch.
+    const on = await currentBranch(mainDir);
+    if (on !== base) {
+      await commitLeftovers(mainDir, 'Work in progress, saved when the repo went parallel');
+      const remote = await hasRef(mainDir, `refs/remotes/origin/${base}`) ? `origin/${base}` : base;
+      await git(mainDir, ['checkout', '--quiet', '-B', base, remote]);
+    }
+    await linkShared(full, mainDir);
+    const { branch, from } = await pickBranch(mainDir, thread, threadId, full, base);
+    const known = (await worktreeList(mainDir)).includes(norm(wt));
+    if (known && fs.existsSync(path.join(wt, '.git'))) {
+      if (from) { await commitLeftovers(wt, `Work in progress: ${thread.title}`); await git(wt, ['checkout', '--quiet', '-B', branch, from]); }
+      else if ((await currentBranch(wt)) !== branch) { await commitLeftovers(wt, `Work in progress: ${thread.title}`); await git(wt, ['checkout', '--quiet', branch]); }
+    } else {
+      // A folder left from a worktree git no longer knows: its links go first, then the folder.
+      if (fs.existsSync(wt)) { unlinkShared(wt); fs.rmSync(wt, { recursive: true, force: true }); }
+      await git(mainDir, ['worktree', 'prune']).catch(() => {});
+      fs.mkdirSync(path.dirname(wt), { recursive: true });
+      if (from) await git(mainDir, ['worktree', 'add', '--quiet', '-B', branch, wt, from]);
+      else await git(mainDir, ['worktree', 'add', '--quiet', wt, branch]);
+    }
+    await linkShared(full, wt);
+    store.updateThread(threadId, { repo: full, repoBranch: branch, repoMain: base });
+    return { dir: wt, branch, base };
+  });
+  if (exclusive && holdsExclusive(full, threadId)) {
+    snapshots.delete(threadId);
+    const L = lockOf(full);
+    if (!L.lifted && protecting() && sharedList(full).length) { unprotectShared(full); L.lifted = true; }
+  } else if (check) {
+    await snapshot(threadId, full, wt);
+  }
+  return opened;
+}
+
+// A thread's worktree goes (its branch was merged, or the thread was deleted). Its links into
+// the shared stores are taken out first, by the app, so nothing deletes through them.
+export async function dropWorktree(full, threadId) {
+  if (!fs.existsSync(worktreeOf(full, threadId))) return;
+  await serial(full, () => removeWorktree(full, threadId));
+}
+
+// The same, for code already inside the repo's queue.
+async function removeWorktree(full, threadId) {
+  const wt = worktreeOf(full, threadId);
+  if (!fs.existsSync(wt)) return;
+  const mainDir = dirOf(full);
+  if (fs.existsSync(path.join(wt, '.git')) && await dirty(wt).catch(() => false)) {
+    const t = store.getThread(threadId);
+    if (t) await commitLeftovers(wt, `Work in progress: ${t.title}`).catch(() => {});
+  }
+  unlinkShared(wt);
+  await git(mainDir, ['worktree', 'remove', '--force', wt]).catch(() => {});
+  if (fs.existsSync(wt)) { unlinkShared(wt); fs.rmSync(wt, { recursive: true, force: true }); }
+  await git(mainDir, ['worktree', 'prune']).catch(() => {});
+  log(`repos: removed the worktree of "${store.getThread(threadId)?.title || threadId}" in ${full}`);
+}
+
+// A deleted thread: its worktrees in every repo go (its branches stay, on GitHub too).
+export async function dropWorktrees(threadId) {
+  const base = worktreesDir();
+  let owners = [];
+  try { owners = fs.readdirSync(base); } catch { return; }
+  for (const o of owners) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(base, o)); } catch { continue; }
+    for (const n of names) {
+      if (fs.existsSync(path.join(base, o, n, String(threadId)))) await dropWorktree(`${o}/${n}`, threadId).catch((err) => log(`repos: could not remove a worktree of ${o}/${n}: ${err.message}`));
+    }
+  }
+}
+
+// At the end of a turn: what Claude did not commit is committed for it, and in a parallel
+// repo, what the turn did to the shared folders is checked. A breach is noted on the thread
+// (`repoBreach`) and in it, and ship.js does not merge until Florian has answered.
 export async function saveWork(threadId) {
   const thread = store.getThread(threadId);
   // Read once: the thread record can change while this waits.
   const { repo: full, repoBranch: branch, title } = thread || {};
-  if (!full || holder(full) !== threadId) return;
-  const dir = dirOf(full);
+  if (!full || !holds(full, threadId)) return;
+  const dir = dirFor(threadId, full);
   await serial(full, async () => {
     if (await currentBranch(dir) !== branch) return;
     if (await commitLeftovers(dir, `Work in progress: ${title}`)) log(`repos: committed leftovers of "${title}" in ${full}`);
   }).catch((err) => log(`repos: could not save work in ${full}: ${err.message}`));
+  const found = await breaches(threadId).catch((err) => { log(`repos: could not check the shared folders of ${full}: ${err.message}`); return []; });
+  if (found.length) {
+    const text = found.join('; ');
+    store.updateThread(threadId, { repoBreach: text });
+    store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[The app found that this turn broke the rules of ${full}'s shared folders: ${text}. It does not merge this branch into main until Florian has written in this thread.]` });
+    log(`repos: "${title}" broke the shared folders of ${full}: ${text}`);
+  }
 }
 
 // At the end of a turn, after saveWork: the thread's branch goes to GitHub by itself.
@@ -254,7 +736,7 @@ export async function saveWork(threadId) {
 export async function autoPush(threadId) {
   if (config.autoPush === false) return false;
   const { repo: full, repoBranch: branch, repoMain } = store.getThread(threadId) || {};
-  if (!full || !branch || holder(full) !== threadId) return false;
+  if (!full || !branch || !holds(full, threadId)) return false;
   const dir = dirOf(full);
   return serial(full, async () => {
     const has = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then((o) => o.trim(), () => '');
@@ -277,13 +759,17 @@ export async function status(threadId) {
   const thread = store.getThread(threadId);
   if (!thread?.repo) return null;
   const full = thread.repo;
-  const dir = dirOf(full);
-  const out = { repo: full, branch: thread.repoBranch || '', main: thread.repoMain || 'main', url: `https://github.com/${full}`, cloned: fs.existsSync(path.join(dir, '.git')), files: [], commits: [], ahead: 0, pushed: false, uncommitted: false, holder: '', merged: thread.repoMerged || 0 };
-  const held = holder(full);
-  if (held && held !== threadId) {
+  const dir = dirFor(threadId, full);
+  const out = { repo: full, branch: thread.repoBranch || '', main: thread.repoMain || 'main', url: `https://github.com/${full}`, cloned: fs.existsSync(path.join(dirOf(full), '.git')), files: [], commits: [], ahead: 0, pushed: false, uncommitted: false, holder: '', merged: thread.repoMerged || 0, parallel: isParallel(full), lock: lockMode(full) };
+  // Who else is in it. In a parallel repo others working side by side do not block this
+  // thread, so only an exclusive holder is named.
+  const others = holders(full).filter((id) => id !== threadId);
+  if (others.length && (!out.parallel || out.lock === 'exclusive')) {
+    const held = others[0];
     out.holder = isJob(held) ? `The ${held.slice(4)}` : store.getThread(held)?.title || 'another thread';
     out.holderJob = isJob(held);
   }
+  if (out.parallel && others.length) out.alongside = others.length;
   if (!out.cloned || !out.branch) return out;
   return serial(full, async () => {
     const base = `origin/${out.main}`;
@@ -314,7 +800,7 @@ export async function status(threadId) {
 export async function fileDiff(threadId, file) {
   const thread = store.getThread(threadId);
   if (!thread?.repo || !thread.repoBranch) return '';
-  const dir = dirOf(thread.repo);
+  const dir = dirFor(threadId, thread.repo);
   return serial(thread.repo, async () => {
     const checkedOut = (await currentBranch(dir)) === thread.repoBranch;
     const base = `origin/${thread.repoMain || 'main'}`;
@@ -336,7 +822,7 @@ export async function push(threadId) {
   const thread = store.getThread(threadId);
   if (!thread?.repo || !thread.repoBranch) throw new Error('This thread has no branch to push.');
   if (thread.state === 'working') throw new Error('Claude is still working in this thread. Push when it is done.');
-  const dir = dirOf(thread.repo);
+  const dir = dirFor(threadId, thread.repo);
   return serial(thread.repo, async () => {
     if ((await currentBranch(dir)) === thread.repoBranch) await commitLeftovers(dir, `Work in progress: ${thread.title}`);
     await git(dir, ['push', '--quiet', '-u', 'origin', thread.repoBranch], { timeout: 180_000 });
@@ -345,18 +831,59 @@ export async function push(threadId) {
   });
 }
 
-// Merges the thread's branch into main and pushes main. Needs the working copy, so the
-// repo must not be in another thread's hands at that moment.
-export async function merge(threadId) {
+// Merges into main go one at a time per repo, also in a parallel repo: ship.js brings the
+// branch up to date with main, tests it and merges it inside this, so two branches that each
+// pass their tests cannot break main together.
+const merging = new Map(); // repo key -> promise
+export function withMergeLock(full, fn) {
+  const k = key(full);
+  const run = (merging.get(k) || Promise.resolve()).then(fn, fn);
+  merging.set(k, run.catch(() => {}));
+  return run;
+}
+
+const CLASH = (base) => `Main has changed in a way that clashes with this branch. Ask Claude in this thread to bring the branch up to date with ${base}, then merge again.`;
+
+// In a parallel repo, before the tests: main as it is now goes into the thread's branch, in
+// its worktree, so what is tested is what main will be. A clash stops it (ship.js: a turn fixes it).
+export async function catchUp(threadId) {
+  const thread = store.getThread(threadId);
+  const full = thread?.repo;
+  if (!full || !thread.repoBranch || !isParallel(full)) return false;
+  const dir = dirFor(threadId, full);
+  if (dir === dirOf(full)) return false;
+  const base = thread.repoMain || 'main';
+  return serial(full, async () => {
+    if (!(await hasRef(dir, `refs/remotes/origin/${base}`))) return false;
+    if (await git(dir, ['merge-base', '--is-ancestor', `origin/${base}`, 'HEAD']).then(() => true, () => false)) return false;
+    try {
+      await git(dir, [...(await identity(dir)), 'merge', '--quiet', '--no-edit', '-m', `Bring ${base} into "${thread.title}" before merging`, `origin/${base}`]);
+    } catch {
+      await git(dir, ['merge', '--abort']).catch(() => {});
+      throw new Error(CLASH(base));
+    }
+    log(`repos: brought ${base} into ${thread.repoBranch} of ${full} before testing it`);
+    return true;
+  });
+}
+
+// Merges the thread's branch into main and pushes main. In a repo of one thread at a time
+// this needs the working copy, so the repo must not be in another thread's hands at that
+// moment; in a parallel repo it is done in the main copy, which threads do not work in, and
+// only an exclusive holder stops it. `locked`: the caller holds the merge lock already.
+export async function merge(threadId, { locked = false } = {}) {
   const thread = store.getThread(threadId);
   if (!thread?.repo || !thread.repoBranch) throw new Error('This thread has no branch to merge.');
   if (thread.state === 'working') throw new Error('Claude is still working in this thread. Merge when it is done.');
   const full = thread.repo;
-  if (!(await acquire(full, threadId, { wait: false }))) throw new Error(`${holderName(full).replace(/^the /, 'The ')} is working in ${full} right now. Merge when it is done.`);
+  if (!(await acquire(full, threadId, { wait: false, mode: 'shared' }))) throw new Error(`${(holderName(full, threadId) || 'A thread waiting to work in it alone').replace(/^the /, 'The ')} ${holders(full).length ? 'is working' : 'goes first'} in ${full} right now. Merge when it is done.`);
   try {
     const { dir, base } = await ensure(full);
-    return await serial(full, async () => {
+    const run = () => serial(full, async () => {
       const branch = thread.repoBranch;
+      const own = dirFor(threadId, full);
+      const apart = own !== dir; // the thread has a worktree of its own
+      if (apart && (await currentBranch(own)) === branch) await commitLeftovers(own, `Work in progress: ${thread.title}`);
       if ((await currentBranch(dir)) === branch) await commitLeftovers(dir, `Work in progress: ${thread.title}`);
       else if (await dirty(dir)) await commitLeftovers(dir, 'Work in progress, saved before a merge');
       const ahead = (await git(dir, ['rev-list', '--count', `origin/${base}..${branch}`])).trim();
@@ -366,17 +893,20 @@ export async function merge(threadId) {
         await git(dir, [...(await identity(dir)), 'merge', '--quiet', '--no-ff', '-m', `Merge "${thread.title}" (${branch})`, branch]);
       } catch {
         await git(dir, ['merge', '--abort']).catch(() => {});
-        await git(dir, ['checkout', '--quiet', branch]).catch(() => {});
-        throw new Error(`Main has changed in a way that clashes with this branch. Ask Claude in this thread to bring the branch up to date with ${base}, then merge again.`);
+        if (!apart) await git(dir, ['checkout', '--quiet', branch]).catch(() => {});
+        throw new Error(CLASH(base));
       }
       await git(dir, ['push', '--quiet', 'origin', base], { timeout: 180_000 });
       const pushed = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).then(() => true, () => false);
       if (pushed) await git(dir, ['push', '--quiet', 'origin', '--delete', branch]).catch(() => {});
+      // The worktree goes before its branch: git keeps a branch a worktree has checked out.
+      if (apart) await removeWorktree(full, threadId);
       await git(dir, ['branch', '-D', branch]).catch(() => {});
       store.updateThread(threadId, { repoBranch: '', repoMerged: Date.now() });
       log(`repos: merged ${branch} into ${full} ${base}`);
       return { base };
     });
+    return await (locked || !isParallel(full) ? run() : withMergeLock(full, run));
   } finally {
     release(full, threadId);
   }
@@ -446,8 +976,24 @@ export async function rename(fromInput, toName) {
       fs.renameSync(was, dirOf(to));
       await git(dirOf(to), ['remote', 'set-url', 'origin', remoteUrl(to)]).catch(() => {});
     }
+    // Worktrees and the shared store move along; git is told where its worktrees are now.
+    const wtWas = path.join(worktreesDir(), ...from.split('/'));
+    if (fs.existsSync(wtWas)) {
+      const wtTo = path.join(worktreesDir(), ...to.split('/'));
+      fs.mkdirSync(path.dirname(wtTo), { recursive: true });
+      fs.renameSync(wtWas, wtTo);
+      const moved = fs.readdirSync(wtTo).map((n) => path.join(wtTo, n));
+      if (moved.length) await git(dirOf(to), ['worktree', 'repair', ...moved]).catch((err) => log(`repos: could not repair the worktrees of ${to}: ${err.message}`));
+    }
+    if (fs.existsSync(sharedRoot(from))) {
+      fs.mkdirSync(path.dirname(sharedRoot(to)), { recursive: true });
+      fs.renameSync(sharedRoot(from), sharedRoot(to));
+      // The links inside point to the old place: made again the next time a thread opens it.
+      for (const d of [dirOf(to), ...(fs.existsSync(path.join(worktreesDir(), ...to.split('/'))) ? fs.readdirSync(path.join(worktreesDir(), ...to.split('/'))).map((n) => path.join(worktreesDir(), ...to.split('/'), n)) : [])]) unlinkShared(d);
+    }
   });
-  if (locks.has(k)) { locks.set(key(to), locks.get(k)); locks.delete(k); }
+  if (locks.has(k)) { const L = locks.get(k); L.full = to; locks.set(key(to), L); locks.delete(k); }
+  if (settings.has(k)) { settings.set(key(to), settings.get(k)); settings.delete(k); }
   for (const t of store.listThreads()) if (t.repo && key(t.repo) === k) store.updateThread(t.id, { repo: to });
   // The brain and the app's data are repos too. GitHub forwards the old address, but the
   // clones are pointed at the new one so nothing depends on that.
