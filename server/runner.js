@@ -585,6 +585,18 @@ async function runTurn(threadId, prompt) {
       mcpServers: !config.fake && google.googleConnected() ? { google: await google.buildGoogleServer({
         // An invitation went out to other people: the thread says so, for him and for the brain update.
         onInvite: ({ title, start, invited }) => store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Claude added "${title}" (${String(start).slice(0, 16).replace('T', ' ')}) to the calendar on ${dateTimeDMY(Date.now())}, and Google sent an invitation to: ${invited.join(', ')}.]` }),
+        // A mail attachment goes onto this thread's workbench, never into the vault.
+        saveAttachment: async (file, where) => {
+          const { file: saved, again } = store.saveMailFile(threadId, file, where);
+          return {
+            path: saved,
+            name: path.basename(saved),
+            type: file.type,
+            size: file.data.length,
+            mail: `"${file.mail.subject}" from ${file.mail.from}, ${file.mail.date}`,
+            note: `${again ? 'Already downloaded in this thread. ' : ''}On the workbench, not shown to Florian: show_file hands it to him (and makes it usable as an attach: line). It goes into the vault's Files/ only when he asks for that; the brain update does it.`,
+          };
+        },
       }) } : undefined,
     };
     // No session yet but a conversation already: start from its text.

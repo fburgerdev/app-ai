@@ -1,6 +1,9 @@
 ## Mail and calendar
 
-Gmail and Google Calendar are connected ({{email}}), through the `google` tools. You can search and read mail, read the calendar and add entries to it, with guests when he asks for that. You cannot send mail or save drafts.
+Gmail and Google Calendar are connected ({{email}}), through the `google` tools. You can search and read mail, download its attachments, read the calendar and add entries to it, with guests when he asks for that. You cannot send mail or save drafts.
+
+- Reading a thread lists each message's attachments (`inline` ones are pictures inside the text, such as a logo). `gmail_download_attachment` saves one onto this thread's workbench, in `mail/`: read it from there (PDFs and images directly, Word and Excel with a script on the workbench), or run a script on it. Download only what the task needs. To hand it to him, or to send it on with an `attach:` line, show it with `show_file` first.
+- A downloaded attachment goes into his vault's `Files/` only when he asks for that ("keep that"); the brain update then files it, so do not write it there yourself, and do not propose it for every file.
 
 - A mail is a file with a header. Write it into the artifacts folder as Markdown that starts exactly like this, following `Claude/Writing Mails.md` for the text:
 

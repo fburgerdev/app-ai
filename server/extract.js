@@ -129,8 +129,30 @@ function speaker(m) {
   return 'Florian';
 }
 
-function writeThreads(dir, changed) {
-  changed.forEach(({ thread, messages, count }, i) => {
+// Mail attachments Claude downloaded in a thread, copied next to the thread file so the
+// update can file one into Files/ when Florian asked for it. One that is not on this
+// computer (downloaded on the other one) is fetched again from Gmail.
+export async function mailFileLines(thread, filesDir) {
+  const lines = [];
+  for (const f of thread.mailFiles || []) {
+    const dest = path.join(filesDir, `mail - ${safeFileName(f.name, 120)}`);
+    const said = `- "${f.name}", attached to the mail "${f.subject}" from ${f.from} (${f.date}), downloaded ${dateTimeDMY(f.at)}`;
+    try {
+      fs.mkdirSync(filesDir, { recursive: true });
+      const src = store.mailFilePath(thread.id, f.name);
+      if (src) fs.copyFileSync(src, dest);
+      else if (google.googleConnected()) fs.writeFileSync(dest, (await google.gmailAttachment({ messageId: f.messageId, part: f.part })).data);
+      else throw new Error('not on this computer, and Gmail is not connected');
+      lines.push(`${said}: \`${dest}\``);
+    } catch (err) {
+      lines.push(`${said}: could not be fetched (${err.message})`);
+    }
+  }
+  return lines;
+}
+
+async function writeThreads(dir, changed) {
+  for (const [i, { thread, messages, count }] of changed.entries()) {
     const n = String(i + 1).padStart(2, '0');
     const filesDir = path.join(dir, `${n} files`);
     const artifactLines = [];
@@ -160,6 +182,7 @@ function writeThreads(dir, changed) {
         attached.set(f.name, dest);
       }
     }
+    const mailLines = await mailFileLines(thread, filesDir);
     const render = (m) => `### ${speaker(m)}, ${dateTimeDMY(m.ts)}\n\n${messageText(m) || '(no text)'}${m.files?.length ? `\n\n[He attached: ${m.files.map((f) => `"${f.name}"${attached.has(f.name) ? ` at \`${attached.get(f.name)}\`` : ''}`).join(', ')}]` : ''}`;
     const upTo = messages.slice(0, count);
     let earlier = upTo.slice(0, thread.extractedCount).map(render).join('\n\n');
@@ -179,6 +202,7 @@ function writeThreads(dir, changed) {
       '',
       artifactLines.length ? artifactLines.join('\n') : 'None.',
       '',
+      ...(mailLines.length ? ['## Mail attachments Claude downloaded in this thread', '', ...mailLines, ''] : []),
       '## Earlier (filed by a previous brain update; context only, do not file again)',
       '',
       earlier || 'Nothing.',
@@ -189,7 +213,7 @@ function writeThreads(dir, changed) {
       '',
     ].join('\n');
     fs.writeFileSync(path.join(dir, `Thread ${n} ${safeFileName(thread.title, 60)}.md`), text);
-  });
+  }
 }
 
 function writeCards(dir, cards) {
@@ -348,7 +372,7 @@ async function writeBrain(id, changed, pressedAt, mailOnly, dir, state) {
 
     const material = [];
     if (changed.length) {
-      writeThreads(dir, changed);
+      await writeThreads(dir, changed);
       material.push(`- ${changed.length} thread file${changed.length === 1 ? '' : 's'} ("Thread NN ….md"), each with its files in a folder next to it`);
     }
 
