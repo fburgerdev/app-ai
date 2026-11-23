@@ -81,7 +81,7 @@ When the app sorts a thread wrongly, correct it with **Later** in the thread's h
 
 A line in `Core/Next Actions.md` and a thread in the inbox are two states of the same to-do.
 
-- The lines show in the inbox drawer under **Next actions**, below Done, asleep. Click one and click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a brief, and the next brain update takes the line out of the file.
+- The lines show in **Brain** (the outline on the right, or the Brain tab in the inbox drawer) under **Next actions**, just before Someday, asleep. Click one and click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a brief, and the next brain update takes the line out of the file.
 - **Defer**, next to Send, puts any thread to sleep: it moves under Next actions, and the next brain update writes its to-do into `Next Actions.md` (with where you left off; text in the box is kept for that) and deletes the thread. Replying in a deferred thread wakes it again.
 - **Done** is the same button as "Send and done": with an empty box it closes the thread (also Alt+X), with text it keeps the message and closes without an answer.
 
@@ -157,9 +157,10 @@ These two buttons are the only things in the app that file facts into the vault,
 
 ## The outline
 
-The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Look.
+The outline on the right, **Brain**, has four slides; scroll sideways (it snaps) or click the switch on top. People, Next and Someday can be switched off in Settings → Look. The GitHub mark beside its name opens the vault's repo (`brainRepo`) on GitHub.
 
 - **Projects**: the **areas** in the order of `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`; areas not in it follow alphabetically, and the line at the foot opens that file), each with its active projects below it, most recently dealt with first (your latest message in one of its threads, or the last change to its note). Paused projects (`Status: paused` in the project's note) are folded away under their own line and unfold on hover. An area with no project right now is grey.
+- **Next**: the lines of `Core/Next Actions.md`, asleep, and deferred threads (see "Next actions, Done and Defer").
 - **Someday**: each item newest first, the parked old actions under their own heading; **+** starts a thread on the item: do it now, keep it, or fold it.
 - **People**: everyone in `Core/People/`, in four groups from the `Status:` line in each person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**. Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
 
@@ -168,7 +169,7 @@ On every slide:
 - A dot after a name means it has open threads; the project of the open thread is highlighted. A long name runs onto a second line; the full name is in the tooltip.
 - Hover a row for **+**: a new thread on it, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
 - At the foot of Projects: **Start a thread on every** active or paused project, or area (about which project to start there). Each asks once more, and skips what already has an open thread.
-- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Folders** tab in the inbox. Inbox and Folders sit side by side: swipe sideways (or scroll sideways on a trackpad) and the drawer snaps to the other one; the arrow keys on the tabs do the same. Carrying a thread over the Folders tab slides the drawer there, so it can be dropped on a folder.
+- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Brain** tab in the inbox, with the slides one below the other and the link to GitHub on top. Inbox and Brain sit side by side: swipe sideways (or scroll sideways on a trackpad) and the drawer snaps to the other one; the arrow keys on the tabs do the same. Carrying a thread over the Brain tab slides the drawer there, so it can be dropped on a folder.
 
 The order is the vault's, not the app's: change a `Status:` line or the 30,000 ft list (ask Claude in a thread) and the outline follows.
 

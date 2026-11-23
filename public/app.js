@@ -61,10 +61,10 @@ const PARTS = [
   { group: 'Inbox drawer', key: 'coming', label: 'Events coming later', sel: '[data-part="coming"]' },
   { group: 'Inbox drawer', key: 'opportunities', label: 'Look for opportunities', sel: '.group-foot' },
   { group: 'Inbox drawer', key: 'done-list', label: 'Done', sel: '.group[data-drop="done"]' },
-  { group: 'Inbox drawer', key: 'next-actions', label: 'Next actions, asleep', sel: '[data-part="next-actions"]' },
   { group: 'Inbox drawer', key: 'gmail', label: 'Update Gmail', sel: '.brain-gmail, .brain-sub.is-mail' },
-  { group: 'Right bar', key: 'tree', label: 'The right bar (Folders moves into the inbox drawer)', sel: '' },
+  { group: 'Right bar', key: 'tree', label: 'The right bar (Brain moves into the inbox drawer)', sel: '' },
   { group: 'Right bar', key: 'tree-people', label: 'People', sel: '.slide-tab[data-part="tree-people"]', redraw: true },
+  { group: 'Right bar', key: 'tree-next', label: 'Next actions, asleep', sel: '[data-part="tree-next"]', redraw: true },
   { group: 'Right bar', key: 'tree-someday', label: 'Someday', sel: '.slide-tab[data-part="tree-someday"]', redraw: true },
   { group: 'Right bar', key: 'tree-paused', label: 'Paused projects', sel: '[data-part="tree-paused"]' },
   { group: 'Right bar', key: 'tree-bulk', label: 'A thread on every active / paused / area', sel: '[data-part="tree-bulk"]' },
@@ -400,7 +400,6 @@ function queueLists() {
     h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
     ...(S.showDone ? closed.map(railItem) : []),
   ], toggle, 'done'));
-  parts.push(...sleepingSection());
   return parts;
 }
 
@@ -431,42 +430,60 @@ document.getElementById('focus-toggle').addEventListener('click', async () => {
 setInterval(() => { if (S.settings.focus?.on && !focusOn()) { S.settings = { ...S.settings, focus: { on: false, until: 0 } }; renderFocus(); renderRail(); } }, 60_000);
 
 // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
-// brain update writes their line. Waking one asks once more, in place: a next action
-// started by accident is a real nuisance.
+// brain update writes their line. They sit in Brain (the right bar, or the drawer's Brain
+// tab), just before Someday, since he looks at them only when asking what needs doing
+// (Florian, 23-11-2026). Waking one asks once more, in place: a next action started by
+// accident is a real nuisance.
 let armedWake = '';
-function sleepingSection() {
+function nextNodes(withHead = false) {
   const asleep = S.next?.actions || [];
   const deferred = (S.next?.deferred || []).filter((d) => S.threads.get(d.id)?.deferred);
   for (const t of all()) if (t.deferred && !t.archived && !deferred.some((d) => d.id === t.id)) deferred.push({ id: t.id, title: t.title, project: t.project || '' });
-  if (asleep.length || deferred.length) {
-    const wake = async (a, button) => {
-      // Once more, in place: the first click only arms it.
-      if (armedWake !== a.text) {
-        armedWake = a.text;
-        renderRail();
-        setTimeout(() => { if (armedWake === a.text) { armedWake = ''; renderRail(); } }, 4000);
-        return;
-      }
-      armedWake = '';
-      button.disabled = true;
-      try {
-        const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
-        S.threads.set(out.thread.id, out.thread);
-        S.next = { ...S.next, actions: S.next.actions.filter((x) => x !== a) };
-        openThread(out.thread.id);
-      } catch (err) { toast(err.message); button.disabled = false; }
-    };
-    return [section('Next actions', asleep.length + deferred.length, [
+  const n = asleep.length + deferred.length;
+  if (!n) return withHead ? [] : [h('p', { class: 'tree-note' }, 'Nothing in Next Actions.')];
+  const wake = async (a, button) => {
+    // Once more, in place: the first click only arms it.
+    if (armedWake !== a.text) {
+      armedWake = a.text;
+      renderTree();
+      setTimeout(() => { if (armedWake === a.text) { armedWake = ''; renderTree(); } }, 4000);
+      return;
+    }
+    armedWake = '';
+    button.disabled = true;
+    try {
+      const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
+      S.threads.set(out.thread.id, out.thread);
+      S.next = { ...S.next, actions: S.next.actions.filter((x) => x !== a) };
+      openThread(out.thread.id);
+      renderTree();
+    } catch (err) { toast(err.message); button.disabled = false; }
+  };
+  return [
+    withHead ? h('div', { class: 'tree-head', dataset: { part: 'tree-next' } }, h('span', { class: 'tree-label' }, 'Next actions'), h('span', { class: 'tree-n' }, String(n))) : null,
+    h('div', { class: 'sleep-list', dataset: { part: 'tree-next' } },
       ...asleep.map((a) => h('button', { class: `item sleep-item${armedWake === a.text ? ' is-armed' : ''}`, type: 'button', dataset: { id: `na-${a.text.slice(0, 40)}` }, title: `${a.show}\n\nAsleep in Next Actions.md. Waking it makes it a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
         h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, armedWake === a.text ? '→' : 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show),
           h('span', { class: 'sleep-sub' }, armedWake === a.text ? 'Click again to start it' : (a.project || 'no project'))))),
       ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: { id: d.id }, title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
         h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
-        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
-    ], null, null, 'next-actions')];
-  }
-  return [];
+        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update'))))),
+  ].filter(Boolean);
+}
+
+// The vault on GitHub, from `brainRepo`; nothing when it is not a GitHub repo (a local
+// path, as in the tests).
+function brainRepoUrl() {
+  const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(String(S.config?.brainRepo || ''));
+  return m ? `https://github.com/${m[1]}/${m[2]}` : '';
+}
+function brainRepoLink(withName = false) {
+  const url = brainRepoUrl();
+  if (!url) return null;
+  return h('a', { class: `brain-gh${withName ? ' has-name' : ''}`, href: url, target: '_blank', rel: 'noopener', title: `Open the brain on GitHub (${url.replace('https://github.com/', '')})`, 'aria-label': 'Open the brain on GitHub' },
+    svg('<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'),
+    withName ? h('span', {}, url.replace('https://github.com/', '')) : null);
 }
 
 // Events not open yet are folded under one quiet line; hovering or clicking it unfolds
@@ -711,12 +728,13 @@ function somedayNodes(items, withHead = false) {
   ].filter(Boolean);
 }
 
-// The outline is up to three slides side by side: projects under their areas; people;
-// Someday. Swipe or scroll sideways and it snaps; the words on top jump. People and
-// Someday can be switched off in Settings → Layout.
+// The outline, Brain, is up to four slides side by side: projects under their areas;
+// people; next actions; Someday. Swipe or scroll sideways and it snaps; the words on top
+// jump. All but Projects can be switched off in Settings → Layout.
 const SLIDES = [
   { key: 'projects', label: 'Projects' },
   { key: 'people', label: 'People', part: 'tree-people' },
+  { key: 'next', label: 'Next', title: 'Next actions', part: 'tree-next' },
   { key: 'someday', label: 'Someday', part: 'tree-someday' },
 ];
 const shownSlides = () => SLIDES.filter((s) => !s.part || arranging || !partHidden(s.part));
@@ -726,7 +744,7 @@ function slideNodes() {
   if (Array.isArray(nodes)) return nodes;
   const slides = shownSlides();
   if (!slides.some((s) => s.key === tree.slide)) tree.slide = 'projects';
-  const content = { projects: nodes.first, people: nodes.second, someday: nodes.third };
+  const content = { projects: nodes.first, people: nodes.second, next: nextNodes(), someday: nodes.third };
   // A click slides straight there; the slides passed on the way do not light their tab.
   let heading = null;
   const go = (i) => {
@@ -737,9 +755,11 @@ function slideNodes() {
   };
   const nav = slides.length > 1
     ? h('div', { class: 'slide-nav', role: 'tablist' }, ...slides.map((s, i) => h('button', {
-      class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
+      class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', title: s.title || null, dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
     }, s.label)))
     : h('div', { class: 'slide-nav is-single' }, h('span', { class: 'slide-title' }, slides[0].label));
+  // On top: its name, and the way to the vault on GitHub.
+  const top = h('div', { class: 'brain-top' }, h('span', { class: 'brain-title' }, 'Brain'), brainRepoLink());
   const box = h('div', { class: 'slides' }, ...slides.map((s) => h('div', { class: 'slide' }, ...content[s.key])));
   box.addEventListener('scroll', () => {
     if (heading) {
@@ -749,12 +769,12 @@ function slideNodes() {
     const i = Math.round(box.scrollLeft / Math.max(1, box.clientWidth));
     if (slides[i] && slides[i].key !== tree.slide) { tree.slide = slides[i].key; markSlide(); }
   }, { passive: true });
-  return [nav, box];
+  return [top, nav, box];
 }
 function markSlide() { els.tree.querySelectorAll('.slide-tab').forEach((b, i) => b.classList.toggle('is-on', i === slideIndex())); }
 
 // The right bar is there on a wide window, unless he switched it off; then the outline
-// is under "Folders" in the inbox drawer, as on a narrower window.
+// is under "Brain" in the inbox drawer, as on a narrower window.
 const treeShown = () => wide.matches && !partHidden('tree');
 
 function renderTree(force = false) {
@@ -776,8 +796,11 @@ function renderTree(force = false) {
 function drawerTree() {
   const n = treeNodes();
   if (Array.isArray(n)) return n;
-  return [...n.first,
+  const link = brainRepoLink(true);
+  return [...(link ? [h('div', { class: 'brain-top is-drawer' }, link)] : []),
+    ...n.first,
     ...(partHidden('tree-people') ? [] : n.second),
+    ...(partHidden('tree-next') ? [] : nextNodes(true)),
     ...(partHidden('tree-someday') ? [] : somedayNodes(S.projects?.someday || [], true))];
 }
 function renderFolders() {
@@ -1750,10 +1773,11 @@ async function deferThread() {
     draftPending.delete(t.id);
     const out = await api('POST', `/api/threads/${t.id}/defer`, { text: els.input.value.trim() });
     S.threads.set(t.id, out.thread);
+    renderTree();
     els.input.value = '';
     autosize();
     forgetDraft(t.id);
-    toast('Deferred. It sleeps under Next actions; the next brain update writes it into Next Actions.md.');
+    toast('Deferred. It sleeps under Next actions in Brain; the next brain update writes it into Next Actions.md.');
     advance(t.id);
   } catch (err) { toast(err.message); }
 }
@@ -2776,7 +2800,7 @@ function fillLayout(body) {
       h('h4', { class: 'layout-head' }, g),
       ...PARTS.filter((p) => p.group === g).map((p) => h('label', { class: 'check layout-row' },
         h('input', { type: 'checkbox', checked: !hidden.has(p.key), onchange: (e) => setPart(p.key, e.target.checked) }), ` ${p.label}`))))),
-    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Folders in the inbox drawer.'));
+    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Brain in the inbox drawer.'));
 }
 
 // "Pick on the page": everything that can go is outlined; a click hides it, or brings a
@@ -3465,7 +3489,7 @@ function onThread(t) {
     S.brain.waiting = all().filter(isUnfiled).length;
     renderBrain();
   }
-  if (!before || before.project !== t.project || before.state !== t.state || before.title !== t.title) renderTree();
+  if (!before || before.project !== t.project || before.state !== t.state || before.title !== t.title || before.deferred !== t.deferred || before.archived !== t.archived) renderTree();
 }
 
 function onMessage({ threadId, message }) {
