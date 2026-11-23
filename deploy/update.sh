@@ -1,10 +1,15 @@
 #!/bin/sh
 # Keeps the app on the Pi up to date with GitHub.
 #
-# Run by app-ai-update.timer every few minutes. When GitHub has something new it waits
-# until Claude is not working on anything (at most an hour), pulls, installs, restarts
-# the app, and checks that it came back. If it did not, it goes back to the version that
-# ran before and leaves the new one alone until GitHub changes again.
+# Run by app-ai-update.timer every few minutes, and by the app itself (systemctl --user
+# start app-ai-update) when Florian locked it for the update and nothing runs any more.
+# When GitHub has something new it waits until Claude is not working on anything, pulls,
+# installs, restarts the app, and checks that it came back. If it did not, it goes back to
+# the version that ran before and leaves the new one alone until GitHub changes again.
+#
+# It never cuts off Claude's work by itself (Florian, 23-11-2026): until 23-11-2026 it
+# restarted anyway after an hour. Now the page shows a line that a new version is there;
+# "Update now" there leaves the file "force" here, and only that skips the waiting.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -18,20 +23,23 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git fetch -q origin "$BRANCH" || { say "could not reach GitHub"; exit 0; }
 OLD="$(git rev-parse HEAD)"
 NEW="$(git rev-parse "origin/$BRANCH")"
-if [ "$OLD" = "$NEW" ]; then rm -f "$STATE/waiting-since"; exit 0; fi
+if [ "$OLD" = "$NEW" ]; then rm -f "$STATE/waiting-since" "$STATE/waiting-said" "$STATE/force"; exit 0; fi
 if [ -f "$STATE/bad" ] && [ "$(cat "$STATE/bad")" = "$NEW" ]; then exit 0; fi
+
+# "Update now" on the page: at once, whatever runs.
+FORCE=0
+if [ -f "$STATE/force" ]; then FORCE=1; rm -f "$STATE/force"; fi
 
 # Never restart while the night prune is in the middle of a part: that part would be lost.
 # (Between parts, and while it waits for the usage limit, it picks up again after a restart.)
-if health | grep -q '"pruning":true'; then say "new version ${NEW%"${NEW#???????}"} is waiting: the night prune is running"; exit 0; fi
+if [ "$FORCE" = 0 ] && health | grep -q '"pruning":true'; then say "new version ${NEW%"${NEW#???????}"} is waiting: the night prune is running"; exit 0; fi
 
-# Do not restart in the middle of Claude's work, unless it has gone on for an hour.
-if health | grep -q '"busy":true'; then
-  [ -f "$STATE/waiting-since" ] || date +%s > "$STATE/waiting-since"
-  waited=$(( $(date +%s) - $(cat "$STATE/waiting-since") ))
-  if [ "$waited" -lt 3600 ]; then say "new version ${NEW%"${NEW#???????}"} is waiting: Claude is working"; exit 0; fi
+# Do not restart in the middle of Claude's work. The page offers to lock for the update.
+if [ "$FORCE" = 0 ] && health | grep -q '"busy":true'; then
+  [ -f "$STATE/waiting-said" ] && [ "$(cat "$STATE/waiting-said")" = "$NEW" ] || { say "new version ${NEW%"${NEW#???????}"} is waiting: Claude is working"; echo "$NEW" > "$STATE/waiting-said"; }
+  exit 0
 fi
-rm -f "$STATE/waiting-since"
+rm -f "$STATE/waiting-since" "$STATE/waiting-said"
 
 install() { npm install --omit=dev --no-audit --no-fund >> "$STATE/update.log" 2>&1; }
 restart() { systemctl --user restart app-ai; }

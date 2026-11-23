@@ -208,12 +208,15 @@ function toast(text) {
 const LIMIT_NAMES = { five_hour: 'five-hour limit', seven_day: 'weekly limit', seven_day_opus: 'weekly limit', seven_day_sonnet: 'weekly limit', seven_day_overage_included: 'weekly limit', overage: 'extra-usage limit' };
 // What a held thread waits for: the usage limit, or carrying on by itself (retry.js).
 function heldText(held) {
+  if (held.kind === 'gate') return gateText(held);
   const at = holdClock(held.until);
   if (held.kind === 'retry') return `Ended on an error · tries again by itself at ${at}`;
   if (held.kind === 'continue') return `Waiting for ${held.reason || 'work still running'} · carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge · Claude fixes it by itself at ${at}`;
   return `Held by the ${LIMIT_NAMES[held.type] || 'usage limit'} · carries on at ${at}`;
 }
+// Waiting for the lock (an update or a handover): it starts once that is through.
+const gateText = (held) => (held.reason === 'handover' ? 'Queued for the handover · starts on the Pi' : 'Queued for the update · starts after the restart');
 function holdClock(ts) {
   const d = new Date(ts);
   const hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -340,13 +343,15 @@ function kindLabel(t) {
 
 function railItem(t) {
   let sub = '';
-  if (t.state === 'working' && t.held) sub = `${t.held.kind && t.held.kind !== 'limit' ? 'Carries on by itself' : 'Held: carries on'} at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
+  const gated = t.state === 'working' && t.held?.kind === 'gate';
+  if (gated) sub = `${gateText(t.held)}${t.doneAfter ? ', closes when finished' : ''}`;
+  else if (t.state === 'working' && t.held) sub = `${t.held.kind && t.held.kind !== 'limit' ? 'Carries on by itself' : 'Held: carries on'} at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.activityAt && Date.now() - t.activityAt > 60_000 ? ` · ${ago(t.activityAt)}` : ''}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
   return h('button', {
-    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}${t.later === true ? ' is-later' : ''}`,
+    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}${t.later === true ? ' is-later' : ''}${gated ? ' is-gated' : ''}`,
     type: 'button',
     title: t.title,
     dataset: { id: t.id },
@@ -1178,6 +1183,8 @@ function renderBrain() {
     if (b.mail) rows.push(h('p', { class: 'brain-sub is-mail' }, b.mailLevel ? `Mail is taken in up to ${stamp(b.mailLevel)}` : 'No mail taken in yet; the first time looks back one day'));
     if (b.brain.error) rows.push(h('p', { class: 'brain-sub is-error' }, b.brain.error));
   }
+  // Pressed while the app was locked for an update or a handover: it runs once that is through.
+  if (b.held?.gate && !b.running) rows.push(h('p', { class: 'brain-sub is-gated' }, b.held.gate === 'handover' ? `${b.held.only === 'mail' ? 'Gmail update' : 'Brain update'} queued for the handover: runs once the Pi has taken over` : `${b.held.only === 'mail' ? 'Gmail update' : 'Brain update'} queued for the update: runs once the app has restarted`));
   if (b.last && !b.running) {
     const last = b.last;
     const what = last.mailOnly ? 'Gmail update' : 'update';
@@ -1629,9 +1636,9 @@ function renderHead() {
     if (t.state === 'ready') actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbd('Alt S')));
   } else if (t.state === 'working') {
     status = t.held
-      ? h('span', { class: 'status status-held' }, heldText(t.held))
+      ? h('span', { class: `status ${t.held.kind === 'gate' ? 'status-gated' : 'status-held'}` }, heldText(t.held))
       : h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held ? 'Cancel the hold' : 'Stop'));
+    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held?.kind === 'gate' ? 'Take it back' : t.held ? 'Cancel the hold' : 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
   } else if (t.state === 'ready') {
@@ -1690,6 +1697,23 @@ function renderHead() {
   }
   if (t.state !== 'working') actions.push(deleteButton(t));
   els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, actions), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
+  markGated(t);
+}
+
+// While a thread waits for the lock, what he sent since Claude's last answer is shown in
+// the queued colour, so it is plain that it has not started yet.
+function markGated(t) {
+  const gated = t?.state === 'working' && t.held?.kind === 'gate';
+  const all = [...els.messages.children];
+  let tail = true;
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    const el = all[i];
+    if (el.classList.contains('msg-claude')) tail = false;
+    if (!el.classList.contains('msg-you')) continue;
+    el.classList.toggle('is-gated', gated && tail);
+    const time = el.querySelector('.msg-time');
+    if (time && gated && tail) time.dataset.gateNote = t.held.reason === 'handover' ? 'queued, starts on the Pi after the handover' : 'queued, starts after the update';
+  }
 }
 
 function renderComposer() {
@@ -1704,7 +1728,7 @@ function renderComposer() {
     els.input.placeholder = 'What should Claude work on?';
     verb = 'Start';
   } else if (t.state === 'working') {
-    els.input.placeholder = t.held ? (t.held.kind && t.held.kind !== 'limit' ? 'Reply. Claude starts on it at once.' : 'Add to this thread. Claude gets it when the limit lifts.') : 'Add to this thread. Then pick: Claude reads it now, or it runs next.';
+    els.input.placeholder = t.held ? (t.held.kind === 'gate' ? 'Add to it. It goes along when it starts.' : t.held.kind && t.held.kind !== 'limit' ? 'Reply. Claude starts on it at once.' : 'Add to this thread. Claude gets it when the limit lifts.') : 'Add to this thread. Then pick: Claude reads it now, or it runs next.';
     verb = t.held?.kind && t.held.kind !== 'limit' ? 'Send' : 'Add';
   } else {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
@@ -1733,11 +1757,14 @@ function updateButton() {
         offline: 'GitHub is not reachable right now.',
         skipped: 'The newest version did not start last time, so the app stays on this one.',
         busy: 'A check is already running; try again in a moment.',
+        'not-restarted': "The Pi's update script did not restart the app; see its update.log.",
         error: `It did not work: ${r.status?.error || 'see the log'}.`,
       }[r.outcome];
       if (r.outcome === 'waiting') {
-        out.replaceChildren(`A new version (${r.status.waiting}) is waiting until Claude has finished. `,
-          h('button', { class: 'link', type: 'button', onclick: () => go(true) }, 'Update now anyway'), ' (cuts off what Claude is doing).');
+        out.replaceChildren(`A new version (${r.status.available || r.status.waiting}) is there while Claude works. `,
+          h('button', { class: 'link', type: 'button', onclick: async () => { try { await api('POST', '/api/update/lock', { on: true }); out.textContent = 'Locked: the app updates as soon as nothing runs.'; checkUpdate(); } catch (err) { out.textContent = err.message; } } }, 'Lock for update'),
+          ' (waits for it) or ', h('button', { class: 'link', type: 'button', onclick: () => go(true) }, 'update now'), ' (cuts it off).');
+        checkUpdate();
       } else out.textContent = say || r.outcome;
     } catch (err) { out.textContent = err.message; }
     button.disabled = false;
@@ -2142,6 +2169,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   if (data.thread.kind === 'card') { await renderCard(data.thread); return; }
   S.live = data.thread.state === 'working' ? (data.live || []) : null;
   els.messages.replaceChildren(...data.messages.map((m) => messageEl(id, m)));
+  markGated(data.thread);
   enter(els.messages);
   placeLevel();
   renderQueued();
@@ -3103,7 +3131,7 @@ function renderStatus() {
       ...(st.busy.cards ? ['the card run is through'] : []),
     ];
     text = l.step === 'Waiting for Claude to finish here'
-      ? `Handover as soon as ${finished.join(' and ') || 'Claude has finished here'}. Keep awake.`
+      ? `Handover as soon as ${finished.join(' and ') || 'Claude has finished here'}. Anything new is queued and starts on the ${pi.toLowerCase()}. Keep awake.`
       : `Handover: ${l.step.toLowerCase()}… Keep awake.`;
     buttons.push(act('Cancel', 'local', { quiet: true }));
   } else if (l.enabled && l.step && onPi) {
@@ -3200,6 +3228,63 @@ async function checkStatus() {
 }
 checkStatus();
 setInterval(() => { if (!document.hidden) checkStatus(); }, 4000);
+
+// ---------- a new version of the app ----------
+//
+// Florian, 23-11-2026: the app never locks by itself for an update. While Claude works, a
+// line at the top says a new version is there. "Lock for update" lets what runs finish,
+// queues everything new (in its own colour), and restarts as soon as nothing runs; then
+// what was queued starts. "Update now" takes it at once and cuts off what runs (that
+// carries on by itself after the restart). On the phone and when handed over, this is
+// the Pi's version. The lock for a handover is shown in the status row, not here.
+
+let updateNow = null;
+let updateNoteSeen = null;
+function renderUpdate() {
+  const bar = document.getElementById('updatebar');
+  const u = updateNow;
+  const forUpdate = u?.lock?.locked && u.lock.reason === 'update';
+  if (!u || (!u.available && !forUpdate && !u.applying)) { bar.hidden = true; return; }
+  const waits = u.waitsFor || [];
+  const post = async (route, body) => {
+    try { const out = await api('POST', route, body); updateNow = out.status ? { ...updateNow, ...out.status } : updateNow; renderUpdate(); setTimeout(checkUpdate, 300); } catch (err) { toast(err.message); }
+  };
+  const btn = (label, onclick, { quiet = false, title = '' } = {}) => h('button', { class: `btn ${quiet ? 'btn-quiet' : ''} status-btn`, type: 'button', title, onclick }, label);
+  const now = btn('Update now', () => post('/api/update/check', { force: true }), { quiet: true, title: waits.length ? `Takes the new version at once and cuts off what runs (${waits.map((w) => w.title).join(', ')}). That carries on by itself after the restart.` : 'Takes the new version at once.' });
+  let text;
+  const buttons = [];
+  if (u.applying) text = 'Updating: the app restarts and this page reloads in a moment.';
+  else if (forUpdate) {
+    text = waits.length ? `Locked for the update: waiting for ${quoted(waits)}. Anything new is queued.` : 'Locked for the update: restarting…';
+    if (u.queued) text += ` ${plural(u.queued, 'thing', 'things')} queued.`;
+    buttons.push(btn('Unlock', () => post('/api/update/lock', { on: false }), { quiet: true, title: 'Work as usual again; what was queued starts now.' }));
+    if (waits.length) buttons.push(now);
+  } else {
+    text = `New version of the app${u.subject ? `: ${clip(u.subject, 80)}` : ''}.`;
+    buttons.push(btn('Lock for update', () => post('/api/update/lock', { on: true }), { title: 'What runs finishes; everything new (your messages, Claude carrying on, the brain update) waits in its own colour. As soon as nothing runs, the app restarts and starts what waited.' }));
+    buttons.push(now);
+  }
+  bar.hidden = false;
+  bar.className = `updatebar${forUpdate || u.applying ? ' is-locked' : ''}`;
+  bar.replaceChildren(h('span', { class: 'update-dot', 'aria-hidden': 'true' }), h('span', { class: 'status-text' }, text), h('span', { class: 'status-actions' }, buttons));
+}
+
+async function checkUpdate() {
+  try {
+    const next = await (await fetch('/api/update')).json();
+    // Why a lock ended without an update, once.
+    if (updateNoteSeen !== null && next.note && next.note !== updateNoteSeen) toast(next.note);
+    updateNoteSeen = next.note || '';
+    updateNow = next;
+    renderUpdate();
+  } catch { /* the app is restarting, or not running */ }
+}
+checkUpdate();
+// Often while locked, so the line follows what still runs; otherwise now and then (the
+// live updates say when a new version comes in).
+setInterval(() => { if (!document.hidden && (updateNow?.lock?.locked || updateNow?.applying || updateNow?.available)) checkUpdate(); }, 4000);
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 60_000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStatus(); });
 
 // ---------- usage: what Claude used through this app ----------
@@ -3596,6 +3681,7 @@ function onMessage({ threadId, message }) {
   if (liveEl?.isConnected) liveEl.before(el);
   else if (box) box.before(el);
   else els.messages.append(el);
+  markGated(S.threads.get(threadId));
   placeLevel();
   if (message.role === 'assistant') upgradeMailCards();
   if (stick || message.role === 'user') els.scroller.scrollTop = els.scroller.scrollHeight;
@@ -3644,6 +3730,7 @@ function connect() {
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
+  on('update', () => checkUpdate());
   // The page listens first and reads the state second, so nothing that happens in
   // between is missed. After a lost connection it reads the state again.
   let started = false;
