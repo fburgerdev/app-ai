@@ -1,8 +1,9 @@
 // Gmail and Google Calendar for threads.
 //
 // The app talks to Google directly, signed in as you through your own Google Cloud
-// project (docs/google.md). Claude gets a small set of tools: search and read mail, read
-// the calendar, add a calendar entry. There is no tool that sends mail or deletes
+// project (docs/google.md). Claude gets a small set of tools: search and read mail,
+// download an attachment onto the thread's workbench, read the calendar, add a calendar
+// entry. There is no tool that sends mail or deletes
 // anything, so a thread cannot do those whatever it is told. A calendar entry can carry
 // guests, who get Google's invitation (Florian's yes, 17-11-2026); the thread then gets a
 // note saying who was invited.
@@ -255,12 +256,42 @@ export async function gmailSearch({ query, max = 10 }) {
   return out;
 }
 
+// The files a message carries: every part with a file name, by its part id, which stays
+// the same for a message (Gmail's attachment ids do not). Pictures shown inside the text
+// (a logo in a signature) are marked inline, so they can be told from real attachments.
+function walkParts(payload, fn) {
+  const walk = (part) => {
+    if (!part) return;
+    fn(part);
+    for (const child of part.parts || []) walk(child);
+  };
+  walk(payload);
+}
+
+export function attachmentsOf(payload) {
+  const out = [];
+  walkParts(payload, (part) => {
+    if (!part.filename || !(part.body?.attachmentId || part.body?.data)) return;
+    const disposition = (part.headers || []).find((h) => h.name.toLowerCase() === 'content-disposition')?.value || '';
+    out.push({
+      part: String(part.partId ?? ''),
+      name: part.filename,
+      type: part.mimeType || fileType(part.filename),
+      size: part.body.size || 0,
+      ...(/^\s*inline/i.test(disposition) ? { inline: true } : {}),
+    });
+  });
+  return out;
+}
+
 export async function gmailReadThread({ threadId }) {
   const thread = await api(`${GMAIL}/threads/${encodeURIComponent(threadId)}?format=full`);
   return (thread.messages || []).map((m) => {
     let text = bodyText(m.payload);
     if (text.length > 20_000) text = `${text.slice(0, 20_000)}\n[cut: the message is longer]`;
+    const files = attachmentsOf(m.payload);
     return {
+      messageId: m.id,
       date: header(m, 'Date'),
       from: header(m, 'From'),
       to: header(m, 'To'),
@@ -268,8 +299,30 @@ export async function gmailReadThread({ threadId }) {
       subject: header(m, 'Subject'),
       labels: (m.labelIds || []).filter((l) => ['SENT', 'INBOX', 'DRAFT'].includes(l)),
       text,
+      ...(files.length ? { attachments: files } : {}),
     };
   });
+}
+
+// One attachment of a message, whole: { name, type, data (a Buffer), mail }. Fetched by
+// the message and the part, so it can be fetched again later (on another computer, by
+// the brain update) without anything stored but those two.
+export async function gmailAttachment({ messageId, part }) {
+  const m = await api(`${GMAIL}/messages/${encodeURIComponent(messageId)}?format=full`);
+  let found = null;
+  walkParts(m.payload, (p) => { if (!found && p.filename && String(p.partId) === String(part)) found = p; });
+  if (!found) throw new Error(`The mail ${messageId} has no attachment in part "${part}". Read its thread again for the list of its attachments.`);
+  let b64 = found.body?.data;
+  if (!b64) {
+    if (!found.body?.attachmentId) throw new Error(`The attachment "${found.filename}" is empty.`);
+    b64 = (await api(`${GMAIL}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(found.body.attachmentId)}`)).data;
+  }
+  return {
+    name: found.filename,
+    type: found.mimeType || fileType(found.filename),
+    data: Buffer.from(String(b64 || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64'),
+    mail: { threadId: m.threadId, subject: header(m, 'Subject'), from: header(m, 'From'), date: header(m, 'Date') },
+  };
 }
 
 // Creates a draft, or replaces one saved earlier (so a revised mail stays one draft).
@@ -433,7 +486,9 @@ export async function calendarCreate({ title, start, end, allDay, location, desc
 // ---------- the tools a thread gets ----------
 
 // `onInvite({ title, start, invited })` is told when an entry went out with guests.
-export async function buildGoogleServer({ onInvite } = {}) {
+// `saveAttachment(file, { messageId, part })` keeps a downloaded attachment on the
+// thread's workbench and says where; without it there is no download tool.
+export async function buildGoogleServer({ onInvite, saveAttachment } = {}) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   const reply = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 1) }] });
@@ -451,8 +506,10 @@ export async function buildGoogleServer({ onInvite } = {}) {
     tools: [
       tool('gmail_search', 'Search Florian\'s mail with Gmail search syntax (from:, to:, subject:, newer_than:7d, in:sent, is:unread …). Returns the newest matching messages with their thread ids.',
         { query: z.string(), max: z.number().int().min(1).max(25).optional() }, guarded(gmailSearch)),
-      tool('gmail_read_thread', 'Read every message of one mail thread, oldest first.',
+      tool('gmail_read_thread', 'Read every message of one mail thread, oldest first. A message with files lists them under `attachments` (part, name, type, size; `inline` for pictures inside the text, like a logo).',
         { threadId: z.string() }, guarded(gmailReadThread)),
+      ...(saveAttachment ? [tool('gmail_download_attachment', 'Download one attachment of a mail onto this thread\'s workbench, to read it (PDFs and images with Read, Word and Excel with a script), run a script on it, or hand it to Florian with show_file. The messageId and part come from gmail_read_thread. Download only what the task needs.',
+        { messageId: z.string(), part: z.string() }, guarded(async ({ messageId, part }) => saveAttachment(await gmailAttachment({ messageId, part }), { messageId, part })))] : []),
       tool('calendar_list', 'List the entries in Florian\'s calendar between two moments (ISO 8601).',
         { from: z.string(), to: z.string(), query: z.string().optional(), max: z.number().int().min(1).max(100).optional() }, guarded(calendarList)),
       tool('calendar_create', 'Add an entry to Florian\'s own calendar. For allDay give dates (YYYY-MM-DD) with the end date being the day after the last day. With `guests`, Google sends each of them an invitation by mail at once.',

@@ -286,6 +286,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__continue_later': return `Carries on by itself in ${Math.round(Number(input.minutes) || 10)} min: ${clip(input.why || 'work still running', 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
     case 'mcp__google__gmail_read_thread': return 'Read a mail thread';
+    case 'mcp__google__gmail_download_attachment': return 'Downloaded a mail attachment';
     case 'mcp__google__calendar_list': return 'Looked at your calendar';
     case 'mcp__google__calendar_create': return `Added to your calendar: ${clip(input.title, 60)}${input.guests?.length ? `, inviting ${clip(input.guests.join(', '), 60)}` : ''}`;
     case 'TodoWrite':

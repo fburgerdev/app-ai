@@ -29,6 +29,8 @@ A thread that worked in a GitHub repo shows it in its events: what was pushed, m
 
 A file Florian attached to a message is something he gave Claude to work with. Its path is next to his message. Read it when what he said about it needs it; file what he stated, not the file's content as such, unless he asked for it to be kept (then it belongs in `Files/` under the vault's rules).
 
+A mail attachment Claude downloaded in a thread is listed under "Mail attachments Claude downloaded", with its path. It is treated the same way: it goes into `Files/` only where Florian asked in the "New" part for it to be kept, named and linked under the vault's rules (the date the document carries, else the date of the mail). A document of the kind the vault keeps encrypted (a contract, a certificate, an ID, anything with a secret in it) goes in only encrypted, as the vault's "Secrets" says; if you cannot encrypt it, leave it out and put it under Questions.
+
 Most chats hold little that is durable. A thread with nothing to file is a normal result: skip it.
 
 ## Notes for Claude

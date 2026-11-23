@@ -6,6 +6,7 @@
 //   threads/<id>/artifacts/       the files Claude chose to show Florian, as they are now
 //   threads/<id>/work/            Claude's workbench: scripts, installed libraries, pages
 //                                 rendered on the way. Never shown, never synced.
+//   threads/<id>/work/mail/       mail attachments Claude downloaded (see saveMailFile)
 //   threads/<id>/versions/        every earlier state of each artifact
 //   threads/<id>/artifacts.json   which versions exist
 
@@ -259,6 +260,37 @@ export function attachFiles(id, pending) {
 export function uploadPath(id, name) {
   const file = path.join(uploadsDir(id), path.basename(String(name)));
   return fs.existsSync(file) ? file : null;
+}
+
+// Mail attachments Claude downloaded in a thread. They sit on its workbench (work/mail/),
+// with the scripts that use them, and like the workbench they stay on the computer that
+// downloaded them. The thread remembers each one (`mailFiles`: the mail's message id and
+// part), so the brain update can fetch it again from Gmail wherever it runs, and file it
+// into the vault's Files/ when Florian asked for that.
+export const mailDir = (id) => path.join(workDir(id), 'mail');
+const fileNameOf = (name) => String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(-120).trim() || 'attachment';
+
+export function mailFilePath(id, name) {
+  const file = path.join(mailDir(id), path.basename(String(name)));
+  return fs.existsSync(file) ? file : null;
+}
+
+// Saves one downloaded attachment. The same one asked for again is not stored twice.
+export function saveMailFile(id, { name, data, mail = {} }, { messageId, part }) {
+  if (!threads.has(id)) throw new Error('This thread is gone.');
+  const list = threads.get(id).mailFiles || [];
+  const known = list.find((f) => f.messageId === messageId && f.part === String(part));
+  if (known && mailFilePath(id, known.name)) return { file: path.join(mailDir(id), known.name), entry: known, again: true };
+  fs.mkdirSync(mailDir(id), { recursive: true });
+  const clean = fileNameOf(name);
+  const ext = path.extname(clean);
+  const stem = clean.slice(0, clean.length - ext.length);
+  let final = known?.name || clean;
+  if (!known) for (let n = 2; fs.existsSync(path.join(mailDir(id), final)); n += 1) final = `${stem} (${n})${ext}`;
+  fs.writeFileSync(path.join(mailDir(id), final), data);
+  const entry = { name: final, messageId, part: String(part), subject: mail.subject || '', from: mail.from || '', date: mail.date || '', at: Date.now() };
+  updateThread(id, { mailFiles: [...list.filter((f) => f !== known), entry] });
+  return { file: path.join(mailDir(id), final), entry, again: false };
 }
 
 // Removes a thread for good: its conversation, its files and their versions. What a

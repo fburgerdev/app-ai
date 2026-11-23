@@ -4,6 +4,7 @@ The app signs in to Google as you, through a Google Cloud project that belongs t
 
 ## What threads can do afterwards
 
+- Threads can download a mail's attachments onto their own workbench, to read them, fill them in or show them to you. One goes into the vault's `Files/` only when you ask for it in the thread; the brain update files it. Reading mail already covers attachments, so there is nothing to connect again.
 - Threads can search and read your mail, read your calendar, and add an entry to it. Entries they add are orange (Pumpkin) and can carry a Google Meet link. Guests are invited only when you ask for it in the thread: Google then mails them the invitation, and the thread gets a note saying who was invited.
 - A mail Claude writes gets two buttons: **Put in Gmail** (a draft) and **Send** (after one confirmation). Only your click uses them.
 - Sending a reply archives its conversation in Gmail (out of the inbox, still in All Mail; an answer brings it back) and closes the thread in the app.
