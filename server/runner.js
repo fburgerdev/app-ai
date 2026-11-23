@@ -19,7 +19,7 @@ import { logRead, logToolRead } from './reads.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { messageText, readPrompt, todayLine, dateTimeDMY, voiceActivity } from './util.js';
+import { messageText, readPrompt, todayLine, dateDMY, dateTimeDMY, voiceActivity } from './util.js';
 import { getState, TIERS, TIER_NAMES } from './state.js';
 import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
 import { lastThreadOn } from './threadexport.js';
@@ -43,6 +43,90 @@ export function initRunner(cfg) {
   config = cfg;
   ship.onMergeFailed(mergeFailed);
   repos.onGranted((full, threadId) => resumeParked(full, threadId));
+}
+
+// "Run it again" in a brain update's thread: extract.js says how (it imports this file,
+// so it hands the function over instead of being imported here).
+let rerunBrain = null;
+export const onRerunBrain = (fn) => { rerunBrain = fn; };
+
+// What he wrote into a thread while something other than a turn worked on it (a brain
+// update running in its own thread) is answered once that is over.
+export function runPending(threadId) {
+  const t = store.getThread(threadId);
+  const pending = t?.pending || [];
+  if (!pending.length || isRunning(threadId)) return false;
+  store.updateThread(threadId, { pending: [] }, { quiet: true });
+  startTurn(threadId, pending.join('\n\n'));
+  return true;
+}
+
+// ---------- a brain update's thread files what he says in it ----------
+//
+// Florian, 23-11-2026: the update runs in a thread of its own, and his answers there go
+// into the brain right away, not with the next press. Such a turn takes the vault the way
+// the brain update does (the vault's repo lock, then the working tree), writes into it,
+// and the app commits and pushes when the turn ends. If the turn fails, what it wrote is
+// thrown away and the conversation stays unfiled, so the next brain update files it.
+
+const FILING_PROMPT = [
+  '[The app: this is the thread of a brain update (or of the night prune), so unlike other threads this turn writes the vault itself. What Florian says below answers the update\'s questions, corrects it, or adds something. File it now, directly in the vault (the folder you work in), with Write and Edit, under the vault\'s rules in `Claude/Instructions.md`: attribution, edit in place, and the four action files only with his confirmation; his answer to a question that proposed a line is that confirmation.',
+  '`Threads/` and `Archive/` are not yours to edit. You cannot move or delete files here; if something needs that, say so in one line and leave it for the next brain update. Do not commit or push: the app commits and pushes when this turn ends.',
+  'If he wants the update run again ("retry", "try again"), call run_brain_update_again and end the turn. If he asks you to look into why it failed, do that like any thread (open the app\'s repo to fix code).',
+  'Reply in one short sentence, plus a question only if one is still open. Do not say that the next brain update will file it: this turn does.]',
+].join(' ');
+
+const FILING_SYSTEM = [
+  '## This thread is a brain update',
+  '',
+  'This thread is a brain update Florian started with the button (or the report of the night prune). Unlike every other thread, its turns write into the vault directly, as the brain update does, and the app commits and pushes when a turn ends. Where the rules above say that a thread never writes the vault or that the next brain update files what he says, that does not hold here.',
+].join('\n');
+
+async function beginFiling(threadId, thread, activity) {
+  const vault = repos.vaultRepo(config.brainRepo);
+  if (vault) {
+    if (repos.holder(vault) && repos.holder(vault) !== threadId) activity(`Waiting for ${repos.holderName(vault)}, which is changing the vault`);
+    await repos.acquire(vault, threadId);
+  }
+  const giveBack = await brain.takeWriter(`the thread "${thread.title}"`, { onWait: (who) => activity(`Waiting for ${who}`) });
+  try {
+    activity('Getting the vault up to date');
+    await brain.pullForWriting();
+  } catch (err) {
+    giveBack();
+    if (vault) repos.release(vault, threadId);
+    throw err;
+  }
+  let ended = false;
+  return {
+    // ok: commit what the turn wrote, and count the conversation up to `upTo` as filed.
+    async end(ok, upTo = 0) {
+      if (ended) return null;
+      ended = true;
+      let out = null;
+      try {
+        if (ok) {
+          activity('Filing into the brain');
+          out = await brain.commitAndPush({
+            subject: `thinking: answers in the brain update, ${dateDMY()}`,
+            body: `Co-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: app-ai thread ${threadId}`,
+          }) || { nothing: true };
+          const t = store.getThread(threadId);
+          if (t) store.updateThread(threadId, { extractedCount: Math.max(t.extractedCount || 0, upTo), extractedAt: Date.now() });
+        } else {
+          await brain.discardChanges();
+        }
+      } catch (err) {
+        log(`thread "${thread.title}": what it filed could not be committed: ${err.stack || err.message}`);
+        await brain.discardChanges().catch(() => {});
+        out = { error: err.message };
+      } finally {
+        giveBack();
+        if (vault) repos.release(vault, threadId);
+      }
+      return out;
+    },
+  };
 }
 
 // Whether a turn of this thread runs in this process right now.
@@ -124,6 +208,23 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     return message;
   }
   startTurn(threadId, withUnsent, auto);
+  return message;
+}
+
+// Florian answers a proposed line with its Yes or No button (Florian, 23-11-2026: "they
+// should be taken into account for the next response as well as for brain updates").
+// The click starts no turn. It goes into the thread as a note, which the brain update
+// reads as his answer, and it goes in first with his next message, so Claude knows it
+// too. A second click on the same line is his new answer.
+export function recordConfirm(threadId, { line, group = '', answer }) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('No such thread');
+  const yes = answer === 'yes';
+  const text = `[Florian ${yes ? 'confirmed' : 'declined'} with the ${yes ? 'Yes' : 'No'} button, ${dateTimeDMY(Date.now())}, the proposed line${group ? ` under "${group}"` : ''}: ${line}]`;
+  const message = store.appendMessage(threadId, { role: 'user', event: true, text, confirm: { line, group, answer: yes ? 'yes' : 'no' } });
+  // An earlier click on the same line is replaced, not stacked.
+  const unsent = (thread.unsent || []).filter((u) => !(u.startsWith('[Florian confirmed with') || u.startsWith('[Florian declined with')) || !u.endsWith(`: ${line}]`));
+  store.updateThread(threadId, { unsent: [...unsent, text] });
   return message;
 }
 
@@ -782,6 +883,8 @@ async function runTurn(threadId, prompt) {
   // What he added while Claude was working: started only once this turn has cleaned up,
   // so the cleanup below never takes the new turn's slot, repo or secrets with it.
   let followUp = '';
+  let filing = null;
+  const turnStart = Date.now();
   try {
     activity('Getting the vault up to date');
     await brain.refresh();
@@ -797,10 +900,11 @@ async function runTurn(threadId, prompt) {
     const tier = await tierFor(threadId, prompt);
     run.tier = tier.name;
     store.updateThread(threadId, { lastTier: tier.name }, { quiet: true });
+    if (thread.filesItself) filing = await beginFiling(threadId, thread, activity);
 
     const base = {
       cwd: brain.brainDir(),
-      systemAppend: threadInstructions(store.getThread(threadId)),
+      systemAppend: thread.filesItself ? `${threadInstructions(store.getThread(threadId))}\n\n${FILING_SYSTEM}` : threadInstructions(store.getThread(threadId)),
       repoDir,
       reposDir: config.reposDir,
       repoRoots: [repos.dirsForPolicy().worktrees, repos.dirsForPolicy().shared],
@@ -812,7 +916,12 @@ async function runTurn(threadId, prompt) {
       workDir,
       showFile,
       readDirs: [store.uploadsDir(threadId)],
-      protectedPaths: config.protectedPaths,
+      protectedPaths: thread.filesItself ? [...config.protectedPaths, brain.THREADS_FOLDER, brain.ARCHIVE_FOLDER] : config.protectedPaths,
+      vaultWrite: Boolean(filing),
+      rerunBrain: thread.kind === 'brain-update' && typeof thread.brainOnly === 'string' && rerunBrain ? async () => {
+        run.rerun = true;
+        return 'The app runs the brain update again in this thread as soon as this turn ends. End the turn now, with one short line.';
+      } : undefined,
       shell: config.threadShell,
       artifactsShell: config.artifactsShell !== false,
       repoShared,
@@ -852,13 +961,14 @@ async function runTurn(threadId, prompt) {
     };
     // No session yet but a conversation already: start from its text.
     const cold = !thread.sessionId && store.readMessages(threadId).length > 1;
-    let result = await runAgent({ ...base, prompt: cold ? recap(threadId, prompt) : prompt, resume: thread.sessionId || undefined });
+    const ask = filing ? `${FILING_PROMPT}\n\n${prompt}` : prompt;
+    let result = await runAgent({ ...base, prompt: cold ? recap(threadId, ask) : ask, resume: thread.sessionId || undefined });
     if (thread.sessionId && result.error && /no conversation found|session.*(not found|does not exist)/i.test(result.error)) {
       log(`session ${thread.sessionId} is gone; continuing thread ${threadId} from its transcript`);
       run.parts.length = 0;
       run.text = '';
       store.updateThread(threadId, { sessionId: null });
-      result = await runAgent({ ...base, prompt: recap(threadId, prompt), resume: undefined });
+      result = await runAgent({ ...base, prompt: recap(threadId, ask), resume: undefined });
     }
 
     // How big the conversation is now and when it was last read: Claude keeps what it
@@ -879,6 +989,19 @@ async function runTurn(threadId, prompt) {
     if (limited) message.limit = { type: limited.type || '' };
     else if (result.error) message.error = result.error;
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
+
+    // A brain update's thread: what the turn wrote into the vault is committed now, or
+    // thrown away if the turn did not finish. Messages of his that came in after the turn
+    // started (and that it did not read) stay unfiled for the next turn.
+    if (filing) {
+      const ok = !result.error && !result.aborted && !limited;
+      const msgs = store.readMessages(threadId);
+      const after = msgs.findIndex((m) => m.role === 'user' && !m.steered && (m.ts || 0) > turnStart);
+      const out = await filing.end(ok, after < 0 ? msgs.length : after);
+      filing = null;
+      if (out?.error) store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[The app could not commit what this turn filed (${out.error}). None of it is in the brain; the next brain update files this conversation.]` });
+      else if (out && out.pushed === false) store.appendMessage(threadId, { role: 'user', event: true, auto: true, text: `[Filed and committed, but the push failed (${out.pushError}). The app pushes it the next time it reaches GitHub.]` });
+    }
 
     // The repo is saved and given back before the thread shows as ready, so nothing
     // Florian does next (another repo, merging) meets a turn still holding it.
@@ -989,6 +1112,8 @@ async function runTurn(threadId, prompt) {
       if (config.voice.enabled || walking) spokenDigest(threadId, walking ? voiceActivity.lang : 'en').catch(() => {});
     }
   } finally {
+    // A turn that broke off still gives the vault back, with nothing of it kept.
+    if (filing) await filing.end(false).catch(() => {});
     // What a turn decrypted is gone once it ends.
     secrets.dropEnvFile(threadId);
     try { fs.rmSync(decryptedDir, { recursive: true, force: true }); } catch { /* next turn */ }
@@ -1001,6 +1126,10 @@ async function runTurn(threadId, prompt) {
     // Its background jobs ended with it.
     if (store.getThread(threadId)?.background?.length) store.updateThread(threadId, { background: [] }, { quiet: true });
     emitLive({ op: 'end' });
+    // Claude asked for the brain update to run again in this thread (he said "retry").
+    if (run.rerun && !followUp && rerunBrain && store.getThread(threadId)) {
+      try { rerunBrain(threadId); } catch (err) { log(`brain update could not run again: ${err.stack || err.message}`); }
+    }
     // The repo came free while this parked turn was still ending: it carries on at once.
     if (run.parked && run.parkGranted) setImmediate(() => { const t = store.getThread(threadId); if (t) resumeParked(run.park.repo, threadId); });
     // The follow-up takes the slot this turn had; the waiting line moves only if it is free.

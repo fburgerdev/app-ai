@@ -330,7 +330,7 @@ body.is-dragging .group-drop { display: block; }
 .group-drop { display: none; margin: 2px 8px 6px; padding: 9px 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--faint); font-size: 12.5px; }
 
 .rail-top { padding: 14px 14px 6px; }
-/* Inbox and Folders side by side: swipe or scroll sideways and it snaps to one of them. */
+/* Inbox and Brain side by side: swipe or scroll sideways and it snaps to one of them. */
 .rail-lists {
   flex: 1; min-height: 0;
   display: flex;
@@ -756,6 +756,51 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .md .callout-warning .callout-title, .md .callout-important .callout-title, .md .callout-question .callout-title { color: var(--you); }
 .md .callout-danger, .md .callout-bug, .md .callout-failure { border-left-color: var(--bad); background: rgba(255, 143, 143, 0.08); }
 .md .callout-danger .callout-title, .md .callout-bug .callout-title, .md .callout-failure .callout-title { color: var(--bad); }
+
+/* The blocks of a reply (Florian, 23-11-2026): square, a thin rule and a coloured label;
+   only "Your move" and the lines to confirm are tinted, so the eye lands there first. */
+.md .block { border-radius: 0; background: none; border-left: 2px solid var(--b); padding: 0.1em 0 0.1em 0.9em; margin: 0 0 1em; color: var(--read); }
+.md .block .callout-title { font: 700 0.72em/1.4 var(--sans); text-transform: uppercase; letter-spacing: 0.08em; color: var(--b); margin-bottom: 0.25em; }
+.md .callout-move, .md .callout-confirm { --b: var(--you); border-left-width: 4px; padding: 0.7em 1em; background: color-mix(in srgb, var(--you) 12%, transparent); }
+.md .callout-take { --b: var(--work); }
+.md .callout-found { --b: var(--bad); }
+.md details.callout-done { --b: var(--done); border-left: 2px solid var(--b); background: color-mix(in srgb, var(--done) 8%, transparent); padding: 0.4em 0.9em; margin: 0 0 1em; font-size: 0.88em; }
+.md details.callout-done > summary { display: flex; align-items: baseline; gap: 0.6em; cursor: pointer; list-style: none; }
+.md details.callout-done > summary::-webkit-details-marker { display: none; }
+.md details.callout-done > summary .callout-title { margin: 0; flex: none; }
+.md details.callout-done .done-hint { color: var(--muted); flex: 1; min-width: 0; }
+.md details.callout-done > summary::after { content: '▸'; color: var(--faint); margin-left: auto; }
+.md details.callout-done[open] > summary::after { content: '▾'; }
+.md details.callout-done.is-empty > summary { cursor: default; }
+.md details.callout-done.is-empty > summary::after { content: none; }
+.md details.callout-done .done-body { margin-top: 0.5em; color: var(--text); }
+.md details.callout-done .done-body > :last-child { margin-bottom: 0; }
+.md .block > :last-child { margin-bottom: 0; }
+:root .md blockquote.block, :root .md details.block { color: var(--read); }
+
+/* Lines to confirm: Yes and No on each. The click goes into the thread (app.js). */
+.md li.confirm-line { position: relative; min-height: 2.1em; padding: 0.35em 7.4em 0.35em 0; margin: 0; border-top: 1px solid color-mix(in srgb, var(--you) 18%, transparent); }
+.md li.confirm-line:first-child { border-top: 0; }
+.md li.confirm-line > .confirm-btns { position: absolute; right: 0; top: 0.3em; display: inline-flex; gap: 0.35em; }
+.md .confirm-btn { font: 600 0.78em/1 var(--sans); padding: 0.38em 0.8em; border: 1px solid var(--you); background: transparent; color: var(--you); cursor: pointer; border-radius: 0; }
+.md .confirm-btn.confirm-no { border-color: var(--faint); color: var(--muted); }
+.md .confirm-btn:hover { background: color-mix(in srgb, var(--you) 16%, transparent); }
+.md .confirm-btn:disabled { opacity: 0.5; cursor: default; }
+.md li.confirm-line.is-yes .confirm-yes { background: var(--you); color: var(--you-ink); }
+.md li.confirm-line.is-no .confirm-no { background: var(--faint); color: var(--ground); border-color: var(--faint); }
+.md li.confirm-line.is-no { color: var(--muted); text-decoration: line-through; }
+.panel .md .confirm-btns, .msg-you .confirm-btns { display: none !important; }
+
+/* Notes during an event, under the file in the side panel. Enter makes a new line. */
+.notes-box { flex: none; border-top: 1px solid var(--line); padding: 12px 26px 16px; display: flex; flex-direction: column; gap: 8px; background: var(--rail); }
+.notes-box.is-alone { flex: 1; border-top: 0; padding-top: 22px; }
+.notes-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font: 650 0.85em/1.4 var(--sans); color: var(--head); }
+.notes-state { font: 400 0.82em/1.4 var(--sans); color: var(--muted); }
+.notes-box textarea { width: 100%; min-height: 120px; height: 22vh; resize: vertical; border: 1px solid var(--line); border-radius: 0; background: var(--sunken); color: var(--read); padding: 10px 12px; font: 0.95em/1.5 var(--sans); }
+.notes-box.is-alone textarea { flex: 1; height: auto; }
+.notes-box textarea:focus { outline: none; border-color: var(--you); }
+.notes-acts { display: flex; justify-content: flex-end; }
+@media (max-width: 760px) { .notes-box { padding: 10px 16px 14px; } }
 
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 1.6em 0; }
 .md img { max-width: 100%; border-radius: 6px; }
@@ -1484,6 +1529,11 @@ a.chip:hover { border-color: var(--muted); }
 .stats .stats-label { text-align: left; color: var(--text); }
 .stats .stats-group th { text-align: left; padding-top: 12px; color: var(--muted); font: 650 11px/1 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; }
 .stats td.is-zero { color: var(--faint); opacity: 0.6; }
+/* The first count, before anything is kept: grey bars in the table's shape. */
+.stats-bar { display: inline-block; vertical-align: middle; width: 22px; height: 9px; border-radius: 3px; background: var(--line); animation: stats-pulse 1.4s ease-in-out infinite; }
+.stats-bar.is-wide { width: 140px; }
+@keyframes stats-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .stats-bar { animation: none; } }
 
 /* The two parts of the queue: deep work first, small things in between. */
 .queue-part { margin: 6px 8px 2px 21px; color: var(--faint); font-size: 11.5px; letter-spacing: 0.02em; }
@@ -1695,6 +1745,16 @@ body.is-booting .shell { visibility: hidden; }
 .slide-tab:hover { color: var(--text); }
 .slide-tab.is-on { background: var(--raised); color: var(--bright); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
 .slide-nav.is-single { background: none; padding: 3px 4px; }
+/* Four tabs in a narrow bar: a little less room around each word. */
+.slide-nav:not(.is-single) .slide-tab { padding: 6px 4px; }
+/* Its name on top, and the way to the vault on GitHub. */
+.brain-top { display: flex; align-items: center; gap: 6px; margin: 12px 14px -4px 18px; flex: none; }
+.brain-top.is-drawer { justify-content: flex-end; margin: 6px 8px 0; }
+.brain-title { flex: 1; color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; }
+.brain-gh { display: inline-flex; align-items: center; gap: 5px; padding: 3px; border-radius: 6px; color: var(--faint); font-size: 11.5px; text-decoration: none; }
+.brain-gh:hover, .brain-gh:focus-visible { color: var(--text); background: var(--panel); }
+.brain-gh svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.brain-gh.has-name { padding: 3px 6px; }
 .slide-title { color: var(--faint); font: 650 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; }
 .slide { padding: 2px 8px 28px; }
 
@@ -1745,7 +1805,7 @@ body.is-booting .shell { visibility: hidden; }
 .tree-bulk .out-start { padding: 3px 8px; border-color: var(--line); }
 .tree-foot .tree-sub { width: auto; margin: 0; padding: 0; }
 
-/* ---------- no right bar: its lists are under Folders in the drawer ---------- */
+/* ---------- no right bar: its lists are under Brain in the drawer ---------- */
 .app.no-tree { --tree-w: 0px; }
 .app.no-tree > .tree { display: none; }
 .app.no-tree .tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }

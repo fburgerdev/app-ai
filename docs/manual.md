@@ -7,14 +7,14 @@ Everything the app does, feature by feature. What it is, how to install it and w
 - **The top bar** is always there: the inbox button with the number waiting, Focus, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **The outline** on the right: projects and areas, People and Someday (see "The outline" below).
-- **Settings** opens as a window: General (sleep time, what the queue has learned), Look (light or dark, and the layout), Keys, Connections (Google, calling by phone, saving the state), Stats, About (the version and where the app runs).
-- **Layout** (Settings → Look) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
+- **Settings** opens as a window: General (light or dark, sleep time), Layout (which parts of the page show), Queue (what the queue has learned), Shortcuts, Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
+- **Layout** (Settings → Layout) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
 
 ## The queue
 
 The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from two things.
 
-- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → General. Your own lines are kept.
+- **What it has learned.** Every choice you make is recorded: what you reply to, requeue, close, drag, spin off, open by hand instead of what was offered, which cards you accept or decline, and the reasons you give. Every 30 choices a model rewrites a short profile from that record. You can read and correct it: Settings → Queue. Your own lines are kept.
 - **Otherwise:** things with a date or that block others first, then what has waited longest, kinds mixed.
 
 The order is worked out in the background, so moving on never waits for a model. Under the heading you see in a few words why the first one is first. You can always click any thread yourself.
@@ -91,7 +91,7 @@ When an event is over, its thread asks "how was it?". Your first message after t
 
 A line in `Core/Next Actions.md` and a thread in the inbox are two states of the same to-do.
 
-- The lines show in the inbox drawer under **Next actions**, below Done, asleep. Click one and click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a brief, and the next brain update takes the line out of the file.
+- The lines show in **Brain** (the outline on the right, or the Brain tab in the inbox drawer) under **Next actions**, just before Someday, asleep. Click one and click again to confirm, and it **wakes**: it becomes a thread in the inbox that opens with a brief, and the next brain update takes the line out of the file.
 - **Defer**, next to Send, puts any thread to sleep: it moves under Next actions, and the next brain update writes its to-do into `Next Actions.md` (with where you left off; text in the box is kept for that) and deletes the thread. Replying in a deferred thread wakes it again.
 - **Done** is the same button as "Send and done": with an empty box it closes the thread (also Alt+X), with text it keeps the message and closes without an answer.
 
@@ -153,7 +153,9 @@ For every thread in which Claude made something (a mail, a document, a deck, a s
 
 **The threads themselves go into the vault too.** Before the commit, the app writes every thread you said or did something in as a Markdown file into `Threads/` (`YYYY-MM-DD Title.md`): the conversation, each turn labelled with who said it, and the final text of the files Claude made. No tool output, and no model is involved: `server/threadexport.js` makes the files from the app's data, which stays the original, and writes each one again on every update, so the two cannot drift. A thread the app has deleted since keeps its file. The vault then has two layers: `Core/` (the notes: dense, current, read by default) and `Threads/` with `Archive/` (finished projects' notes, frozen), which a thread only searches. One exception: a thread on a project is told which thread on that project came last, and reads it in full once.
 
-Then the app makes one `thinking:` commit and pushes. What the vault says needs your confirmation is not written; it comes back as a thread called "Brain update …: questions".
+Then the app makes one `thinking:` commit and pushes.
+
+**Each update runs in a thread of its own**, "Brain update DD-MM-YYYY HH:MM", made the moment you press the button (click "Updating the brain" in the drawer to watch its steps; pressing again while it runs opens it). It ends in one short sentence, its questions and any problem, and nothing else. With no questions and no problem it closes itself and never enters the inbox. Otherwise it waits in the inbox, and in Focus. Answer there: that thread writes your answers into the vault and commits them at once (`thinking: answers in the brain update, …`), so they do not wait for the next press. What the vault says needs your confirmation is asked there and not written until you answer. If the update fails, it says so in the same thread instead of opening a Repair thread: say "retry" and it runs again in that thread, or ask Claude there to look into it. The night prune's morning thread works the same way.
 
 **Update Gmail**, next to it, is the mail part by itself, with its own water level: everything received and sent since mail was last taken in (the first time: the last day). What matters is filed in the brain, sent mail gets its Waiting For row, and a mail that needs your answer becomes a thread in the queue with Claude already drafting the reply. Under the buttons you see up to when mail has been taken in.
 
@@ -167,9 +169,10 @@ These two buttons are the only things in the app that file facts into the vault,
 
 ## The outline
 
-The outline on the right has three slides; scroll sideways (it snaps) or click the switch on top. People and Someday can be switched off in Settings → Look.
+The outline on the right, **Brain**, has four slides; scroll sideways (it snaps) or click the switch on top. People, Next and Someday can be switched off in Settings → Layout. The GitHub mark beside its name opens the vault's repo (`brainRepo`) on GitHub.
 
 - **Projects**: the **areas** in the order of `Core/Horizons/30,000 ft Goals.md` (a numbered list, `1. [[Area]] — where it should stand`; areas not in it follow alphabetically, and the line at the foot opens that file), each with its active projects below it, most recently dealt with first (your latest message in one of its threads, or the last change to its note). Paused projects (`Status: paused` in the project's note) are folded away under their own line and unfold on hover. An area with no project right now is grey.
+- **Next**: the lines of `Core/Next Actions.md`, asleep, and deferred threads (see "Next actions, Done and Defer").
 - **Someday**: each item newest first, the parked old actions under their own heading; **+** starts a thread on the item: do it now, keep it, or fold it.
 - **People**: everyone in `Core/People/`, in four groups from the `Status:` line in each person's file: **Your move**, **Keep warm**, **Waiting** (hover for what), **Nothing open**. Inside a group, longest since you dealt with them first. **+** starts a thread on the person.
 
@@ -178,7 +181,7 @@ On every slide:
 - A dot after a name means it has open threads; the project of the open thread is highlighted. A long name runs onto a second line; the full name is in the tooltip.
 - Hover a row for **+**: a new thread on it, with its notes loaded. Click a row to read its note. Drag a thread from the inbox onto a row to file it there.
 - At the foot of Projects: **Start a thread on every** active or paused project, or area (about which project to start there). Each asks once more, and skips what already has an open thread.
-- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Folders** tab in the inbox. Inbox and Folders sit side by side: swipe sideways (or scroll sideways on a trackpad) and the drawer snaps to the other one; the arrow keys on the tabs do the same. Carrying a thread over the Folders tab slides the drawer there, so it can be dropped on a folder.
+- When the window is too narrow for the outline (and on the phone), or the right bar is switched off in Layout, it is the **Brain** tab in the inbox, with the slides one below the other and the link to GitHub on top. Inbox and Brain sit side by side: swipe sideways (or scroll sideways on a trackpad) and the drawer snaps to the other one; the arrow keys on the tabs do the same. Carrying a thread over the Brain tab slides the drawer there, so it can be dropped on a folder.
 
 The order is the vault's, not the app's: change a `Status:` line or the 30,000 ft list (ask Claude in a thread) and the outline follows.
 
@@ -271,7 +274,7 @@ Most of the time the status is only the small item in the top bar. The row under
 - **Handing over to the Pi locks the same way.** From the click until the handover has gone through, everything new waits in teal as *Queued for the handover*, and the Pi starts it once it has taken over.
 - **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
 - **A message nobody answered.** A message sent just as the work moved between the laptop and the Pi could end up in a thread with no turn to take it up. The app looks for such messages every minute (on the computer doing the work, for messages of the last six hours) and starts the turn itself, with a note in the thread. After Stop it does not.
-- **Anything else fails** (a brain update, the card run, saving, updating, a crash): the app opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like any thread's work, the thread closes, and the self-update takes it (and goes back if the new version does not start). If the tests fail, the thread waits in the inbox. One repair thread per kind of error per day. Turn it off with `"repair": { "auto": false }`, or only its merging with `"repair": { "autoMerge": false }`.
+- **Anything else fails** (the card run, saving, updating, a crash): the app opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like any thread's work, the thread closes, and the self-update takes it (and goes back if the new version does not start). If the tests fail, the thread waits in the inbox. One repair thread per kind of error per day. Turn it off with `"repair": { "auto": false }`, or only its merging with `"repair": { "autoMerge": false }`.
 
 ### Usage limits: held, then carried on
 
@@ -321,7 +324,7 @@ App data is in its own folder, outside the vault (`APP_AI_DATA` sets another):
 | macOS | `~/Library/Application Support/app-ai` |
 | Linux | `~/.local/share/app-ai` |
 
-That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`dataRepo`): threads and their files, water levels, the tier setting, the queue's record and profile, the card log. Settings → Connections shows when it last saved.
+That folder is a git repository. Every two minutes, and after every brain update, the app commits what changed and pushes it to the data repo (`dataRepo`): threads and their files, water levels, the tier setting, the queue's record and profile, the card log. Settings → System → Backup to GitHub shows when it last saved.
 
 Never committed: `config.json` and `google-token.json` (they hold secrets), the brain clone, the repo clones, logs, and each thread's workbench (`threads/<id>/work/`).
 

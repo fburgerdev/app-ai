@@ -37,7 +37,7 @@ function speaker(m) {
 // conversations, and a thread the app started that he never touched holds only Claude.
 export function isExported(thread, messages) {
   if (!thread || thread.kind === 'card') return false;
-  return messages.some((m) => m.role === 'user' && (!m.auto || m.event));
+  return Boolean(thread.notes?.text?.trim()) || messages.some((m) => m.role === 'user' && (!m.auto || m.event));
 }
 
 // The file for one thread, as text. A secret value in it (Florian typed one, or a file
@@ -79,6 +79,7 @@ export function renderThread(thread, messages) {
     '',
     turns.join('\n\n') || 'Nothing said yet.',
     '',
+    ...(thread.notes?.text?.trim() ? [`## Florian's notes during the entry (typed by him, last changed ${dateTimeDMY(thread.notes.ts)})`, '', thread.notes.text.trim(), ''] : []),
     ...(files.length ? ['## Files Claude made in this thread', '', ...files] : []),
   ].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
   return redact(text);

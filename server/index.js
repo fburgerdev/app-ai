@@ -29,7 +29,7 @@ import { buildPolicy, runAgent } from './agent.js';
 import { git as runGit } from './git.js';
 import { initShip, isShipping, anyShipping, onMerged } from './ship.js';
 import { initPi } from './pi.js';
-import { stats } from './stats.js';
+import { stats, recount as recountStats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
@@ -127,7 +127,8 @@ const pruner = createPruner({
   createReport: ({ title, text }) => {
     const thread = store.createThread({ title, kind: 'brain-update' });
     store.appendMessage(thread.id, { role: 'assistant', parts: [{ type: 'text', text }] });
-    store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'The night prune: what went in, and its questions' });
+    // Like a brain update's thread, it files his answers itself (runner.js, `filesItself`).
+    store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'The night prune: what went in, and its questions', filesItself: true });
     datasync.saveNow('prune report').catch(() => {});
     return thread.id;
   },
@@ -479,7 +480,7 @@ app.get('/api/threads/:id', (req, res) => {
   res.json({
     thread,
     messages: store.readMessages(thread.id),
-    live: runner.liveParts(thread.id),
+    live: runner.liveParts(thread.id) || extraction.liveParts(thread.id),
     artifacts: store.listArtifacts(thread.id),
   });
 });
@@ -625,7 +626,12 @@ app.post('/api/next-actions/wake', (req, res) => {
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
 // What happened, counted by week (server/stats.js).
-app.get('/api/stats', (req, res) => { try { res.json(stats()); } catch (err) { res.status(500).json({ error: err.message }); } });
+// It answers with the kept count at once; ?wait=1 waits for a count already running, and
+// ?fresh=1 for a new one.
+app.get('/api/stats', async (req, res) => {
+  try { res.json(await stats({ wait: req.query.wait === '1', fresh: req.query.fresh === '1' })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
 // Check for a new version now; `force` updates even while Claude is working.
 app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
 // The line at the top: a new version is there, and what the lock still waits for.
@@ -1002,6 +1008,31 @@ app.post('/api/threads/:id/mail/send', async (req, res) => {
   }
 });
 
+// ---------- Yes and No on a proposed line, and notes during an event ----------
+app.post('/api/threads/:id/confirm', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const line = cleanText(req.body.line).replace(/\s+/g, ' ').slice(0, 400);
+  const group = cleanText(req.body.group).replace(/\s+/g, ' ').slice(0, 120);
+  const answer = req.body.answer === 'yes' || req.body.answer === 'no' ? req.body.answer : '';
+  if (!line || !answer) return res.status(400).json({ error: 'A line and Yes or No.' });
+  if (thread.kind === 'card') return res.status(409).json({ error: 'A card is accepted or declined as a whole.' });
+  const message = runner.recordConfirm(thread.id, { line, group, answer });
+  res.json({ ok: true, message });
+});
+
+// What he types into the notes field during an event, saved as he types. The brain
+// update reads it (extract.js), and the Threads/ file holds it (threadexport.js).
+app.put('/api/threads/:id/notes', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  const text = String(req.body.text ?? '').replace(/\r\n/g, '\n').slice(0, 100_000);
+  if ((thread.notes?.text || '') === text) return res.json({ ok: true, notes: thread.notes || null });
+  const notes = { text, ts: Date.now() };
+  store.updateThread(thread.id, { notes });
+  res.json({ ok: true, notes });
+});
+
 // ---------- cards ----------
 app.post('/api/threads/:id/card', (req, res) => {
   const thread = need(req, res);
@@ -1069,7 +1100,9 @@ function openBrowser() {
 const server = app.listen(config.port, '127.0.0.1', () => {
   log(`app-ai is running at ${url}  (data: ${DATA_DIR}${config.fake ? ', stand-in Claude' : ''})`);
   if (wantsOpen) openBrowser();
-  brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()));
+  brain.ensureClone().then(() => brain.refresh({ force: true })).then(() => store.events.emit('brain', extraction.extractionStatus()))
+    // The stats are counted once at the start, so the first look at them is instant.
+    .then(() => recountStats().catch(() => {}));
 });
 
 attachVoice(server, config, allowedHosts);

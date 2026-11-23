@@ -11,7 +11,7 @@ back.
    From then on the app starts by itself, without a window, when you log in. It keeps itself
    up to date: every ten minutes it looks for a newer version on GitHub, takes it as soon as
    Claude is not working on anything, and restarts; the open window reloads by itself. If a
-   new version does not start, it goes back to the one before. Settings → About shows
+   new version does not start, it goes back to the one before. Settings → System shows
    the version that runs. What happens at start is in `%LOCALAPPDATA%\app-ai\startup.txt`. To undo: Win+R, `shell:startup`, delete
    "Brain app.vbs".
 2. **Install the app from the laptop, not from the Pi.** Open `http://localhost:4317` in

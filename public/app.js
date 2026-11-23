@@ -32,7 +32,7 @@ const S = {
   cards: { running: false, ready: 0 },
   projects: null,
   tab: 'queue',
-  settingsTab: 'queue',
+  settingsTab: 'general',
   lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
@@ -61,10 +61,10 @@ const PARTS = [
   { group: 'Inbox drawer', key: 'coming', label: 'Events coming later', sel: '[data-part="coming"]' },
   { group: 'Inbox drawer', key: 'opportunities', label: 'Look for opportunities', sel: '.group-foot' },
   { group: 'Inbox drawer', key: 'done-list', label: 'Done', sel: '.group[data-drop="done"]' },
-  { group: 'Inbox drawer', key: 'next-actions', label: 'Next actions, asleep', sel: '[data-part="next-actions"]' },
   { group: 'Inbox drawer', key: 'gmail', label: 'Update Gmail', sel: '.brain-gmail, .brain-sub.is-mail' },
-  { group: 'Right bar', key: 'tree', label: 'The right bar (Folders moves into the inbox drawer)', sel: '' },
+  { group: 'Right bar', key: 'tree', label: 'The right bar (Brain moves into the inbox drawer)', sel: '' },
   { group: 'Right bar', key: 'tree-people', label: 'People', sel: '.slide-tab[data-part="tree-people"]', redraw: true },
+  { group: 'Right bar', key: 'tree-next', label: 'Next actions, asleep', sel: '[data-part="tree-next"]', redraw: true },
   { group: 'Right bar', key: 'tree-someday', label: 'Someday', sel: '.slide-tab[data-part="tree-someday"]', redraw: true },
   { group: 'Right bar', key: 'tree-paused', label: 'Paused projects', sel: '[data-part="tree-paused"]' },
   { group: 'Right bar', key: 'tree-bulk', label: 'A thread on every active / paused / area', sel: '[data-part="tree-bulk"]' },
@@ -166,6 +166,11 @@ document.addEventListener('pointermove', (e) => {
   foldPointer(e.target.closest?.('[data-fold]')?.dataset.fold || '');
 }, { passive: true });
 document.documentElement.addEventListener('mouseleave', () => foldPointer(''));
+
+// The notes field of an event thread (notesBox): text typed but not saved yet, and the
+// save of the one on screen, run before the panel changes.
+const notesDraft = new Map();
+let flushNotes = () => {};
 
 async function api(method, path, body) {
   const res = await fetch(path, {
@@ -331,7 +336,7 @@ function advance(fromId) {
   else openNew();
 }
 
-const KIND = { event: 'Event', repair: 'Repair', 'next-action': 'Next action', 'brain-update': 'Questions', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
+const KIND = { event: 'Event', repair: 'Repair', 'next-action': 'Next action', 'brain-update': 'Brain update', 'mail-reply': 'Mail to answer', prep: 'Coming up', 'checkin-active': 'Check-in', 'checkin-paused': 'Paused', 'checkin-areas': 'New project?' };
 // What kind of work a thread he started himself is; the app works it out with the name.
 const TYPE = { thinking: 'Thinking', mail: 'Mail', build: 'Build', document: 'Document', question: 'Question' };
 function kindLabel(t) {
@@ -414,7 +419,6 @@ function queueLists() {
     h('p', { class: 'group-drop' }, 'Drop a thread here to close it'),
     ...(S.showDone ? closed.map(railItem) : []),
   ], toggle, 'done'));
-  parts.push(...sleepingSection());
   return parts;
 }
 
@@ -521,42 +525,60 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !documen
 setInterval(() => { if (S.settings.focus?.on && !focusOn()) { S.settings = { ...S.settings, focus: { on: false, until: 0, scope: 'deep', project: '', members: [] } }; renderFocus(); renderRail(); } }, 60_000);
 
 // Next Actions, asleep: lines of Next Actions.md, and threads deferred until the next
-// brain update writes their line. Waking one asks once more, in place: a next action
-// started by accident is a real nuisance.
+// brain update writes their line. They sit in Brain (the right bar, or the drawer's Brain
+// tab), just before Someday, since he looks at them only when asking what needs doing
+// (Florian, 23-11-2026). Waking one asks once more, in place: a next action started by
+// accident is a real nuisance.
 let armedWake = '';
-function sleepingSection() {
+function nextNodes(withHead = false) {
   const asleep = S.next?.actions || [];
   const deferred = (S.next?.deferred || []).filter((d) => S.threads.get(d.id)?.deferred);
   for (const t of all()) if (t.deferred && !t.archived && !deferred.some((d) => d.id === t.id)) deferred.push({ id: t.id, title: t.title, project: t.project || '' });
-  if (asleep.length || deferred.length) {
-    const wake = async (a, button) => {
-      // Once more, in place: the first click only arms it.
-      if (armedWake !== a.text) {
-        armedWake = a.text;
-        renderRail();
-        setTimeout(() => { if (armedWake === a.text) { armedWake = ''; renderRail(); } }, 4000);
-        return;
-      }
-      armedWake = '';
-      button.disabled = true;
-      try {
-        const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
-        S.threads.set(out.thread.id, out.thread);
-        S.next = { ...S.next, actions: S.next.actions.filter((x) => x !== a) };
-        openThread(out.thread.id);
-      } catch (err) { toast(err.message); button.disabled = false; }
-    };
-    return [section('Next actions', asleep.length + deferred.length, [
+  const n = asleep.length + deferred.length;
+  if (!n) return withHead ? [] : [h('p', { class: 'tree-note' }, 'Nothing in Next Actions.')];
+  const wake = async (a, button) => {
+    // Once more, in place: the first click only arms it.
+    if (armedWake !== a.text) {
+      armedWake = a.text;
+      renderTree();
+      setTimeout(() => { if (armedWake === a.text) { armedWake = ''; renderTree(); } }, 4000);
+      return;
+    }
+    armedWake = '';
+    button.disabled = true;
+    try {
+      const out = await api('POST', '/api/next-actions/wake', { project: a.project, text: a.text });
+      S.threads.set(out.thread.id, out.thread);
+      S.next = { ...S.next, actions: S.next.actions.filter((x) => x !== a) };
+      openThread(out.thread.id);
+      renderTree();
+    } catch (err) { toast(err.message); button.disabled = false; }
+  };
+  return [
+    withHead ? h('div', { class: 'tree-head', dataset: { part: 'tree-next' } }, h('span', { class: 'tree-label' }, 'Next actions'), h('span', { class: 'tree-n' }, String(n))) : null,
+    h('div', { class: 'sleep-list', dataset: { part: 'tree-next' } },
       ...asleep.map((a) => h('button', { class: `item sleep-item${armedWake === a.text ? ' is-armed' : ''}`, type: 'button', dataset: { id: `na-${a.text.slice(0, 40)}` }, title: `${a.show}\n\nAsleep in Next Actions.md. Waking it makes it a thread in the inbox, opening with a brief.`, onclick: (e) => wake(a, e.currentTarget) },
         h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, armedWake === a.text ? '→' : 'z'),
         h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, a.show),
           h('span', { class: 'sleep-sub' }, armedWake === a.text ? 'Click again to start it' : (a.project || 'no project'))))),
       ...deferred.map((d) => h('button', { class: `item sleep-item is-deferred${d.id === S.current ? ' is-current' : ''}`, type: 'button', dataset: { id: d.id }, title: 'Deferred. The next brain update writes it into Next Actions.md and deletes the thread. Reply in it to wake it again.', onclick: () => openThread(d.id) },
         h('span', { class: 'item-mark', 'aria-hidden': 'true' }), h('span', { class: 'sleep-z', 'aria-hidden': 'true' }, 'z'),
-        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update')))),
-    ], null, null, 'next-actions')];
-  }
-  return [];
+        h('span', { class: 'sleep-main' }, h('span', { class: 'sleep-text' }, d.title), h('span', { class: 'sleep-sub' }, 'deferred · written at the next brain update'))))),
+  ].filter(Boolean);
+}
+
+// The vault on GitHub, from `brainRepo`; nothing when it is not a GitHub repo (a local
+// path, as in the tests).
+function brainRepoUrl() {
+  const m = /github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(String(S.config?.brainRepo || ''));
+  return m ? `https://github.com/${m[1]}/${m[2]}` : '';
+}
+function brainRepoLink(withName = false) {
+  const url = brainRepoUrl();
+  if (!url) return null;
+  return h('a', { class: `brain-gh${withName ? ' has-name' : ''}`, href: url, target: '_blank', rel: 'noopener', title: `Open the brain on GitHub (${url.replace('https://github.com/', '')})`, 'aria-label': 'Open the brain on GitHub' },
+    svg('<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'),
+    withName ? h('span', {}, url.replace('https://github.com/', '')) : null);
 }
 
 // Events not open yet are folded under one quiet line; hovering or clicking it unfolds
@@ -801,12 +823,13 @@ function somedayNodes(items, withHead = false) {
   ].filter(Boolean);
 }
 
-// The outline is up to three slides side by side: projects under their areas; people;
-// Someday. Swipe or scroll sideways and it snaps; the words on top jump. People and
-// Someday can be switched off in Settings → Layout.
+// The outline, Brain, is up to four slides side by side: projects under their areas;
+// people; next actions; Someday. Swipe or scroll sideways and it snaps; the words on top
+// jump. All but Projects can be switched off in Settings → Layout.
 const SLIDES = [
   { key: 'projects', label: 'Projects' },
   { key: 'people', label: 'People', part: 'tree-people' },
+  { key: 'next', label: 'Next', title: 'Next actions', part: 'tree-next' },
   { key: 'someday', label: 'Someday', part: 'tree-someday' },
 ];
 const shownSlides = () => SLIDES.filter((s) => !s.part || arranging || !partHidden(s.part));
@@ -816,7 +839,7 @@ function slideNodes() {
   if (Array.isArray(nodes)) return nodes;
   const slides = shownSlides();
   if (!slides.some((s) => s.key === tree.slide)) tree.slide = 'projects';
-  const content = { projects: nodes.first, people: nodes.second, someday: nodes.third };
+  const content = { projects: nodes.first, people: nodes.second, next: nextNodes(), someday: nodes.third };
   // A click slides straight there; the slides passed on the way do not light their tab.
   let heading = null;
   const go = (i) => {
@@ -827,9 +850,11 @@ function slideNodes() {
   };
   const nav = slides.length > 1
     ? h('div', { class: 'slide-nav', role: 'tablist' }, ...slides.map((s, i) => h('button', {
-      class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
+      class: `slide-tab${slideIndex() === i ? ' is-on' : ''}`, type: 'button', role: 'tab', title: s.title || null, dataset: s.part ? { part: s.part } : {}, onclick: () => go(i),
     }, s.label)))
     : h('div', { class: 'slide-nav is-single' }, h('span', { class: 'slide-title' }, slides[0].label));
+  // On top: its name, and the way to the vault on GitHub.
+  const top = h('div', { class: 'brain-top' }, h('span', { class: 'brain-title' }, 'Brain'), brainRepoLink());
   const box = h('div', { class: 'slides' }, ...slides.map((s) => h('div', { class: 'slide' }, ...content[s.key])));
   box.addEventListener('scroll', () => {
     if (heading) {
@@ -839,12 +864,12 @@ function slideNodes() {
     const i = Math.round(box.scrollLeft / Math.max(1, box.clientWidth));
     if (slides[i] && slides[i].key !== tree.slide) { tree.slide = slides[i].key; markSlide(); }
   }, { passive: true });
-  return [nav, box];
+  return [top, nav, box];
 }
 function markSlide() { els.tree.querySelectorAll('.slide-tab').forEach((b, i) => b.classList.toggle('is-on', i === slideIndex())); }
 
 // The right bar is there on a wide window, unless he switched it off; then the outline
-// is under "Folders" in the inbox drawer, as on a narrower window.
+// is under "Brain" in the inbox drawer, as on a narrower window.
 const treeShown = () => wide.matches && !partHidden('tree');
 
 function renderTree(force = false) {
@@ -866,8 +891,11 @@ function renderTree(force = false) {
 function drawerTree() {
   const n = treeNodes();
   if (Array.isArray(n)) return n;
-  return [...n.first,
+  const link = brainRepoLink(true);
+  return [...(link ? [h('div', { class: 'brain-top is-drawer' }, link)] : []),
+    ...n.first,
     ...(partHidden('tree-people') ? [] : n.second),
+    ...(partHidden('tree-next') ? [] : nextNodes(true)),
     ...(partHidden('tree-someday') ? [] : somedayNodes(S.projects?.someday || [], true))];
 }
 function renderFolders() {
@@ -1164,7 +1192,11 @@ function renderBrain() {
     rows.push(h('p', { class: 'brain-line is-error' }, b.brain.error || 'Cloning the brain…'));
     if (b.brain.error) rows.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', '/api/brain/refresh', {}).then(setBrain).catch((e) => toast(e.message)) }, 'Try again'));
   } else if (b.running) {
-    rows.push(h('p', { class: 'brain-line is-running' }, h('span', { class: 'mark-live' }, svg(MARK)), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'));
+    // It runs in a thread of its own: a click opens it.
+    const label = [h('span', { class: 'mark-live' }, svg(MARK)), b.mailOnly ? 'Taking in new mail' : 'Updating the brain'];
+    rows.push(b.threadId
+      ? h('button', { class: 'link brain-line is-running', type: 'button', title: 'Open the update’s thread', onclick: () => openThread(b.threadId) }, ...label)
+      : h('p', { class: 'brain-line is-running' }, ...label));
     rows.push(h('p', { class: 'brain-sub' }, b.step || 'Starting'));
   } else {
     const bits = [];
@@ -1208,7 +1240,7 @@ function setBrain(status) {
     if (last.status === 'held') toast(last.error);
     else if (last.status === 'failed') toast(`The ${what} failed: ${last.error}`);
     else if (last.status === 'nothing') toast(last.mailOnly ? 'No new mail that needs filing.' : 'Brain update finished. Nothing needed filing.');
-    else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
+    else toast(`${last.mailOnly ? 'Mail taken in' : 'Brain updated'}: ${last.changes.length} ${last.changes.length === 1 ? 'file' : 'files'}${last.hasQuestions ? ', and Claude has questions for you in its thread' : ''}${last.replyThreads?.length ? `, ${last.replyThreads.length} to answer` : ''}.`);
     if (S.panel?.kind === 'run') openPanel({ kind: 'run', run: last });
     loadProjects();
   }
@@ -1218,6 +1250,8 @@ async function updateBrain(only = '') {
   try {
     const out = await api('POST', '/api/brain/extract', { only });
     if (!out.started) toast(out.reason);
+    // One is running already: its thread opens.
+    if (!out.started && out.threadId && S.threads.has(out.threadId)) openThread(out.threadId);
   } catch (err) {
     toast(err.message);
   }
@@ -1446,6 +1480,8 @@ function shortNote(text) {
 }
 
 function messageEl(threadId, m) {
+  // A Yes or No shows on its line, not as a note of its own.
+  if (m.role === 'user' && m.event && m.confirm) return h('span', { class: 'msg-hidden', hidden: true });
   // What the app did by itself: the supervisor's own bubble, in its own colour, with what
   // Claude got when it started a turn.
   if (m.role === 'user' && m.supervisor) {
@@ -1477,6 +1513,7 @@ function messageEl(threadId, m) {
   }
   const body = h('div', { class: 'msg-body' });
   partsInto(body, threadId, m.parts || []);
+  markLines(body);
   const el = h('article', { class: 'msg msg-claude' }, body);
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
   if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
@@ -1659,6 +1696,14 @@ function renderHead() {
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
     actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
+  }
+  if (t.kind === 'event' && t.event?.started) {
+    const on = S.panel?.kind === 'notes' && S.panel.threadId === t.id;
+    actions.unshift(h('button', {
+      class: `btn btn-quiet${on || t.notes?.text?.trim() ? ' is-on' : ''}`, type: 'button',
+      title: 'Notes during the call: Enter makes a new line, saved as you type. Also under the briefing when it is open.',
+      onclick: () => { if (on) closePanel(); else openPanel({ kind: 'notes', threadId: t.id }); renderHead(); },
+    }, 'Notes'));
   }
   const files = t.kind === 'card' ? [] : S.view?.artifacts || [];
   if (files.length) {
@@ -1862,10 +1907,11 @@ async function deferThread() {
     draftPending.delete(t.id);
     const out = await api('POST', `/api/threads/${t.id}/defer`, { text: els.input.value.trim() });
     S.threads.set(t.id, out.thread);
+    renderTree();
     els.input.value = '';
     autosize();
     forgetDraft(t.id);
-    toast('Deferred. It sleeps under Next actions; the next brain update writes it into Next Actions.md.');
+    toast('Deferred. It sleeps under Next actions in Brain; the next brain update writes it into Next Actions.md.');
     advance(t.id);
   } catch (err) { toast(err.message); }
 }
@@ -2391,6 +2437,7 @@ function step(direction) {
 let panelTimer = 0;
 
 function closePanel() {
+  flushNotes();
   S.panel = null;
   els.app.classList.remove('has-panel');
   clearTimeout(panelTimer);
@@ -2422,13 +2469,68 @@ const TEXT_TYPES = ['md', 'txt', 'csv', 'json', 'js', 'mjs', 'ts', 'py', 'css', 
 const IMAGE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
 
 async function openPanel(panel) {
+  flushNotes();
   if (phone.matches) setRail(false);
   S.panel = panel;
   if (panel.kind === 'artifact') return showArtifact(panel);
   if (panel.kind === 'note') return showNote(panel);
   if (panel.kind === 'run') return showRun(panel.run);
   if (panel.kind === 'repo') return showRepo(panel);
+  if (panel.kind === 'notes') return panelFrame('Notes during the call', [], notesBox(panel.threadId, { alone: true }));
   return showFiles();
+}
+
+// Notes during an event (Florian, 23-11-2026): "give me a way to enter notes during the
+// meeting, like a text field. the chat field is not really viable for that because it
+// sends with enter." Under the file in the side panel of an event thread, or alone from
+// the Notes button. Enter makes a new line; the text is saved as he types, with the
+// thread, and the brain update reads it even if he never sends it.
+
+function notesBox(threadId, { alone = false } = {}) {
+  const t = S.threads.get(threadId);
+  const state = h('span', { class: 'notes-state' }, t?.notes?.ts ? `saved ${stamp(t.notes.ts)}` : 'Enter makes a new line · saved as you type');
+  const area = h('textarea', { class: 'notes-text', placeholder: 'Type during the call…', 'aria-label': 'Notes during the call', spellcheck: 'true' });
+  area.value = notesDraft.get(threadId) ?? t?.notes?.text ?? '';
+  let timer = 0;
+  const save = async () => {
+    clearTimeout(timer);
+    if (!notesDraft.has(threadId)) return;
+    const text = notesDraft.get(threadId);
+    try {
+      const out = await api('PUT', `/api/threads/${threadId}/notes`, { text });
+      if (notesDraft.get(threadId) === text) notesDraft.delete(threadId);
+      const meta = S.threads.get(threadId);
+      if (meta && out.notes) S.threads.set(threadId, { ...meta, notes: out.notes });
+      if (state.isConnected && !notesDraft.has(threadId)) state.textContent = out.notes?.ts ? `saved ${stamp(out.notes.ts)}` : 'saved';
+    } catch (err) {
+      if (state.isConnected) state.textContent = `not saved: ${err.message}`;
+    }
+  };
+  flushNotes = save;
+  area.addEventListener('input', () => {
+    notesDraft.set(threadId, area.value);
+    state.textContent = 'saving…';
+    clearTimeout(timer);
+    timer = setTimeout(save, 700);
+  });
+  area.addEventListener('blur', save);
+  const send = h('button', {
+    class: 'btn', type: 'button', title: 'Send the notes as your message, and Claude starts the debrief',
+    onclick: async () => {
+      const text = area.value.trim();
+      if (!text) { toast('No notes yet.'); return; }
+      notesDraft.set(threadId, area.value);
+      await save();
+      try {
+        await api('POST', `/api/threads/${threadId}/messages`, { text: `My notes from ${S.threads.get(threadId)?.title || 'the call'}, for the debrief:\n\n${text}` });
+        toast('Sent to Claude.');
+      } catch (err) { toast(err.message); }
+    },
+  }, 'Send to Claude for the debrief');
+  return h('section', { class: `notes-box${alone ? ' is-alone' : ''}` },
+    h('div', { class: 'notes-head' }, h('span', {}, 'Notes during the call'), state),
+    area,
+    h('div', { class: 'notes-acts' }, send));
 }
 
 function toggleFiles() {
@@ -2610,6 +2712,7 @@ async function showArtifact(panel) {
 
   const body = h('div', { class: 'panel-body quotable', dataset: { quoteSource: source } });
   panelFrame(name, tools, body);
+  if (S.threads.get(threadId)?.kind === 'event') els.panel.append(notesBox(threadId));
 
   try {
     if (isText) {
@@ -2665,7 +2768,8 @@ function showRun(run) {
       h('p', { class: 'panel-note' }, 'Nothing counts as filed yet. You can also press Update brain yourself once the limit has lifted.'));
   } else if (run.status === 'failed') {
     body.append(h('p', { class: 'panel-note is-error' }, `This update failed and wrote nothing: ${run.error}`),
-      h('p', { class: 'panel-note' }, 'Nothing counts as filed. Update the brain again when the cause is fixed.'));
+      h('p', { class: 'panel-note' }, run.threadId ? 'Nothing counts as filed. Say “retry” in its thread, or ask Claude there to look into it.' : 'Nothing counts as filed. Update the brain again when the cause is fixed.'));
+    if (run.threadId && S.threads.has(run.threadId)) body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(run.threadId, { keepPanel: true }) }, 'Open its thread'));
   } else {
     const took = [];
     if (run.threads.length) took.push(`${run.threads.length} ${run.threads.length === 1 ? 'thread' : 'threads'} (${run.threads.join(', ')})`);
@@ -2686,8 +2790,9 @@ function showRun(run) {
         h('a', { class: 'wikilink', href: '#', dataset: { wiki: c.path } }, c.path)))));
     }
     if (run.written) body.append(renderMarkdown(run.written));
-    if (run.questionsThread && S.threads.has(run.questionsThread)) {
-      body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(run.questionsThread, { keepPanel: true }) }, 'Open Claude’s questions'));
+    const own = run.threadId || run.questionsThread;
+    if (own && S.threads.has(own)) {
+      body.append(h('button', { class: 'btn btn-brain', type: 'button', onclick: () => openThread(own, { keepPanel: true }) }, run.hasQuestions ? 'Open Claude’s questions' : 'Open its thread'));
     }
     if (run.replyThreads?.length) body.append(h('p', { class: 'panel-note' }, `${run.replyThreads.length} ${run.replyThreads.length === 1 ? 'mail needs' : 'mails need'} an answer. Claude is drafting; ${run.replyThreads.length === 1 ? 'it appears' : 'they appear'} in the queue.`));
     if (run.restored?.length) body.append(h('p', { class: 'panel-note' }, `Left untouched on purpose: ${run.restored.join(', ')}.`));
@@ -2708,12 +2813,18 @@ function openSettings(tab = S.settingsTab) {
   const token = ++settingsToken;
   els.settingsBody.replaceChildren();
   els.settingsBody.scrollTop = 0;
+  if (tab === 'general') return fillGeneral(els.settingsBody);
   if (tab === 'queue') return fillQueue(els.settingsBody, token);
   if (tab === 'keys') return fillKeys(els.settingsBody);
   if (tab === 'stats') return fillStats(els.settingsBody, token);
   if (tab === 'layout') return fillLayout(els.settingsBody);
-  if (tab === 'about') return fillAbout(els.settingsBody, token);
+  if (tab === 'system') return fillSystem(els.settingsBody, token);
   return fillConnections(els.settingsBody, token);
+}
+
+// General: how the app looks on this device, and when it sends you to sleep.
+function fillGeneral(body) {
+  body.append(...lookFields(), ...sleepFields());
 }
 
 for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener('click', () => openSettings(b.dataset.tab));
@@ -2722,14 +2833,36 @@ els.settings.addEventListener('click', (e) => { if (e.target === els.settings) e
 els.openSettings.addEventListener('click', () => openSettings());
 
 // Stats: what happened, by week. Counted from what the app and the vault already keep.
+// The app keeps the last count and hands it over at once; while a newer one runs, the
+// table shows the kept one with its time and is filled in again when the count is done.
+// The very first time there is nothing kept, so grey bars in the table's shape stand in.
+const STATS_SHAPE = [['Threads', 2], ['Mail', 2], ['Opportunities', 2], ['Brain', 5], ['Code', 1], ['Claude', 1]];
+function statsPlaceholder() {
+  const bar = () => h('td', {}, h('span', { class: 'stats-bar' }));
+  return h('table', { class: 'stats is-loading', 'aria-busy': 'true', 'aria-label': 'Counting' },
+    h('thead', {}, h('tr', {}, h('th', {}, ''), ...['This week', 'Last week', 'Last 4 weeks', 'All time'].map((l) => h('th', {}, l)))),
+    ...STATS_SHAPE.map(([g, n]) => h('tbody', {},
+      h('tr', { class: 'stats-group' }, h('th', { colspan: '5' }, g)),
+      ...Array.from({ length: n }, () => h('tr', {}, h('td', { class: 'stats-label' }, h('span', { class: 'stats-bar is-wide' })), bar(), bar(), bar(), bar())))));
+}
+
 async function fillStats(body, token) {
-  body.append(h('h3', { class: 'window-head' }, 'Stats'));
+  body.replaceChildren(h('h3', { class: 'window-head' }, 'Stats'), statsPlaceholder());
   let s;
-  try { s = await api('GET', '/api/stats'); } catch (err) { body.append(h('p', { class: 'panel-note is-error' }, err.message)); return; }
+  try { s = await api('GET', '/api/stats'); } catch (err) { body.replaceChildren(h('h3', { class: 'window-head' }, 'Stats'), h('p', { class: 'panel-note is-error' }, err.message)); return; }
   if (token !== settingsToken) return;
+  showStats(body, s);
+  // A newer count is running: the kept one is on screen, the new one replaces it when it is in.
+  if (!s.refreshing) return;
+  try { s = await api('GET', '/api/stats?wait=1'); } catch { return; }
+  if (token === settingsToken) showStats(body, s);
+}
+
+function showStats(body, s) {
   const groups = [...new Set(s.rows.map((r) => r.group))];
   const cell = (v) => h('td', { class: v ? '' : 'is-zero' }, String(v));
-  body.append(
+  body.replaceChildren(
+    h('h3', { class: 'window-head' }, 'Stats ', h('span', { class: 'status' }, `as of ${clock(s.asOf)}${s.refreshing ? ' · counting again…' : ''}`)),
     h('table', { class: 'stats' },
       h('thead', {}, h('tr', {}, h('th', {}, ''), ...s.periods.map((p) => h('th', {}, p.label)))),
       ...groups.map((g) => h('tbody', {},
@@ -2741,7 +2874,7 @@ async function fillStats(body, token) {
     h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
 }
 
-// Connections and About both read /api/connections and show it as blocks.
+// Connections and System both read /api/connections and show it as blocks.
 async function loadConnections(body, token, title) {
   body.append(h('h3', { class: 'window-head' }, title));
   let c;
@@ -2787,27 +2920,28 @@ async function fillConnections(body, token) {
     note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
       : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
         : 'Off. The Talk page does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
-
-  const d = c.data;
-  body.append(block('Saving the app’s state', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
-    note(d.error || (d.enabled
-      ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
-      : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 }
 
-// About: which version runs, and where.
-async function fillAbout(body, token) {
-  const c = await loadConnections(body, token, 'About');
+// System: the app itself running, not you: its version and updates, its backup to GitHub,
+// and where it runs.
+async function fillSystem(body, token) {
+  const c = await loadConnections(body, token, 'System');
   if (!c) return;
   const block = connBlock;
   const note = connNote;
 
   if (c.app?.commit) {
     const when = (ts) => new Date(ts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    body.append(block('App version', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
+    body.append(block('Version and updates', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
       note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub every ten minutes${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`),
       c.app.update?.enabled ? updateButton() : null));
   }
+
+  const d = c.data;
+  body.append(block('Backup to GitHub', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
+    note(d.error || (d.enabled
+      ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
+      : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
   const r = c.remote;
   body.append(block('Where the app runs', { on: true, text: r.local ? 'this computer' : 'another computer' },
@@ -2854,7 +2988,6 @@ function sleepFields() {
 }
 
 async function fillQueue(body, token) {
-  body.append(...sleepFields());
   const state = h('span', { class: 'status' });
   body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
     h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));
@@ -2871,13 +3004,11 @@ async function fillQueue(body, token) {
   body.append(area);
 }
 
-// Look: light or dark, then which parts of the page are there. Each change shows at once,
-// behind this window.
+// Layout: which parts of the page are there. Each change shows at once, behind this window.
 function fillLayout(body) {
   const hidden = hiddenParts();
   const groups = [...new Set(PARTS.map((p) => p.group))];
   body.append(
-    ...lookFields(),
     h('h3', { class: 'window-head' }, 'Layout'),
     h('p', { class: 'panel-note' }, 'Switch off what you do not use. It changes on the laptop, the Pi and your phone alike, and the keys keep working.'),
     h('div', { class: 'layout-btns' },
@@ -2891,7 +3022,7 @@ function fillLayout(body) {
       h('h4', { class: 'layout-head' }, g),
       ...PARTS.filter((p) => p.group === g).map((p) => h('label', { class: 'check layout-row' },
         h('input', { type: 'checkbox', checked: !hidden.has(p.key), onchange: (e) => setPart(p.key, e.target.checked) }), ` ${p.label}`))))),
-    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Folders in the inbox drawer.'));
+    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Brain in the inbox drawer.'));
 }
 
 // "Pick on the page": everything that can go is outlined; a click hides it, or brings a
@@ -2970,7 +3101,7 @@ function fillKeys(body) {
       ['Alt U', 'Update the brain'],
     ]],
   ];
-  body.append(h('h3', { class: 'window-head' }, 'Keys'),
+  body.append(h('h3', { class: 'window-head' }, 'Shortcuts'),
     ...groups.map(([g, rows]) => h('section', { class: 'keys-group' },
       h('h4', { class: 'layout-head' }, g),
       h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])))),
@@ -3512,8 +3643,46 @@ document.addEventListener('click', (e) => {
       copy.textContent = 'Copied';
       setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
     });
+    return;
   }
+  const yesNo = e.target.closest('.confirm-btn');
+  if (yesNo && els.messages.contains(yesNo)) answerLine(yesNo);
 });
+
+// Yes or No on a line Claude proposed. The answer shows on the line at once; the app
+// writes it into the thread, where the next turn and the brain update read it.
+async function answerLine(btn) {
+  const li = btn.closest('li.confirm-line');
+  const threadId = S.current;
+  if (!li || !threadId) return;
+  const answer = btn.dataset.answer;
+  const before = li.classList.contains('is-yes') ? 'yes' : li.classList.contains('is-no') ? 'no' : '';
+  if (before === answer) return;
+  setLineState(li, answer);
+  try {
+    await api('POST', `/api/threads/${threadId}/confirm`, { line: li.dataset.line, group: li.dataset.group || '', answer });
+  } catch (err) {
+    setLineState(li, before);
+    toast(err.message);
+  }
+}
+
+function setLineState(li, answer) {
+  li.classList.toggle('is-yes', answer === 'yes');
+  li.classList.toggle('is-no', answer === 'no');
+}
+
+// The last answer to each line in this thread, from its notes.
+function lineAnswers() {
+  const out = new Map();
+  for (const m of S.view?.messages || []) if (m.confirm?.line) out.set(m.confirm.line, m.confirm.answer);
+  return out;
+}
+
+function markLines(root = els.messages) {
+  const answers = lineAnswers();
+  for (const li of root.querySelectorAll('li.confirm-line')) setLineState(li, answers.get(li.dataset.line) || '');
+}
 
 let lastKeyAt = 0;
 
@@ -3637,12 +3806,14 @@ function onThread(t) {
     S.brain.waiting = all().filter(isUnfiled).length;
     renderBrain();
   }
-  if (!before || before.project !== t.project || before.state !== t.state || before.title !== t.title) renderTree();
+  if (!before || before.project !== t.project || before.state !== t.state || before.title !== t.title || before.deferred !== t.deferred || before.archived !== t.archived) renderTree();
 }
 
 function onMessage({ threadId, message }) {
   if (threadId !== S.current || !S.view || S.threads.get(threadId)?.kind === 'card') return;
   S.view.messages.push(message);
+  // His Yes or No, perhaps clicked on another device: it shows on the line.
+  if (message.confirm) { markLines(); return; }
   const stick = nearBottom();
   if (message.role === 'assistant') {
     S.live = null;
