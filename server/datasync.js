@@ -24,7 +24,9 @@ import { git, gitOk } from './git.js';
 import { adoptRewritten, forgetOld, moveBranch, rewriteWithout, wasRewritten } from './purge.js';
 import { events } from './store.js';
 
-const IGNORE = [
+// The folders repos.js keeps in the data folder (clones, worktrees, the shared stores with
+// gigabytes of video) are other repos' business and never saved here.
+export const IGNORE = [
   '# Secrets and machine-local files. Never commit these.',
   'config.json',
   'google-token.json',
@@ -38,6 +40,8 @@ const IGNORE = [
   '/cards/state.json',
   '/uploads-pending/',
   '/repos/',
+  '/worktrees/',
+  '/shared/',
   '/threads/*/work/',
   '/purge-history.json',
   '/link.json',
@@ -94,6 +98,8 @@ export async function initDataSync(cfg) {
       await git(DATA_DIR, ['config', 'user.email', 'app-ai@localhost']);
       await git(DATA_DIR, ['config', 'user.name', 'Inbox app']);
     }
+    // What an earlier version saved from those folders (a worktree, as a link) goes again.
+    if (await hasCommits()) await whenUnlocked(() => git(DATA_DIR, ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', 'worktrees', 'shared']));
     // A conversation changed on two computers keeps both sides' lines.
     fs.mkdirSync(path.join(DATA_DIR, '.git', 'info'), { recursive: true });
     fs.writeFileSync(path.join(DATA_DIR, '.git', 'info', 'attributes'), '*.jsonl merge=union\n');

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { buildPolicy, describeTool, shortCommand, startsIn } from '../server/agent.js';
 import { diffWords } from '../public/diff.js';
 import { parseRanks } from '../server/projects.js';
-import { pushTakingIn, whenUnlocked } from '../server/datasync.js';
+import { IGNORE, pushTakingIn, whenUnlocked } from '../server/datasync.js';
 
 test('saving state: losing the race to the other computer twice still saves', async () => {
   let sends = 0;
@@ -209,6 +209,12 @@ test('a git step refused because another git process holds the index runs again'
   calls = 0;
   assert.equal(await whenUnlocked(async () => { calls += 1; if (calls < 2) throw midWrite; return 'ok'; }, { wait: 1 }), 'ok');
   assert.equal(calls, 2);
+});
+
+test('the folders the app keeps other repos in are never saved with its state', () => {
+  // repos.js puts all three into the data folder; shared/ held 39 GB of video when
+  // "git add -A" tried to take it in (23-11-2026).
+  for (const dir of ['repos', 'worktrees', 'shared']) assert.match(IGNORE, new RegExp(`^/${dir}/$`, 'm'), `${dir}/ is ignored`);
 });
 
 test('a git step stopped by its timeout says so, and is marked as such', async () => {
