@@ -731,6 +731,12 @@ async function runTurn(threadId, prompt) {
         await repos.autoPush(threadId);
         repos.release(before.repo, threadId);
       }
+      // The last turn's branch is being tested and merged (ship.js) under this thread's name:
+      // this turn starts on what that leaves, and does not share the lock with it.
+      if (ship.isShipping(threadId)) {
+        activity(`Waiting for the merge of this thread's last turn in ${full}`);
+        while (ship.isShipping(threadId) && !abort.signal.aborted) await new Promise((r) => setTimeout(r, 500));
+      }
       // Cloned or fetched first, so the lock knows whether the repo lets threads work side by side.
       await repos.ensure(full);
       const mode = exclusive ? 'exclusive' : 'shared';

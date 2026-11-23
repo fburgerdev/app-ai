@@ -825,8 +825,8 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     try {
       // "REPO-EXCL": the repo alone, as the real Claude asks for it with exclusive: true.
       const r = await repoTools.open(repoAsk[1], { exclusive: /REPO-EXCL/.test(newest) });
-      // In a parallel repo each thread writes a file of its own, so two branches do not clash.
-      fs.writeFileSync(path.join(r.dir, r.parallel ? `CHANGED-BY-${(title || 'thread').replace(/[^\w]+/g, '-')}.md` : 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
+      // "REPO-OWN": each thread writes a file of its own, so two branches in one repo do not clash.
+      fs.writeFileSync(path.join(r.dir, /REPO-OWN/.test(newest) ? `CHANGED-BY-${(title || 'thread').replace(/[^\w]+/g, '-')}.md` : 'CHANGED-BY-CLAUDE.md'), `Changed in a turn at ${new Date().toISOString()}\n`);
       // "REPO-HOLD=name": stay in the repo for as long as the file hold-<name> is in the data
       // folder, so a test decides when the turn ends instead of racing a clock.
       const hold = /REPO-HOLD=([\w-]+)/.exec(newest);

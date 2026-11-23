@@ -153,26 +153,30 @@ test('a thread on a project gets its repo, clones it when Claude opens it, and w
   assert.equal((await call('POST', `/api/threads/${made.id}/repo/merge`, {})).status, 409, 'nothing left to merge');
 });
 
-test('one thread per repo: the second waits until the first turn has ended', async () => {
+test('two threads in one repo: the first in the main copy, the second in a worktree made on demand', async () => {
   const a = (await call('POST', '/api/threads', { text: 'First worker', project: 'Site' })).data.thread;
   const b = (await call('POST', '/api/threads', { text: 'Second worker', project: 'Site' })).data.thread;
   await ready(a.id); await ready(b.id);
   const hold = path.join(data, 'hold-first'); // a stays in the repo until this file goes
   fs.writeFileSync(hold, '');
-  const aTurn = turn(a.id, 'REPO-TEST REPO-HOLD=first go');
-  await until(async () => (await thread(a.id)).thread.repoBranch, 'a holds the repo', 8000);
-  const bTurn = turn(b.id, 'REPO-TEST go too');
-  const waited = await until(async () => { const t = (await thread(b.id)).thread; return /^Waiting for fburgerdev\/site/.test(t.activity || '') ? t : null; }, 'b waits for a', 8000);
-  assert.match(waited.activity, /"First worker" is working in it/);
+  const aTurn = turn(a.id, 'REPO-TEST REPO-OWN REPO-HOLD=first go');
+  await until(async () => fs.existsSync(path.join(clone, 'CHANGED-BY-First-worker.md')), 'a works in the main copy', 8000);
+  // b does not wait: it gets a worktree of its own while a works in the main copy.
+  const bDone = await turn(b.id, 'REPO-TEST REPO-OWN go too');
+  const wt = path.join(data, 'worktrees', 'fburgerdev', 'site', b.id);
+  assert.ok(fs.existsSync(path.join(wt, 'CHANGED-BY-Second-worker.md')));
+  assert.equal((await thread(a.id)).thread.state, 'working', 'a was still at work meanwhile');
   fs.rmSync(hold);
   const aDone = await aTurn;
-  const bDone = await bTurn;
   assert.notEqual(aDone.thread.repoBranch, bDone.thread.repoBranch, 'each on a branch of its own');
   assert.equal((await repoStatus(a.id)).ahead, 1);
   assert.equal((await repoStatus(b.id)).ahead, 1);
-  assert.equal(git(clone, 'status', '--porcelain').trim(), '', 'the copy is clean between threads');
-  // Merging needs the copy: fine now that nobody holds it.
+  assert.equal(git(clone, 'status', '--porcelain').trim(), '', 'the main copy is clean between turns');
   assert.equal((await call('POST', `/api/threads/${a.id}/repo/merge`, {})).status, 200);
+  assert.equal((await call('POST', `/api/threads/${b.id}/repo/merge`, {})).status, 200);
+  assert.ok(!fs.existsSync(wt), 'the worktree goes with the merge');
+  const files = git(site.remote, 'ls-tree', '--name-only', 'main');
+  assert.ok(files.includes('CHANGED-BY-First-worker.md') && files.includes('CHANGED-BY-Second-worker.md'));
 });
 
 test('any thread can open any repo; Florian can change a thread\'s repo; repos can be renamed', async () => {
