@@ -127,7 +127,8 @@ const pruner = createPruner({
   createReport: ({ title, text }) => {
     const thread = store.createThread({ title, kind: 'brain-update' });
     store.appendMessage(thread.id, { role: 'assistant', parts: [{ type: 'text', text }] });
-    store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'The night prune: what went in, and its questions' });
+    // Like a brain update's thread, it files his answers itself (runner.js, `filesItself`).
+    store.updateThread(thread.id, { extractedCount: 1, queuedAt: Date.now(), gist: 'The night prune: what went in, and its questions', filesItself: true });
     datasync.saveNow('prune report').catch(() => {});
     return thread.id;
   },
@@ -479,7 +480,7 @@ app.get('/api/threads/:id', (req, res) => {
   res.json({
     thread,
     messages: store.readMessages(thread.id),
-    live: runner.liveParts(thread.id),
+    live: runner.liveParts(thread.id) || extraction.liveParts(thread.id),
     artifacts: store.listArtifacts(thread.id),
   });
 });

@@ -6,7 +6,8 @@
 //   thread   reads the vault, searches the web, writes only into its artifacts folder
 //            (what Florian sees) and its workbench, and runs commands on the workbench
 //            (scripts that fill a PDF, edit a Word file); once it has opened a repo, also
-//            writes and runs commands in that repo
+//            writes and runs commands in that repo. A brain update's thread (`vaultWrite`)
+//            also writes the vault, outside its protected paths, while its turn holds it
 //   extract  the brain update: reads and writes the vault, no web, no git history
 //   plain    no tools at all (used to turn a reply into something to listen to)
 //   lookup   like plain, but it may search and read the web (the voice host's harder questions)
@@ -77,7 +78,7 @@ export function sharedRefusal(file, rules) {
 }
 
 // Builds the function the SDK calls before every tool use that needs a decision.
-export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', repoRoots = [], repoShared = () => null, secretsKey = '' }) {
+export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = [], protectedPaths = [], shell = false, artifactsShell = false, google = false, repoDir = () => null, reposDir = '', repoRoots = [], repoShared = () => null, secretsKey = '', vaultWrite = false }) {
   const readable = [cwd, artifactsDir, workDir, ...readDirs, reposDir, ...repoRoots].filter(Boolean);
   const target = (input) => {
     const p = input.file_path || input.notebook_path || input.path;
@@ -104,6 +105,13 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
           return refused ? deny(refused) : allow(input);
         }
         if ((reposDir && isInside(file, reposDir)) || repoRoots.some((r) => r && isInside(file, r))) return deny('Open that repo with open_repo first: only the repo this thread holds can be changed, in the folder open_repo names.');
+        if (vaultWrite && isInside(file, cwd)) {
+          if (isInside(file, path.join(cwd, '.git'))) return deny('The .git folder is the app\'s to manage.');
+          for (const p of protectedPaths) {
+            if (isInside(file, path.join(cwd, p))) return deny(`"${p}" is Florian's own or written by the app; it is never edited here.`);
+          }
+          return allow(input);
+        }
         return deny(
           `Threads in this app cannot write there. Write files only into the artifacts folder: ${artifactsDir}. ` +
           'The vault is written by the brain update, which Florian starts himself.',
@@ -175,7 +183,7 @@ export function buildPolicy({ mode, cwd, artifactsDir, workDir = '', readDirs = 
 const ok = (text) => ({ content: [{ type: 'text', text }] });
 const fail = (err) => ({ content: [{ type: 'text', text: err.message || String(err) }], isError: true });
 
-async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing }) {
+async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing, rerunBrain }) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
   const { z } = await import('zod');
   return createSdkMcpServer({
@@ -235,6 +243,9 @@ async function buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent
           why: z.string().describe('What you are waiting for, in a few words ("the v14 render", "npm install on the Pi")'),
         },
         async (args) => { try { return ok(await continueLater(args)); } catch (err) { return fail(err); } })] : []),
+      ...(rerunBrain ? [tool('run_brain_update_again', 'Run the brain update again in this thread, after it failed or when Florian asks for it ("retry"). It starts once this turn has ended; end the turn right after calling it, with one short line.',
+        {},
+        async () => { try { return ok(await rerunBrain()); } catch (err) { return fail(err); } })] : []),
       ...(markPressing ? [tool('mark_pressing', 'In a thread answering a mail: say whether the reply has to go out today. A pressing reply reaches Florian even while he focuses on one project or on deep work; any other waits for Catch-up. Pressing means: a deadline today or tomorrow, a call or meeting with the sender today, or the sender already waiting longer than they should. Not pressing just because it is polite to answer soon. Call it once, after reading the mail, with a one-line reason he sees beside the thread ("call with her at 15:00"); call it again with pressing false if that changes.',
         {
           pressing: z.boolean().describe('true when the reply has to go out today'),
@@ -318,6 +329,7 @@ export function describeTool(name, input = {}, cwd = '') {
     case 'mcp__app__github_describe_repo': return `Described the repo ${input.repo}`;
     case 'mcp__app__spin_off': return `Spun off a thread: ${clip(input.title, 60)}`;
     case 'mcp__app__move_event': return `Moved ${input.event ? `the event "${clip(input.event, 50)}"` : 'this event'} in Events`;
+    case 'mcp__app__run_brain_update_again': return 'Runs the brain update again';
     case 'mcp__app__mark_pressing': return input.pressing ? `Marked the reply as pressing: ${clip(input.why || '', 60)}` : 'Marked the reply as not pressing';
     case 'mcp__app__continue_later': return `Carries on by itself in ${Math.round(Number(input.minutes) || 10)} min: ${clip(input.why || 'work still running', 60)}`;
     case 'mcp__google__gmail_search': return `Searched your mail for "${clip(input.query, 70)}"`;
@@ -378,8 +390,8 @@ export async function runAgent(params) {
   }
 }
 
-async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer, markPressing }) {
-  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing }) } : givenServers;
+async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode, artifactsDir, readDirs, protectedPaths, shell, artifactsShell, workDir, showFile, piShell, moveEvent, signal, title, onEvent, mcpServers: givenServers, spinOff, repoTools, repoDir, reposDir, repoRoots, repoShared, secretsKey, useDocument, continueLater, steer, markPressing, vaultWrite, rerunBrain }) {
+  const mcpServers = spinOff && mode === 'thread' ? { ...(givenServers || {}), app: await buildAppServer({ spinOff, repoTools, showFile, piShell, moveEvent, useDocument, continueLater, markPressing, rerunBrain }) } : givenServers;
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abortController = new AbortController();
   if (signal) {
@@ -416,7 +428,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     settingSources: ['project'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     permissionMode: 'default',
-    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, repoRoots, repoShared, secretsKey: mode === 'thread' ? secretsKey : '' }),
+    canUseTool: buildPolicy({ mode, cwd, artifactsDir, workDir, readDirs, protectedPaths, shell, artifactsShell, google, repoDir, reposDir, repoRoots, repoShared, secretsKey: mode === 'thread' ? secretsKey : '', vaultWrite: mode === 'thread' && Boolean(vaultWrite) }),
     additionalDirectories: [artifactsDir, workDir, ...(readDirs || [])].filter(Boolean),
     disallowedTools,
   };
@@ -629,7 +641,7 @@ function resultText(content) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fakeBrainLimited = false;
 
-async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title, markPressing }) {
+async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: givenMode, artifactsDir, workDir, readDirs, signal, onEvent, spinOff, repoTools, showFile, moveEvent, continueLater, steer, title, markPressing, vaultWrite, rerunBrain }) {
   // In the no-tools modes the instructions are the system prompt; the stand-in reads both.
   const mode = givenMode === 'lookup' ? 'plain' : givenMode;
   const prompt = mode === 'plain' ? `${systemAppend || ''}\n${userPrompt}` : userPrompt;
@@ -849,6 +861,21 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
   if (moveAsk) {
     onEvent?.({ type: 'tool', name: 'mcp__app__move_event', summary: `Moved the event "${moveAsk[1]}" in Events` });
     try { moveEvent({ event: moveAsk[1], start: moveAsk[2] }); } catch (err) { onEvent?.({ type: 'activity', text: err.message }); }
+  }
+  // A brain update's thread: "RETRY-BRAIN" runs the update again; anything else is filed.
+  if (rerunBrain && /RETRY-BRAIN/.test(newest)) {
+    onEvent?.({ type: 'tool', name: 'mcp__app__run_brain_update_again', summary: 'Runs the brain update again' });
+    await rerunBrain();
+    const said = await say('Running it again.');
+    return { sessionId, text: said, finalText: said, error: '', aborted: false };
+  }
+  if (vaultWrite) {
+    const dir = path.join(cwd, fs.existsSync(path.join(cwd, 'Brain')) && !fs.existsSync(path.join(cwd, 'Core')) ? 'Brain' : 'Core');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'App Test.md'), `- stand-in answer filed: ${newest.split('\n').filter((l) => l.trim() && !l.startsWith('[The app')).pop() || ''}\n`);
+    onEvent?.({ type: 'tool', name: 'Edit', summary: 'Edited Core/App Test.md' });
+    const said = await say('Filed.');
+    return { sessionId, text: said, finalText: said, error: '', aborted: false };
   }
   // "PRESSING-TEST": a mail to answer today; the stand-in marks it, as the real Claude would.
   if (markPressing && /PRESSING-TEST/.test(newest)) {
