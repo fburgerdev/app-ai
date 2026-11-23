@@ -1,7 +1,8 @@
 // A thread's work in a repo goes into main by itself.
 //
 // When a turn that worked in a repo ends, its branch is already committed and pushed
-// (repos.saveWork, repos.autoPush). Then, in the background:
+// (repos.saveWork, repos.autoPush). Then, in the background, for every repo the thread opened
+// (repos.shipList), one after another in the order it opened them:
 //
 //   1. if the repo has tests (`npm test` in package.json) and a workflow in
 //      .github/workflows, GitHub Actions runs them on the pushed branch and the app waits for
@@ -15,7 +16,8 @@
 // as it is, on GitHub, with a note in the thread, and the app starts a turn by itself that
 // fixes it, after which the merge runs again; a merge that failed for another reason is
 // tried again a few minutes later (retry.js, with its limits). A repo without tests is
-// merged as it is; the note says so.
+// merged as it is; the note says so. The repos after one that did not go in wait for it, so
+// what had to be live first (the app, before the vault) is never overtaken.
 //
 // For the app's own repo this means a change reaches the running app with its next
 // self-update, a few minutes later, and only once the tests have passed. Switched off
@@ -40,9 +42,9 @@ export function initShip(cfg) { config = cfg; }
 // that fixes it, the merge tried again later, or nothing more. Returns the words for the note.
 let failedHook = null;
 export function onMergeFailed(fn) { failedHook = fn; }
-function whatNext(threadId, failure, detail) {
+function whatNext(threadId, failure, detail, where = {}) {
   let next = null;
-  try { next = failedHook?.(threadId, { failure, detail }) || null; } catch (err) { log(`ship: carrying on by itself failed: ${err.message}`); }
+  try { next = failedHook?.(threadId, { failure, detail, ...where }) || null; } catch (err) { log(`ship: carrying on by itself failed: ${err.message}`); }
   if (next?.fix) return ' Claude fixes it by itself now, and the app then tries the merge again.';
   if (next?.remerge) return ` The app tries the merge again by itself at ${clock(next.remerge)}.`;
   if (next?.stop) return ` The app does not try again by itself: ${next.stop}. Ask Claude to fix it, or merge it yourself from the repo panel.`;
@@ -118,7 +120,7 @@ async function testOnGithub(threadId, full, dir, branch) {
   const began = Date.now();
   for (;;) {
     const now = store.getThread(threadId);
-    if (!now || now.state === 'working' || now.repoBranch !== branch) return { stale: true };
+    if (!now || now.state === 'working' || repos.branchIn(now, full) !== branch) return { stale: true };
     let runs;
     try {
       runs = (await repos.githubApi('GET', `/repos/${full}/commits/${sha}/check-runs?per_page=100`)).check_runs || [];
@@ -173,12 +175,18 @@ const tail = (out) => {
 // After a turn. Never throws; runs in the background.
 export async function afterTurn(threadId) {
   const thread = store.getThread(threadId);
-  if (!thread?.repo || !thread.repoBranch) return;
-  // Still at the last turn's branch (GitHub may take minutes): this one goes after it.
+  if (!thread) return;
+  // A repo with no branch of the thread's has nothing to merge.
+  const list = [];
+  for (const full of repos.shipList(thread)) {
+    if (repos.branchIn(thread, full)) list.push(full);
+    else repos.dropShip(threadId, full);
+  }
+  if (!list.length) return;
+  // Still at the last turn's branches (GitHub may take minutes): this one goes after it.
   if (shipping.has(threadId)) { again.add(threadId); return; }
   const repair = thread.kind === 'repair';
   if (repair ? config?.repair?.autoMerge === false : config?.autoMerge === false) return;
-  const full = thread.repo;
   const note = (text) => store.appendMessage(threadId, { role: 'user', text: `[${text}]`, event: true });
   // A merge that failed: what the app does about it by itself is decided once the repo is
   // given back, so the turn that fixes it can take it.
@@ -188,20 +196,53 @@ export async function afterTurn(threadId) {
   // laptop shut down) finds it when it starts and tries the merge again (store.loadThreads).
   store.updateThread(threadId, { merging: { at: Date.now(), on: os.hostname() } });
   try {
+    for (const [i, full] of list.entries()) {
+      const out = await shipOne(threadId, full, { repair, note });
+      if (out.done) { repos.dropShip(threadId, full); continue; }
+      // Not in main (yet): the repos after it wait for it.
+      const rest = list.slice(i + 1);
+      if (out.failed) {
+        failed = out.failed;
+        if (rest.length) {
+          const text = failed.text;
+          failed.text = (next) => `${text(next)}\n\nThe work in ${rest.join(', ')} waits on its branch until this is in main, and then goes in after it.`;
+        }
+      }
+      break;
+    }
+  } finally {
+    shipping.delete(threadId);
+    store.updateThread(threadId, { merging: null });
+    // Here and not after the loop: its early ends would skip it.
+    if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail, failed.where) : ''));
+    if (again.delete(threadId)) setTimeout(() => afterTurn(threadId).catch(() => {}), 0);
+  }
+}
+
+// One repo's branch into main. Never throws. Returns { done: true } when the branch is in
+// main or has nothing main does not have; otherwise it waits ({}), or failed ({ failed }).
+async function shipOne(threadId, full, { repair, note }) {
+  const thread = store.getThread(threadId);
+  const current = repos.isCurrent(thread, full);
+  const branch = repos.branchIn(thread, full);
+  if (!branch) return { done: true };
+  let failed = null;
+  try {
     // Is there anything main does not have?
     const dir = repos.dirOf(full);
-    const main = thread.repoMain || 'main';
-    const ahead = Number((await git(dir, ['rev-list', '--count', `origin/${main}..${thread.repoBranch}`]).catch(() => '0')).trim());
-    if (!ahead) return;
-    // A turn that broke the repo's shared folders waits for him (repos.saveWork).
+    // A repo the thread left in the same turn: its main as the repo has it.
+    const main = current ? (thread.repoMain || 'main') : ((await repos.ensure(full).catch(() => null))?.base || 'main');
+    const ahead = Number((await git(dir, ['rev-list', '--count', `origin/${main}..${branch}`]).catch(() => '0')).trim());
+    if (!ahead) return { done: true };
+    const where = { repo: full, branch, main };
+    // A turn that broke a repo's shared folders waits for him (repos.saveWork).
     if (thread.repoBreach) {
-      note(`The app did not merge this branch into ${main}: the last turn broke the rules of ${full}'s shared folders (${thread.repoBreach}). It merges after Florian has written in this thread and the next turn ends.`);
-      return;
+      note(`The app did not merge this branch (${branch} of ${full}) into ${main}: the last turn broke the rules of a repo's shared folders (${thread.repoBreach}). It merges after Florian has written in this thread and the next turn ends.`);
+      return {};
     }
-    const branch = thread.repoBranch;
     // GitHub first, without holding the repo: other threads can work in it meanwhile.
     let result = await testOnGithub(threadId, full, dir, branch);
-    if (result?.stale) return; // he answered, or the branch moved on: the next turn's end tries again
+    if (result?.stale) return {}; // he answered, or the branch moved on: the next turn's end tries again
     // The repo for this thread, so no other turn changes it while it is tested: alone in a
     // repo of one thread at a time; shared in a parallel one, where the merges go one at a
     // time instead (repos.withMergeLock) and the branch is brought up to date with main first.
@@ -210,16 +251,18 @@ export async function afterTurn(threadId) {
     // A new turn of this thread holds the repo already (a follow-up started meanwhile): the
     // lock is the turn's, under the same name, so this neither takes nor gives it back. That
     // turn's end merges.
-    if (repos.holds(full, threadId)) return;
+    if (repos.holds(full, threadId)) return {};
     await repos.acquire(full, threadId, { mode: 'shared' });
+    let done = false;
     try {
       const now = store.getThread(threadId);
-      if (!now?.repoBranch || now.state === 'working' || now.repoBranch !== branch) return; // he answered: the next turn's end tries again
+      if (!now || now.state === 'working' || repos.branchIn(now, full) !== branch) return {}; // he answered: the next turn's end tries again
       const step = async () => {
-        await repos.openFor(threadId, full, { check: false }); // its branch checked out, main fetched
+        // Its branch checked out, main fetched; a repo it left stays left.
+        await repos.openFor(threadId, full, { check: false, current: repos.isCurrent(now, full) });
         const here = repos.dirFor(threadId, full);
         // Main brought in: what GitHub tested is no longer what gets merged, so test here.
-        const caughtUp = parallel ? await repos.catchUp(threadId) : false;
+        const caughtUp = parallel ? await repos.catchUp(threadId, { full, base: main }) : false;
         let onGithub = Boolean(result) && !caughtUp;
         if (onGithub) {
           // Only what GitHub tested is merged.
@@ -234,7 +277,7 @@ export async function afterTurn(threadId) {
           const out = tail(result.out);
           const who = onGithub ? 'GitHub ran' : 'The app ran';
           const app = onGithub ? 'the app' : 'it';
-          failed = { failure: 'tests', detail: out, text: (next) => `${who} the tests of ${full} on this branch and they did not pass, so ${app} did not merge into ${main}. The branch ${branch} is on GitHub.${next || ' Ask Claude to fix it, or merge it yourself from the repo panel.'}${result.url ? `
+          failed = { failure: 'tests', detail: out, where, text: (next) => `${who} the tests of ${full} on this branch and they did not pass, so ${app} did not merge into ${main}. The branch ${branch} is on GitHub.${next || ' Ask Claude to fix it, or merge it yourself from the repo panel.'}${result.url ? `
 
 The run: ${result.url}` : ''}
 
@@ -244,7 +287,8 @@ ${out}` };
           return;
         }
         if (store.getThread(threadId)?.state === 'working') return;
-        const { base } = await repos.merge(threadId, { locked: true });
+        const { base } = await repos.merge(threadId, { locked: true, full });
+        done = true;
         try { mergedHook?.(full); } catch { /* never in the way */ }
         const tested = !result.ran ? 'found no tests in this repo and'
           : onGithub ? 'had GitHub run the tests, they passed, and it' : 'ran the tests, they passed, and it';
@@ -258,16 +302,11 @@ ${out}` };
     } finally {
       repos.release(full, threadId);
     }
+    return done ? { done: true } : failed ? { failed } : {};
   } catch (err) {
     const reason = err.message.split('\n')[0];
     const failure = mergeFailure(reason);
-    failed = { failure, detail: reason, text: (next) => `The app could not merge this branch into main by itself: ${next ? reason.replace(/\s*Ask Claude.*$/, '') : reason}${next || ' The branch is on GitHub; the Merge button in the repo panel tries again.'}` };
-    log(`ship: could not merge for "${thread.title}": ${err.message}`);
-  } finally {
-    shipping.delete(threadId);
-    store.updateThread(threadId, { merging: null });
-    // Here and not after the try: its early returns would skip it.
-    if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail) : ''));
-    if (again.delete(threadId)) setTimeout(() => afterTurn(threadId).catch(() => {}), 0);
+    log(`ship: could not merge for "${thread.title}" in ${full}: ${err.message}`);
+    return { failed: { failure, detail: reason, where: { repo: full, branch, main: thread.repoMain || 'main' }, text: (next) => `The app could not merge this branch (${branch} of ${full}) into main by itself: ${next ? reason.replace(/\s*Ask Claude.*$/, '') : reason}${next || ' The branch is on GitHub; the Merge button in the repo panel tries again.'}` } };
   }
 }
