@@ -120,7 +120,7 @@ test('an event close enough opens with its briefing, outside the inbox, and stay
   assert.equal(fair.event.started, true);
   const t = await ready(fair.id);
   assert.match(t.messages[0].text, /^This is the thread for an entry in Florian's calendar: Example fair/);
-  assert.match(t.messages[0].text, /prepare before the entry and to debrief after it/);
+  assert.match(t.messages[0].text, /prepare before the entry, to dictate notes during it .*, and to debrief after it/);
   assert.match(t.messages[0].text, /Search his mail .* word for word: write it into the artifacts folder as "Mailverlauf — Example fair\.md"/, 'no mails found by the calendar run: the briefing looks for them');
   assert.ok(!(await state()).queue.order.includes(fair.id), 'not in the inbox');
   // The smaller call two hours from now opens too: its morning has passed, an hour before at the latest.
@@ -423,6 +423,79 @@ test('when he says an entry was postponed, its event moves at once, from any thr
   const wrong = (await call('POST', '/api/threads', { text: `MOVE-TEST no such meeting TO ${later.toISOString()}` })).data.thread;
   await ready(wrong.id);
   assert.equal((await thread(fair.id)).thread.event.start, later.getTime());
+});
+
+test('his first message after an event is over is the debrief, and takes it out of Events', async () => {
+  const fair = await until(async () => (await state()).threads.find((t) => t.kind === 'event' && t.title === 'Example fair' && t.state !== 'done'), 'the fair, open');
+  assert.equal(fair.pinned, undefined, 'pinned by the rule for events, not by hand');
+  // During it: a note does not unpin it.
+  const now = Date.now();
+  const during = new Date(now - 30 * 60_000); during.setSeconds(0, 0);
+  const a = (await call('POST', '/api/threads', { text: `It started early. MOVE-TEST example fair TO ${during.toISOString()}` })).data.thread;
+  await ready(a.id);
+  assert.ok((await thread(fair.id)).thread.event.end > Date.now(), 'still going');
+  await call('POST', `/api/threads/${fair.id}/messages`, { text: 'Note: met someone from the Studierendenwerk' });
+  await until(async () => (await thread(fair.id)).thread.state === 'ready', 'answered');
+  assert.equal((await thread(fair.id)).thread.pinned, undefined, 'a note during the event keeps it in Events');
+  // Over: the first message after it unpins it, and it goes on as an ordinary thread.
+  const over = new Date(now - 5 * 3600_000); over.setSeconds(0, 0);
+  const b = (await call('POST', '/api/threads', { text: `It was this morning. MOVE-TEST example fair TO ${over.toISOString()}` })).data.thread;
+  await ready(b.id);
+  await call('POST', `/api/threads/${fair.id}/messages`, { text: 'It went well, they want the concept by Friday' });
+  const after = await until(async () => { const t = (await thread(fair.id)).thread; return t.state === 'ready' && t.pinned === false ? t : null; }, 'unpinned by the debrief');
+  assert.ok(after.debriefAt > 0);
+  await until(async () => (await state()).queue.order.includes(fair.id), 'in the queue now');
+  await call('POST', `/api/threads/${fair.id}/state`, { state: 'done' });
+});
+
+test('an event not debriefed leaves Events the evening after', async () => {
+  const { eveningAfter } = await import('../server/events.js');
+  const end = new Date(2026, 10, 23, 22, 30).getTime();
+  assert.equal(eveningAfter(end), new Date(2026, 10, 24, 20, 0).getTime());
+});
+
+test('which threads wait in each kind of focus', async () => {
+  const { isLater } = await import('../server/store.js');
+  const deep = { scope: 'deep' };
+  const proj = { scope: 'project', project: 'Video EA', members: ['Video EA'] };
+  const area = { scope: 'project', project: 'Campaign', members: ['Campaign', 'Mensa Tracker'] };
+  const own = (project) => ({ kind: 'chat', project, lastUserAt: 1 });
+  assert.equal(isLater(own('Other'), deep), false, 'deep work: his own threads on anything');
+  assert.equal(isLater(own('Other'), proj), true, 'one project: his threads on other things wait');
+  assert.equal(isLater(own('Video EA'), proj), false);
+  assert.equal(isLater(own('Mensa Tracker'), area), false, 'an area brings its projects');
+  assert.equal(isLater({ kind: 'mail-reply', project: 'Other' }, deep), true, 'mail that can wait, waits');
+  assert.equal(isLater({ kind: 'mail-reply', project: 'Other', pressing: true }, proj), false, 'mail that has to go out today comes through');
+  assert.equal(isLater({ kind: 'event', project: 'Other' }, proj), false, 'events come through');
+  assert.equal(isLater({ kind: 'card', project: 'Video EA', lastUserAt: 1 }, proj), true, 'cards wait for Catch-up');
+  assert.equal(isLater({ ...own('Other'), later: false }, proj), false, 'his mark wins');
+  assert.equal(isLater({ ...own('Video EA'), later: true }, proj), true);
+  const { focusFrom } = await import('../server/state.js');
+  const now = new Date(2026, 10, 23, 12, 0).getTime();
+  assert.deepEqual(focusFrom(false, {}, now), { on: false, until: 0, scope: 'deep', project: '', members: [] });
+  assert.equal(focusFrom(true, { on: true, from: '23:00' }, now).until, new Date(2026, 10, 23, 23, 0).getTime());
+  const p = focusFrom({ scope: 'project', project: 'Video EA', until: 0 }, {}, now);
+  assert.deepEqual(p, { on: true, until: 0, scope: 'project', project: 'Video EA', members: ['Video EA'] }, 'until he ends it');
+  assert.equal(focusFrom({ scope: 'project', project: 'Video EA', until: now - 1 }, {}, now).until, 0, 'a day gone by means open');
+  assert.equal(focusFrom({ scope: 'project', project: '  ' }, {}, now), null, 'no project, no change');
+});
+
+test('focus on one project: only its threads, an area with its projects, until he ends it', async () => {
+  const tracker = (await call('POST', '/api/threads', { text: 'Tracker work' })).data.thread;
+  const other = (await call('POST', '/api/threads', { text: 'Something else entirely' })).data.thread;
+  await Promise.all([ready(tracker.id), ready(other.id)]);
+  await call('POST', `/api/threads/${tracker.id}/project`, { project: 'Mensa Tracker' });
+  await call('POST', `/api/threads/${other.id}/project`, { project: '' });
+  const on = (await call('PUT', '/api/settings', { focus: { scope: 'project', project: 'Mensa Tracker', until: 0 } })).data;
+  assert.deepEqual([on.focus.on, on.focus.scope, on.focus.project, on.focus.until], [true, 'project', 'Mensa Tracker', 0]);
+  await until(async () => { const o = (await state()).queue.order; return o.includes(tracker.id) && !o.includes(other.id); }, 'only the project in the queue');
+  // The area: its projects come with it, and the server takes them from the Projects Index.
+  const area = (await call('PUT', '/api/settings', { focus: { scope: 'project', project: 'Campaign', members: ['Anything'] } })).data;
+  assert.deepEqual(area.focus.members, ['Campaign', 'Mensa Tracker']);
+  await until(async () => (await state()).queue.order.includes(tracker.id), 'the tracker in the area focus');
+  const off = (await call('PUT', '/api/settings', { focus: false })).data;
+  assert.equal(off.focus.on, false);
+  await until(async () => (await state()).queue.order.includes(other.id), 'everything again in Catch-up');
 });
 
 test('focus: only his own threads in the queue, no new cards, and it ends by itself', async () => {

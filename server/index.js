@@ -285,7 +285,19 @@ app.get('/api/state', (req, res) => {
 // The mood line, the model, the effort, the sleep time and the parts of the page switched
 // off. Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, tier, sleep, focus, hidden } = req.body || {};
+  const { mood, model, effort, tier, sleep, hidden } = req.body || {};
+  let { focus } = req.body || {};
+  // Focus on one project: an area brings its projects with it. The names are taken from
+  // the Projects Index here, so the page cannot widen the focus to anything else.
+  if (focus && typeof focus === 'object' && focus.scope === 'project') {
+    const name = String(focus.project || '').trim();
+    let members = [name];
+    try {
+      const area = projects.projectTree().groups.find((g) => g.isArea && g.name === name);
+      if (area) members = [name, ...area.projects.map((p) => p.name)];
+    } catch { /* the project alone */ }
+    focus = { scope: 'project', project: name, members, until: Number(focus.until) || 0 };
+  }
   res.json(setState({ mood, model, effort, tier, sleep, focus, hidden }));
 });
 
@@ -749,7 +761,8 @@ app.delete('/api/threads/:id', (req, res) => {
   if (!thread) return;
   if (thread.state === 'working') runner.stopTurn(thread.id);
   log(`thread deleted: "${thread.title}"`);
-  repos.releaseAll(thread.id);
+  repos.forget(thread.id);
+  repos.dropWorktrees(thread.id).catch(() => {});
   store.deleteThread(thread.id);
   datasync.saveNow('thread deleted').catch(() => {});
   res.json({ deleted: true });

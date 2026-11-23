@@ -128,30 +128,44 @@ export async function afterTurn(threadId) {
     const main = thread.repoMain || 'main';
     const ahead = Number((await git(dir, ['rev-list', '--count', `origin/${main}..${thread.repoBranch}`]).catch(() => '0')).trim());
     if (!ahead) return;
-    // The repo for this thread, so no other turn changes it while it is tested.
-    await repos.acquire(full, threadId);
+    // A turn that broke the repo's shared folders waits for him (repos.saveWork).
+    if (thread.repoBreach) {
+      note(`The app did not merge this branch into ${main}: the last turn broke the rules of ${full}'s shared folders (${thread.repoBreach}). It merges after Florian has written in this thread and the next turn ends.`);
+      return;
+    }
+    // The repo for this thread, so no other turn changes it while it is tested: alone in a
+    // repo of one thread at a time; shared in a parallel one, where the merges go one at a
+    // time instead (repos.withMergeLock) and the branch is brought up to date with main first.
+    await repos.ensure(full);
+    const parallel = repos.isParallel(full);
+    await repos.acquire(full, threadId, { mode: 'shared' });
     try {
       const now = store.getThread(threadId);
       if (!now?.repoBranch || now.state === 'working') return; // he answered: the next turn's end tries again
-      await repos.openFor(threadId, full); // its branch checked out, main fetched
-      const result = await test(dir);
-      await tidy(dir);
-      if (!result.ok) {
-        const out = tail(result.out);
-        failed = { failure: 'tests', detail: out, text: (next) => `The app ran the tests of ${full} on this branch and they did not pass, so it did not merge into ${main}. The branch ${now.repoBranch} is on GitHub.${next || ' Ask Claude to fix it, or merge it yourself from the repo panel.'}\n\nThe end of the test output:\n${out}` };
-        log(`ship: tests failed for "${now.title}" in ${full}; not merged`);
-        return;
-      }
-      if (store.getThread(threadId)?.state === 'working') return;
-      const branch = now.repoBranch;
-      const { base } = await repos.merge(threadId);
-      try { mergedHook?.(full); } catch { /* never in the way */ }
-      const tested = result.ran ? 'ran the tests, they passed, and it' : 'found no tests in this repo and';
-      note(repair
-        ? `The app ${tested} merged the fix into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.`
-        : `The app ${tested} merged the branch ${branch} into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.${full.toLowerCase() === (config?.repair?.repo || 'fburgerdev/app-ai').toLowerCase() ? ' The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.' : ''}`);
-      if (repair) store.updateThread(threadId, { state: 'done', doneAt: Date.now() });
-      log(`ship: merged ${branch} into ${full} ${base}${result.ran ? ' after its tests passed' : ' (no tests)'}`);
+      const step = async () => {
+        await repos.openFor(threadId, full, { check: false }); // its branch checked out, main fetched
+        const here = repos.dirFor(threadId, full);
+        if (parallel) await repos.catchUp(threadId);
+        const result = await test(here);
+        await tidy(here);
+        if (!result.ok) {
+          const out = tail(result.out);
+          failed = { failure: 'tests', detail: out, text: (next) => `The app ran the tests of ${full} on this branch and they did not pass, so it did not merge into ${main}. The branch ${now.repoBranch} is on GitHub.${next || ' Ask Claude to fix it, or merge it yourself from the repo panel.'}\n\nThe end of the test output:\n${out}` };
+          log(`ship: tests failed for "${now.title}" in ${full}; not merged`);
+          return;
+        }
+        if (store.getThread(threadId)?.state === 'working') return;
+        const branch = now.repoBranch;
+        const { base } = await repos.merge(threadId, { locked: true });
+        try { mergedHook?.(full); } catch { /* never in the way */ }
+        const tested = result.ran ? 'ran the tests, they passed, and it' : 'found no tests in this repo and';
+        note(repair
+          ? `The app ${tested} merged the fix into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.`
+          : `The app ${tested} merged the branch ${branch} into ${base} of ${full} and pushed it, on ${dateTimeDMY(Date.now())}. The next change in this repo starts on a new branch.${full.toLowerCase() === (config?.repair?.repo || 'fburgerdev/app-ai').toLowerCase() ? ' The app takes it as soon as nothing is running; while Claude works, the line at the top of the page offers to lock for the update.' : ''}`);
+        if (repair) store.updateThread(threadId, { state: 'done', doneAt: Date.now() });
+        log(`ship: merged ${branch} into ${full} ${base}${result.ran ? ' after its tests passed' : ' (no tests)'}`);
+      };
+      await (parallel ? repos.withMergeLock(full, step) : step());
     } finally {
       repos.release(full, threadId);
     }

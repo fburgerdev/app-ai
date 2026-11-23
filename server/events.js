@@ -3,8 +3,11 @@
 // They are not in the inbox. Each entry worth preparing becomes one thread of kind
 // "event" that waits, unseen, until it is time: a day before for an important entry, on
 // the morning of the day for a smaller one. Then the briefing is written and the
-// thread shows in Events in the top bar. It stays there until he marks it done: the
-// preparation session before the entry, the debrief after it, in the same thread.
+// thread shows in Events in the top bar: the preparation session before the entry, notes
+// during it, the debrief after it, in the same thread. When the entry is over the thread
+// asks "how was it?"; his first answer takes it out of Events into his queue as an
+// ordinary thread (runner.sendMessage), and without an answer it goes there by itself
+// on the evening of the next day (Florian, 23-11-2026).
 
 import * as store from './store.js';
 import * as runner from './runner.js';
@@ -26,7 +29,7 @@ export function showAtFor(start, important) {
   return Math.min(morning.getTime(), s - 3600_000);
 }
 
-const LEAD = (t) => `This is the thread for an entry in Florian's calendar: ${t.title}, ${new Date(t.event.start).toString().slice(0, 21)}${t.event.where ? `, ${t.event.where}` : ''}. The app made it by itself; it is not in his inbox but in Events, where it stays until he closes it. He uses it to prepare before the entry and to debrief after it, so this thread is also where what came out of it gets recorded for the brain update. Do what the brief says, then end your turn with the first question of the preparation session.`;
+const LEAD = (t) => `This is the thread for an entry in Florian's calendar: ${t.title}, ${new Date(t.event.start).toString().slice(0, 21)}${t.event.where ? `, ${t.event.where}` : ''}. The app made it by itself; it is not in his inbox but in Events. He uses it to prepare before the entry, to dictate notes during it (keep those short and sorted by person), and to debrief after it, so this thread is also where what came out of it gets recorded for the brain update. Once the entry is over the app asks him how it was; his first answer is the debrief: turn it into the follow-up mail drafts and proposed action lines. Do what the brief says, then end your turn with the first question of the preparation session.`;
 
 export function createEvent(card) {
   const start = Date.parse(card.start);
@@ -85,12 +88,37 @@ export function mailNote(t, { file = null, failed = '', mail } = {}) {
   return `${failed ? `The app found the mail conversation that led to this entry (Gmail thread ${(t.event.mailThreads || []).join(', ')}) but could not fetch it: ${failed}. Fetch it yourself. ` : 'Search his mail with the mail tools for the conversation that led to this entry: with the people in it, about its subject, in the weeks before. '}Florian wants to read what he asked and agreed himself, not only your summary of it, so show it to him word for word: write it into the artifacts folder as "${name}", with the Gmail link (${gmailLink('<thread id>')}) at the top and then every mail oldest first, each under a heading with its date (DD-MM-YYYY HH:MM), sender and recipients, and its text exactly as in the mail; earlier mails quoted at the bottom of a reply may be left off. Base the briefing on it and point to it rather than retelling it. If there is no such conversation (an entry he made himself, a call arranged by phone), say so in one line.\n\n`;
 }
 
-// Opens the events whose time has come.
+// The evening of the day after an entry ended: an event never debriefed leaves Events then.
+export function eveningAfter(end) {
+  const d = new Date(end);
+  d.setDate(d.getDate() + 1);
+  d.setHours(20, 0, 0, 0);
+  return d.getTime();
+}
+
+export const DEBRIEF_ASK = 'It is over: how was it? Tell me, typed or spoken: what was said, what you promised, what they promised, and what comes next. I turn it into the follow-up mails and the lines for your lists. Your answer takes this thread out of Events into your queue.';
+
+// After the entry: ask for the debrief once; unpin it the next evening if he never gave one.
+function afterwards(t, now) {
+  if (t.state === 'done' || t.pinned != null || now < t.event.end) return;
+  if (now >= eveningAfter(t.event.end)) {
+    store.updateThread(t.id, { pinned: false, queuedAt: now });
+    log(`events: "${t.title}" was not debriefed; it left Events for the queue`);
+    return;
+  }
+  if (t.event.debriefAsked || t.state !== 'ready') return;
+  store.appendMessage(t.id, { role: 'assistant', parts: [{ type: 'text', text: DEBRIEF_ASK }] });
+  store.updateThread(t.id, { event: { ...t.event, debriefAsked: true }, queuedAt: now });
+}
+
+// Opens the events whose time has come, and asks for the debrief of those that are over.
 export function tick() {
   if (!mayRun()) return;
   const now = Date.now();
   for (const t of store.listThreads()) {
-    if (t.kind !== 'event' || !t.event || t.event.started || t.event.showAt > now) continue;
+    if (t.kind !== 'event' || !t.event) continue;
+    if (t.event.started) { afterwards(t, now); continue; }
+    if (t.event.showAt > now) continue;
     open(t, now);
   }
 }

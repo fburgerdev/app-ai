@@ -30,7 +30,9 @@ const DEFAULTS = {
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
-  focus: { on: false, until: 0 }, // only his own threads in the queue, until his sleep time
+  // Off is Catch-up: everything. On, either `deep` (his own threads, until his sleep time)
+  // or `project` (one project or area, `members` its names, until he ends it or `until`).
+  focus: { on: false, until: 0, scope: 'deep', project: '', members: [] },
   hidden: [], // parts of the page he switched off in Settings → Layout (keys the page defines)
 };
 const PART = /^[a-z][a-z0-9-]{0,39}$/;
@@ -78,8 +80,28 @@ export function reloadState() { state = null; }
 
 export function getState() {
   const s = { ...load() };
-  if (s.focus?.on && !inFocus()) s.focus = { on: false, until: 0 };
+  if (s.focus?.on && !inFocus()) s.focus = { ...DEFAULTS.focus };
   return s;
+}
+
+// The focus in force right now, or null in Catch-up.
+export function focusNow(now = Date.now()) {
+  return inFocus(now) ? load().focus : null;
+}
+
+// What he chose in the switch: true (deep work, as before), false (Catch-up), or
+// { scope: 'project', project, members, until } with `until` 0 for "until I end it".
+export function focusFrom(patch, sleep, now = Date.now()) {
+  if (patch === false || patch?.on === false) return { ...DEFAULTS.focus };
+  if (patch === true || patch?.scope === 'deep') return { ...DEFAULTS.focus, on: true, until: focusEnd(now, sleep) };
+  if (patch?.scope === 'project' && typeof patch.project === 'string' && patch.project.trim()) {
+    const project = patch.project.trim().slice(0, 120);
+    const others = Array.isArray(patch.members) ? patch.members.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim().slice(0, 120)) : [];
+    const members = [...new Set([project, ...others])].slice(0, 60);
+    const until = Number.isFinite(patch.until) && patch.until > now ? patch.until : 0;
+    return { on: true, until, scope: 'project', project, members };
+  }
+  return null;
 }
 
 export function setState(patch) {
@@ -94,7 +116,7 @@ export function setState(patch) {
   // `gate` when it waits for the lock instead (gate.js): 'update' or 'handover'.
   if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '', ...(['update', 'handover'].includes(patch.brainHeld.gate) ? { gate: patch.brainHeld.gate } : {}) } : null;
   if (Array.isArray(patch.hidden)) next.hidden = [...new Set(patch.hidden.filter((k) => typeof k === 'string' && PART.test(k)))].slice(0, 100);
-  if (typeof patch.focus === 'boolean') next.focus = patch.focus ? { on: true, until: focusEnd(Date.now(), next.sleep) } : { on: false, until: 0 };
+  if (patch.focus != null) { const f = focusFrom(patch.focus, next.sleep); if (f) next.focus = f; }
   if (patch.sleep && typeof patch.sleep === 'object') {
     const sl = { ...DEFAULTS.sleep, ...next.sleep };
     if (typeof patch.sleep.on === 'boolean') sl.on = patch.sleep.on;
