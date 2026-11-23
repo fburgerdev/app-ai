@@ -32,7 +32,7 @@ const S = {
   cards: { running: false, ready: 0 },
   projects: null,
   tab: 'queue',
-  settingsTab: 'queue',
+  settingsTab: 'general',
   lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
@@ -2680,12 +2680,18 @@ function openSettings(tab = S.settingsTab) {
   const token = ++settingsToken;
   els.settingsBody.replaceChildren();
   els.settingsBody.scrollTop = 0;
+  if (tab === 'general') return fillGeneral(els.settingsBody);
   if (tab === 'queue') return fillQueue(els.settingsBody, token);
   if (tab === 'keys') return fillKeys(els.settingsBody);
   if (tab === 'stats') return fillStats(els.settingsBody, token);
   if (tab === 'layout') return fillLayout(els.settingsBody);
-  if (tab === 'about') return fillAbout(els.settingsBody, token);
+  if (tab === 'system') return fillSystem(els.settingsBody, token);
   return fillConnections(els.settingsBody, token);
+}
+
+// General: how the app looks on this device, and when it sends you to sleep.
+function fillGeneral(body) {
+  body.append(...lookFields(), ...sleepFields());
 }
 
 for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener('click', () => openSettings(b.dataset.tab));
@@ -2694,14 +2700,36 @@ els.settings.addEventListener('click', (e) => { if (e.target === els.settings) e
 els.openSettings.addEventListener('click', () => openSettings());
 
 // Stats: what happened, by week. Counted from what the app and the vault already keep.
+// The app keeps the last count and hands it over at once; while a newer one runs, the
+// table shows the kept one with its time and is filled in again when the count is done.
+// The very first time there is nothing kept, so grey bars in the table's shape stand in.
+const STATS_SHAPE = [['Threads', 2], ['Mail', 2], ['Opportunities', 2], ['Brain', 5], ['Code', 1], ['Claude', 1]];
+function statsPlaceholder() {
+  const bar = () => h('td', {}, h('span', { class: 'stats-bar' }));
+  return h('table', { class: 'stats is-loading', 'aria-busy': 'true', 'aria-label': 'Counting' },
+    h('thead', {}, h('tr', {}, h('th', {}, ''), ...['This week', 'Last week', 'Last 4 weeks', 'All time'].map((l) => h('th', {}, l)))),
+    ...STATS_SHAPE.map(([g, n]) => h('tbody', {},
+      h('tr', { class: 'stats-group' }, h('th', { colspan: '5' }, g)),
+      ...Array.from({ length: n }, () => h('tr', {}, h('td', { class: 'stats-label' }, h('span', { class: 'stats-bar is-wide' })), bar(), bar(), bar(), bar())))));
+}
+
 async function fillStats(body, token) {
-  body.append(h('h3', { class: 'window-head' }, 'Stats'));
+  body.replaceChildren(h('h3', { class: 'window-head' }, 'Stats'), statsPlaceholder());
   let s;
-  try { s = await api('GET', '/api/stats'); } catch (err) { body.append(h('p', { class: 'panel-note is-error' }, err.message)); return; }
+  try { s = await api('GET', '/api/stats'); } catch (err) { body.replaceChildren(h('h3', { class: 'window-head' }, 'Stats'), h('p', { class: 'panel-note is-error' }, err.message)); return; }
   if (token !== settingsToken) return;
+  showStats(body, s);
+  // A newer count is running: the kept one is on screen, the new one replaces it when it is in.
+  if (!s.refreshing) return;
+  try { s = await api('GET', '/api/stats?wait=1'); } catch { return; }
+  if (token === settingsToken) showStats(body, s);
+}
+
+function showStats(body, s) {
   const groups = [...new Set(s.rows.map((r) => r.group))];
   const cell = (v) => h('td', { class: v ? '' : 'is-zero' }, String(v));
-  body.append(
+  body.replaceChildren(
+    h('h3', { class: 'window-head' }, 'Stats ', h('span', { class: 'status' }, `as of ${clock(s.asOf)}${s.refreshing ? ' · counting again…' : ''}`)),
     h('table', { class: 'stats' },
       h('thead', {}, h('tr', {}, h('th', {}, ''), ...s.periods.map((p) => h('th', {}, p.label)))),
       ...groups.map((g) => h('tbody', {},
@@ -2713,7 +2741,7 @@ async function fillStats(body, token) {
     h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
 }
 
-// Connections and About both read /api/connections and show it as blocks.
+// Connections and System both read /api/connections and show it as blocks.
 async function loadConnections(body, token, title) {
   body.append(h('h3', { class: 'window-head' }, title));
   let c;
@@ -2759,27 +2787,28 @@ async function fillConnections(body, token) {
     note(v.ready ? 'Call your Twilio number from one of your allowed phones.'
       : v.enabled ? `Switched on, but config.json still lacks: ${v.missing.join(', ')}. See docs/calling.md.`
         : 'Off. The Talk page does the same from your phone’s browser, for free. A real phone number needs Twilio: docs/calling.md.')));
-
-  const d = c.data;
-  body.append(block('Saving the app’s state', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
-    note(d.error || (d.enabled
-      ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
-      : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 }
 
-// About: which version runs, and where.
-async function fillAbout(body, token) {
-  const c = await loadConnections(body, token, 'About');
+// System: the app itself running, not you: its version and updates, its backup to GitHub,
+// and where it runs.
+async function fillSystem(body, token) {
+  const c = await loadConnections(body, token, 'System');
   if (!c) return;
   const block = connBlock;
   const note = connNote;
 
   if (c.app?.commit) {
     const when = (ts) => new Date(ts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    body.append(block('App version', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
+    body.append(block('Version and updates', { text: `${c.app.commit}${c.app.date ? ` · ${when(Date.parse(c.app.date))}` : ''}` },
       note(`${c.app.subject}.${c.app.startedAt ? ` Running since ${when(c.app.startedAt)}.` : ''}${c.app.update?.enabled ? ` Updates itself from GitHub every ten minutes${c.app.update.waiting ? `; a new version is waiting until Claude has finished` : ''}.` : ''}`),
       c.app.update?.enabled ? updateButton() : null));
   }
+
+  const d = c.data;
+  body.append(block('Backup to GitHub', d.error ? { bad: true, text: 'not saving' } : d.enabled ? { on: true, text: d.lastPush ? `saved ${stamp(d.lastPush)}` : 'on' } : { text: 'off' },
+    note(d.error || (d.enabled
+      ? `Threads, water levels, the scratchpad and what the queue has learned are committed and pushed to ${d.repo} every few minutes. Secrets and the brain clone are left out.`
+      : 'The state stays on this computer only. Set dataRepo in config.json to save it to GitHub.'))));
 
   const r = c.remote;
   body.append(block('Where the app runs', { on: true, text: r.local ? 'this computer' : 'another computer' },
@@ -2826,7 +2855,6 @@ function sleepFields() {
 }
 
 async function fillQueue(body, token) {
-  body.append(...sleepFields());
   const state = h('span', { class: 'status' });
   body.append(h('h3', { class: 'window-head' }, 'What the queue has learned ', state),
     h('p', { class: 'panel-note' }, 'The queue reads this every time it orders what is waiting. It is rewritten from your choices now and then: what you answer, put off, close, drag, accept and decline, and the reasons you give. Correct it or add your own lines, and they are kept.'));
@@ -2843,13 +2871,11 @@ async function fillQueue(body, token) {
   body.append(area);
 }
 
-// Look: light or dark, then which parts of the page are there. Each change shows at once,
-// behind this window.
+// Layout: which parts of the page are there. Each change shows at once, behind this window.
 function fillLayout(body) {
   const hidden = hiddenParts();
   const groups = [...new Set(PARTS.map((p) => p.group))];
   body.append(
-    ...lookFields(),
     h('h3', { class: 'window-head' }, 'Layout'),
     h('p', { class: 'panel-note' }, 'Switch off what you do not use. It changes on the laptop, the Pi and your phone alike, and the keys keep working.'),
     h('div', { class: 'layout-btns' },
@@ -2942,7 +2968,7 @@ function fillKeys(body) {
       ['Alt U', 'Update the brain'],
     ]],
   ];
-  body.append(h('h3', { class: 'window-head' }, 'Keys'),
+  body.append(h('h3', { class: 'window-head' }, 'Shortcuts'),
     ...groups.map(([g, rows]) => h('section', { class: 'keys-group' },
       h('h4', { class: 'layout-head' }, g),
       h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])))),
