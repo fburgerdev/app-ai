@@ -83,6 +83,16 @@ export function loadThreads() {
     if (meta.nextTier) meta.nextTier = '';
     // Background jobs of a turn that ran here ended with the app.
     if (meta.background?.length && mine(meta)) meta.background = [];
+    // A merge into main this computer was in the middle of ended with the app too (Update
+    // now, a crash, the laptop shut down): it is tried again by itself shortly
+    // (runner.retryMerges), so a finished branch is never left behind. A merge already
+    // planned for later keeps its time.
+    if (meta.merging && (!meta.merging.on || meta.merging.on === HOST)) {
+      log(`thread "${meta.title}": its merge into main was cut off when the app stopped; trying again by itself`);
+      meta.remerge ||= { at: Date.now() + 30_000 };
+      meta.merging = null;
+      writeJson(metaFile(id), meta);
+    }
     threads.set(id, meta);
   }
   log(`loaded ${threads.size} threads`);

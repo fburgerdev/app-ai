@@ -22,6 +22,7 @@
 // with `"autoMerge": false` in config.json (repair threads: `"repair": { "autoMerge": false }`).
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { log } from './config.js';
@@ -183,6 +184,9 @@ export async function afterTurn(threadId) {
   // given back, so the turn that fixes it can take it.
   let failed = null;
   shipping.add(threadId);
+  // Kept on disk while it runs: an app that stops in the middle (Update now, a crash, the
+  // laptop shut down) finds it when it starts and tries the merge again (store.loadThreads).
+  store.updateThread(threadId, { merging: { at: Date.now(), on: os.hostname() } });
   try {
     // Is there anything main does not have?
     const dir = repos.dirOf(full);
@@ -261,6 +265,7 @@ ${out}` };
     log(`ship: could not merge for "${thread.title}": ${err.message}`);
   } finally {
     shipping.delete(threadId);
+    store.updateThread(threadId, { merging: null });
     // Here and not after the try: its early returns would skip it.
     if (failed) note(failed.text(failed.failure ? whatNext(threadId, failed.failure, failed.detail) : ''));
     if (again.delete(threadId)) setTimeout(() => afterTurn(threadId).catch(() => {}), 0);
