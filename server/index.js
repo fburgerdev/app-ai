@@ -481,10 +481,24 @@ app.post('/api/threads/:id/messages', (req, res) => {
   // "Send and done": the message is kept and the thread closes, with no answer.
   const done = req.body.done === true;
   queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
-  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || '') });
+  // While Claude works: "add" (read at its next step) or "next" (runs after the turn).
+  const mode = req.body.mode === 'next' ? 'next' : 'add';
+  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || ''), mode });
   drafts.clearDraft(thread.id);
   cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
+});
+
+// What he queued as "Next": run it now (after the supervisor held it), or take it back.
+app.post('/api/threads/:id/queued/run', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try { res.json({ thread: runner.runQueued(thread.id) }); } catch (err) { res.status(409).json({ error: err.message }); }
+});
+app.delete('/api/threads/:id/queued/:qid', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try { res.json(runner.dropQueued(thread.id, req.params.qid)); } catch (err) { res.status(409).json({ error: err.message }); }
 });
 
 // "Send into a spin-off": the message starts a new thread that begins as a copy of this
@@ -712,7 +726,8 @@ app.delete('/api/threads/:id', (req, res) => {
   if (!thread) return;
   if (thread.state === 'working') runner.stopTurn(thread.id);
   log(`thread deleted: "${thread.title}"`);
-  repos.releaseAll(thread.id);
+  repos.forget(thread.id);
+  repos.dropWorktrees(thread.id).catch(() => {});
   store.deleteThread(thread.id);
   datasync.saveNow('thread deleted').catch(() => {});
   res.json({ deleted: true });
@@ -1065,6 +1080,8 @@ extraction.watchHold(link.mayRunBackground);
 // A message that no turn took up (sent while the work moved between the computers) is
 // answered after all.
 runner.watchLeftOver(link.mayRunBackground);
+// The last line of what Claude runs in the background, for the thread's status line.
+runner.watchBackground();
 events.initEvents({ mayRunHere: link.mayRunBackground, mailConnected: () => config.fake || google.googleConnected() });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.
