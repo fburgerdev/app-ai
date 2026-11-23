@@ -215,7 +215,7 @@ function settle(L) {
   }
 }
 
-export const holders = (full) => { const L = locks.get(key(full)); if (!L) return []; prune(L); return [...L.holders]; };
+export const holders = (full) => { const L = locks.get(key(full)); return L ? [...L.holders] : []; };
 export const holder = (full) => holders(full)[0] || null;
 export const holds = (full, id) => Boolean(full) && holders(full).includes(id);
 export const lockMode = (full) => (holders(full).length ? locks.get(key(full)).mode : '');
@@ -247,7 +247,8 @@ function pump(L) {
   prune(L);
   while (L.queue.length) {
     const head = L.queue[0];
-    if (!alive(head.id)) { L.queue.shift(); continue; }
+    // A parked turn of a thread that is gone: nobody to start. One waiting right now keeps its place.
+    if (!head.resolve && !alive(head.id)) { L.queue.shift(); continue; }
     if (!grantable(L, head.mode)) break;
     L.queue.shift();
     take(L, head.id, head.mode);
@@ -403,14 +404,27 @@ function unlockStore(dir) {
 
 const protecting = () => config?.protectShared !== false;
 
+// The stores this app has protected since it started: protecting walks every file in a
+// store, so it is done once, not at every turn.
+const guarded = new Set();
+
 export function protectShared(full) {
   if (!protecting()) return;
-  for (const { p, kind } of sharedList(full)) lockStore(storeOf(full, p), kind);
+  for (const { p, kind } of sharedList(full)) {
+    const dir = storeOf(full, p);
+    if (guarded.has(`${norm(dir)}|${kind}`) || !fs.existsSync(dir)) continue;
+    lockStore(dir, kind);
+    guarded.add(`${norm(dir)}|${kind}`);
+  }
 }
 
 export function unprotectShared(full) {
   if (!protecting()) return;
-  for (const { p } of sharedList(full)) unlockStore(storeOf(full, p));
+  for (const { p, kind } of sharedList(full)) {
+    const dir = storeOf(full, p);
+    unlockStore(dir);
+    guarded.delete(`${norm(dir)}|${kind}`);
+  }
 }
 
 // Moves what a real folder holds into the store (the first time a repo shares a folder its
@@ -464,7 +478,11 @@ async function linkShared(full, dir) {
       fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
     }
   } finally {
-    if (lifted) protectShared(full);
+    // Protected from the start, and again after a folder was moved in. Not while an
+    // exclusive turn holds the repo with the protection lifted.
+    if (!lockOf(full).lifted) {
+      try { protectShared(full); } catch (err) { log(`repos: could not protect the shared folders of ${full}: ${err.message}`); }
+    }
   }
 }
 
