@@ -98,6 +98,77 @@ const marked = new Marked({
 });
 
 const CALLOUT = /^\s*\[!(\w+)\][+-]?\s*(.*)$/;
+
+// The blocks of a reply (Florian, 23-11-2026): what is his to do, what Claude found, what
+// Claude makes of it, what Claude did, and lines for him to confirm with Yes or No.
+// Claude writes them as callouts, `> [!move]`, so in `Threads/` and on GitHub they still
+// read as plain quotes.
+const BLOCK_ALIAS = { you: 'move', yourmove: 'move', mytake: 'take' };
+const BLOCK_TITLE = { move: 'Your move', take: 'My take', found: 'Found', done: 'Done', confirm: 'To confirm' };
+
+// A line to confirm, as its text: its own words, without a list nested under it.
+function lineText(li) {
+  const copy = li.cloneNode(true);
+  for (const sub of copy.querySelectorAll('ul, ol, .confirm-btns')) sub.remove();
+  return copy.textContent.replace(/\s+/g, ' ').trim();
+}
+
+// Each item of a confirm block gets a Yes and a No. The project it sits under is the
+// bold line above its list, if there is one. The app wires the buttons (app.js).
+function confirmLines(quote) {
+  let group = '';
+  for (const child of [...quote.children]) {
+    if (child.matches('p')) {
+      const strong = child.querySelector('strong');
+      if (strong && strong.textContent.trim() === child.textContent.trim()) group = strong.textContent.replace(/[:\s]+$/, '').trim();
+      continue;
+    }
+    if (!child.matches('ul, ol')) continue;
+    for (const li of child.querySelectorAll(':scope > li')) {
+      const line = lineText(li);
+      if (!line) continue;
+      li.classList.add('confirm-line');
+      li.dataset.line = line;
+      if (group) li.dataset.group = group;
+      const btns = document.createElement('span');
+      btns.className = 'confirm-btns';
+      for (const [answer, label] of [['yes', 'Yes'], ['no', 'No']]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `confirm-btn confirm-${answer}`;
+        b.dataset.answer = answer;
+        b.textContent = label;
+        btns.append(b);
+      }
+      li.append(btns);
+    }
+  }
+}
+
+// "Done" folds to its title line; what is under it opens on a click.
+function foldDone(quote, title) {
+  const det = document.createElement('details');
+  det.className = quote.className;
+  const sum = document.createElement('summary');
+  const lab = document.createElement('span');
+  lab.className = 'callout-title';
+  lab.textContent = 'Done';
+  sum.append(lab);
+  const hintText = title.replace(/^done\s*[·:—-]?\s*/i, '').trim();
+  if (hintText) {
+    const hint = document.createElement('span');
+    hint.className = 'done-hint';
+    hint.textContent = hintText;
+    sum.append(hint);
+  }
+  det.append(sum);
+  const body = document.createElement('div');
+  body.className = 'done-body';
+  body.append(...quote.childNodes);
+  if (!body.textContent.trim()) det.classList.add('is-empty');
+  else det.append(body);
+  quote.replaceWith(det);
+}
 // Inline code that names a vault file becomes a link to it.
 const VAULT_PATH = /^(Core|Brain|Threads|Archive|Claude|Artifacts|Files|For Florian|For Claude)\/[^<>:"|?*]+\.[a-z0-9]{1,5}$/i;
 
@@ -114,20 +185,26 @@ function decorate(root) {
   for (const quote of root.querySelectorAll('blockquote')) {
     const first = quote.querySelector(':scope > p');
     if (!first) continue;
-    const firstLine = first.innerHTML.split('\n')[0];
+    // Marked writes a line break inside a paragraph as <br>, with or without a newline.
+    const lines = first.innerHTML.split(/<br\s*\/?>\n?|\n/);
+    const firstLine = lines[0];
     const probe = document.createElement('div');
     probe.innerHTML = firstLine;
     const m = CALLOUT.exec(probe.textContent);
     if (!m) continue;
-    const kind = m[1].toLowerCase();
+    const raw = m[1].toLowerCase();
+    const kind = BLOCK_ALIAS[raw] || raw;
     quote.classList.add('callout', `callout-${kind}`);
+    if (BLOCK_TITLE[kind]) quote.classList.add('block');
     const title = document.createElement('div');
     title.className = 'callout-title';
-    title.textContent = m[2] || kind.charAt(0).toUpperCase() + kind.slice(1);
-    const rest = first.innerHTML.split('\n').slice(1).join('\n');
+    title.textContent = m[2] || BLOCK_TITLE[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
+    const rest = lines.slice(1).join('<br>');
     if (rest.trim()) first.innerHTML = rest;
     else first.remove();
+    if (kind === 'done') { foldDone(quote, m[2] || ''); continue; }
     quote.prepend(title);
+    if (kind === 'confirm') confirmLines(quote);
   }
   // Vault paths
   for (const code of root.querySelectorAll(':not(pre) > code')) {
@@ -157,8 +234,22 @@ export function renderMarkdown(text) {
   return el;
 }
 
+// Inside a quote, a numbered line right under a line of text ("**Project**" then
+// "2. the line") would be read as part of that paragraph, since only a list starting at 1
+// may interrupt one. A quote line is put between them, so the lines stay a list.
+function listsInQuotes(text) {
+  const out = [];
+  for (const line of String(text || '').split('\n')) {
+    const prev = out.at(-1);
+    if (/^>\s*\d+[.)]\s/.test(line) && prev !== undefined && /^>\s*\S/.test(prev)
+      && !/^>\s*(\d+[.)]|[-*+])\s/.test(prev) && !/^>\s*\[!\w+\]/.test(prev)) out.push('>');
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 export function renderInto(el, text) {
-  const html = marked.parse(String(text || ''));
+  const html = marked.parse(listsInQuotes(text));
   el.innerHTML = DOMPurify.sanitize(html, {
     ADD_ATTR: ['target', 'data-wiki', 'data-tex', 'data-display'],
     FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],

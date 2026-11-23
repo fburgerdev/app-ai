@@ -181,9 +181,11 @@ export function getThread(id) {
   return threads.get(id) || null;
 }
 
-// True when Florian has said something in the thread that no brain update has seen.
+// True when Florian has said something in the thread that no brain update has seen,
+// his notes during an event included.
 export function isUnfiled(thread) {
-  return (thread.lastUserAt || 0) > (thread.extractedCount || 0);
+  return (thread.lastUserAt || 0) > (thread.extractedCount || 0)
+    || Boolean(thread.notes?.text?.trim() && (thread.notes.ts || 0) > (thread.extractedAt || 0));
 }
 
 // A spin-off: a new thread that starts as a copy of another one's conversation and

@@ -23,7 +23,9 @@ Each thread file is a conversation with Florian. It has an "Earlier" part, which
    - A spin-off thread says so at its start. What it copied from its original is in its "Earlier" part and is filed from the original, not from the spin-off.
 4. **Mails.** A mail file that was not sent goes into `Artifacts/Mails/` as a draft, in the shape `Claude/Writing Mails.md` defines. A line "[Florian sent the mail …]" means he sent that version from the app: file it into `Artifacts/Mails/sent/` with the last version Claude wrote as the draft and the version he sent as sent, record what the mail fixes (what he promised, asked or announced) in `Core/`, and add the Waiting For row for the reply as the vault says.
 
-A thread whose first message says the app started it from his calendar is a preparation for an event. What Claude wrote in the briefing is Claude's; what Florian said in the session is filed like any thinking session.
+A thread whose first message says the app started it from his calendar is a preparation for an event. What Claude wrote in the briefing is Claude's; what Florian said in the session is filed like any thinking session. A section "Florian's notes during the entry" in a thread file is what he typed into the app's notes field during the entry: his own words, in note form, filed like anything he said in the thread, and only when it says they are new since the last update.
+
+A line "[Florian confirmed with the Yes button, …, the proposed line under "X": …]" is his confirmation of that line, given with a button on Claude's proposal: it counts exactly as if he had written "confirmed" for it, so the line goes into the action file or becomes the project as proposed, under the project or area named. "[Florian declined with the No button, …]" means that line does not go in. When he clicked the same line twice, his last click counts.
 
 A thread that worked in a GitHub repo shows it in its events: what was pushed, merged into main, renamed or created. File what that means for the project, not the code itself. When a repo was renamed, change every mention of the old name in the vault, the `repo:` lines included. A thread whose events say the app merged a branch into the vault's own repo (`fburgerdev/brain`) changed the vault's structure or rules itself: that change is already in the vault you are in. Do not make it again or undo it; file the decision behind it, as usual. When Florian says a project has a repo, or a repo was created in a thread on that project, give its note a `repo: owner/name` line under its other field lines.
 
@@ -75,14 +77,17 @@ Each file in `Core/People/` carries a `Status:` line under `Last contacted:`, wh
 
 ## How to finish
 
-End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest.
+End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest, in this update's own thread in the app. He answers the questions there, and the thread files his answers into the vault right away, so ask them as closed questions he can answer in a few words.
+
+He wants no report: "Written" is one short sentence, at most 20 words, on what went in (Florian, 23-11-2026: "dont put a report though, or only one sentence, super short. mainly the questions").
 
 ```
 STATUS: updated | nothing | questions
 COMMIT: thinking: <subject, as "Committing to Git" in Claude/Instructions.md describes>
 
 ## Written
-- <vault file> — <a few words on what went in>
+<one short sentence, e.g. "Filed the Magdalena call, two mails and the Opatz chase.">
+
 
 ## Questions
 **<project or area>**
