@@ -3875,21 +3875,30 @@ function connect() {
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
-  on('update', () => checkUpdate());
+  // The event itself says "applying" a moment before the restart; the fetch may not get through.
+  on('update', (u) => { updateNow = { ...updateNow, ...u }; renderUpdate(); checkUpdate(); });
   // The page listens first and reads the state second, so nothing that happens in
   // between is missed. After a lost connection it reads the state again.
   let started = false;
-  source.onerror = () => { els.app.classList.add('is-offline'); checkStatus(); };
+  source.onerror = () => { connLost(); checkStatus(); };
   source.onopen = async () => {
-    els.app.classList.remove('is-offline');
+    connBack();
     const before = S.connections?.app?.commit;
     try {
       await load();
     } catch { return; }
-    // The app updated itself and restarted: take the new version of the page too.
-    if (before && S.connections?.app?.commit && S.connections.app.commit !== before) { location.reload(); return; }
+    // The app updated itself and restarted: take the new version of the page too, and say
+    // so once it is loaded.
+    if (before && S.connections?.app?.commit && S.connections.app.commit !== before) {
+      try { sessionStorage.setItem('app-updated', S.connections.app.subject || ''); } catch { /* no toast then */ }
+      location.reload();
+      return;
+    }
     if (!started) {
       started = true;
+      let updated = null;
+      try { updated = sessionStorage.getItem('app-updated'); sessionStorage.removeItem('app-updated'); } catch { /* fine */ }
+      if (updated !== null) toast(updated ? `Updated · ${versionTitle(updated)}` : 'Updated to the new version.');
       if (S.config.fake) document.body.classList.add('is-fake');
       loadProjects();
       const first = inbox()[0];

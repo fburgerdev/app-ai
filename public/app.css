@@ -86,7 +86,7 @@
 :root[data-theme="light"] ::-webkit-scrollbar-thumb { background: #c4b392; }
 :root[data-theme="light"] ::selection { background: rgba(112, 69, 181, 0.2); }
 :root[data-theme="light"] .top-count.has-ready { color: #fff; }
-:root[data-theme="light"] .is-offline .stage::before { background: #f2d6cf; color: #7a1f1a; }
+:root[data-theme="light"] .conn { box-shadow: 0 10px 30px rgba(70, 55, 30, 0.22); }
 :root[data-theme="light"] .btn-send:hover { background: #c98420; }
 :root[data-theme="light"] ins { color: #1e5c38; background: rgba(46, 122, 78, 0.16); }
 :root[data-theme="light"] del { color: #9a2b2b; background: rgba(181, 48, 45, 0.12); }
@@ -447,12 +447,47 @@ body.is-dragging .group-drop { display: block; }
   min-height: 0;
   overflow: hidden;
 }
-.is-offline .stage::before {
-  content: 'The app stopped answering. Start it again with “npm start”; this page reconnects by itself.';
-  padding: 8px 28px;
-  background: #4a2630;
-  color: #ffd9d9;
+/* The app is not answering: almost always it is restarting for an update (Florian,
+   23-11-2026: the red bar looked like a crash). The page fades a little and a calm pill
+   says what is going on; only when the app stays away does it turn amber. */
+.app { transition: opacity 0.4s ease, filter 0.4s ease; }
+.is-offline .app { opacity: 0.55; filter: saturate(0.6); pointer-events: none; }
+.conn {
+  position: fixed;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(92vw, 34rem);
+  padding: 10px 18px 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--raised) 88%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(8, 9, 16, 0.45);
+  animation: conn-in 0.35s ease;
 }
+.conn[hidden] { display: none; }
+.conn-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.conn-text strong { font-weight: 650; color: var(--bright); }
+.conn-sub { font-size: 12.5px; color: var(--muted); }
+.conn-spin {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--work) 25%, transparent);
+  border-top-color: var(--work);
+  animation: conn-spin 1.1s linear infinite;
+}
+.conn-mark { flex: none; width: 10px; height: 10px; margin: 0 3px; border-radius: 50%; background: var(--you); }
+.conn.is-stuck { border-color: color-mix(in srgb, var(--you) 60%, var(--line)); }
+@keyframes conn-spin { to { transform: rotate(360deg); } }
+@keyframes conn-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+@media (prefers-reduced-motion: reduce) { .conn-spin { animation-duration: 3s; } .conn { animation: none; } }
 .thread-head {
   display: flex;
   flex-wrap: wrap;
