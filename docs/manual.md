@@ -58,7 +58,7 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 Five tiers, cheapest first: **Cheap** (Opus, low effort), **Low** (Opus, medium), **Default** (Opus, high), **High** (Fable, medium), **Extra** (Fable, high). The picker in the composer is one switch, the same in every thread.
 
 - **Auto**: before each turn a cheap model reads the message and picks a tier, so there is nothing to choose.
-- **Quick select** instead asks on sending: five buttons over the box, 1 to 5 or a click, Enter for Default (3), which is always marked, Escape back to writing. It asks where a message starts new work (Send, Start, a spin-off). It does not ask for Done, which Claude does not answer, nor for a message added while Claude is working, which runs on the tier of the work it belongs to.
+- **Quick select** instead asks on sending: five buttons over the box, 1 to 5 or a click. The arrow keys move the highlight, and Enter, or Send once more, takes the highlighted one; every message starts on Default (3) again. Escape goes back to writing. It asks where a message starts new work (Send, Start, a spin-off, a "Next"). It does not ask for Done, which Claude does not answer, nor for a message added into the running turn, which runs on the tier of the work it belongs to.
 - The tier a turn used is shown in the thread header; clicking it runs the same message again one tier up and keeps that tier for the thread, until you pick Auto or Quick select there again.
 
 Auto does not step down from Fable to Opus in a conversation that is still fresh (its last turn less than an hour ago, and more than a few pages long): Claude keeps what it has read ready per model, so a turn on the other model reads the whole conversation again at full price, which costs more than the easier message saves. It takes Fable's lower tier (High) instead. Stepping up, the effort, and your own choice are not touched.
@@ -270,6 +270,20 @@ When Claude's five-hour or weekly limit cuts a turn off, the thread does not com
 - A turn cut off while working in a repo leaves its work on the thread's branch on GitHub but is not merged into main. That happens when the turn has finished.
 - A brain update cut off by the limit files nothing and runs again by itself when the limit lifts. Cards skip their round while a limit is on.
 - The times are in `config.json` under `limits` (`marginMs`, `fallbackMs`, `checkMs`).
+
+### While Claude works, and the supervisor
+
+- **Sending while Claude works** asks "When?", as a quick select (1, 2, arrows, Enter or Send again):
+  - **Add now**, the default: Claude reads it at its next step, in the running turn. It shows where Claude read it, with Claude's reply so far above it.
+  - **Next**: it waits under the live reply ("Next, when this turn ends") and runs after the turn as a new command, on the tier you pick for it. Change or × takes it back.
+- **The status line** at the end of the live reply always says what Claude is doing and for how long. While a background job runs (a render), it also shows the last line the job wrote.
+- **Long jobs** keep the turn open for up to three hours: Claude runs them in the background and is woken when they end. Until 23-11-2026 the line to Claude Code closed after ten minutes, and every tool call after that failed with "Stream closed".
+- **The supervisor** is the app acting by itself. Its messages have their own colour, and "What Claude got" shows what it sent. When a turn ends, a cheap model reads the reply:
+  - it only waits for a go-ahead ("say go on when you're back"): the supervisor tells Claude to carry on a minute later;
+  - it asks you something only you can decide: it waits for you, and so does a queued Next ("Held by the supervisor: …", with **Run it**; writing again sends the held Next first, then your message);
+  - otherwise a queued Next runs at once.
+- The supervisor also speaks for the app's other automatic starts: a retry after an error, the end of a `continue_later` wait, a merge fix, a usage limit that lifted. A turn whose line to Claude Code broke, or that showed no sign of life for 20 minutes, ends as an error and is tried again.
+- The brakes: at most **10** automatic runs since your last message, at most three errors in a row without work done, and nothing goes ahead by itself after a reply in which Claude did no work. When one is reached, the supervisor says so and the thread comes to you. They are in `config.json` under `autoRetry` (`maxRuns`, `errorTries`, `goaheadDelayMs`).
 
 ## Usage
 

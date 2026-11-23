@@ -442,6 +442,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   const inFlight = new Set(); // tool calls Claude is waiting on
   const outputs = new Map(); // tool_use_id -> the file a background command writes to
   const taskFiles = new Map(); // task_id -> that file
+  const taskOfTool = new Map(); // tool_use_id -> the task it started
   let background = [];
   const reportBackground = () => onEvent?.({ type: 'background', tasks: background.map((t) => ({ ...t, outputFile: taskFiles.get(t.id) || '' })) });
   const endRun = (why) => { if (broken) return; broken = why; log(`run ended by the app: ${why}`); abortController.abort(); };
@@ -472,9 +473,10 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       } else if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
         background = msg.tasks.filter((t) => !t.ambient && !t.parent_task_id).map((t) => ({ id: t.task_id, description: t.description || t.task_type || 'a job', type: t.task_type || '' }));
         reportBackground();
-      } else if (msg.subtype === 'task_started' && msg.tool_use_id && outputs.has(msg.tool_use_id)) {
-        taskFiles.set(msg.task_id, outputs.get(msg.tool_use_id));
-        reportBackground();
+      } else if (msg.subtype === 'task_started' && msg.tool_use_id) {
+        // The task and the tool result that names its file arrive in either order.
+        taskOfTool.set(msg.tool_use_id, msg.task_id);
+        if (outputs.has(msg.tool_use_id)) { taskFiles.set(msg.task_id, outputs.get(msg.tool_use_id)); reportBackground(); }
       }
       continue;
     }
@@ -527,8 +529,12 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
         inFlight.delete(block.tool_use_id);
         const said = resultText(block.content);
         // A command sent to the background says where its output goes.
-        const file = /Output is being written to:?\s*(\S+)/i.exec(said)?.[1];
-        if (file) outputs.set(block.tool_use_id, file.replace(/[.,;)]+$/, ''));
+        const file = backgroundOutput(said);
+        if (file) {
+          outputs.set(block.tool_use_id, file);
+          const task = taskOfTool.get(block.tool_use_id);
+          if (task) { taskFiles.set(task, file); reportBackground(); }
+        }
         // The line to Claude Code broke: nothing Claude does from here can work. The run
         // ends as an error, and the app starts it again by itself (retry.js).
         if (block.is_error && STREAM_CLOSED.test(said)) endRun('Stream closed: the line between the app and Claude Code broke mid-turn.');
@@ -566,6 +572,12 @@ const BG_WAIT_MS = 3 * 3600_000;
 const WATCHDOG_MS = 20 * 60_000;
 const WATCHDOG_TOOL_MS = 70 * 60_000; // a tool may run long (pi_shell up to 60 minutes)
 const STREAM_CLOSED = /stream closed|Tool permission (stream closed|request failed)/i;
+
+// Where a command sent to the background writes its output, from what the tool said.
+export function backgroundOutput(said) {
+  const m = /Output is being written to:?\s*(\S+)/i.exec(said) || /((?:[A-Za-z]:[\\/]|\/)[^\s"'`]*?\.output)\b/.exec(said);
+  return m ? m[1].replace(/[.,;)`]+$/, '') : '';
+}
 
 function resultText(content) {
   if (typeof content === 'string') return content;
