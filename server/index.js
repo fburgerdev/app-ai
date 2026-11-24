@@ -1137,14 +1137,17 @@ setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) run
 const settle = () => {
   const l = link.status();
   const otherGone = link.mayRunBackground() && (!l.enabled || !l.online);
-  const n = store.settleOrphans({ isRunning: runner.isRunning, otherGone });
+  // A brain update works in its thread without a turn of the runner's: it is running too.
+  // (Until 24-11-2026 it was not asked, so within a minute of every brain update its thread
+  // came back as "The app was closed while Claude was working on this".)
+  const n = store.settleOrphans({ isRunning: (id) => runner.isRunning(id) || extraction.runsIn(id), otherGone });
   if (n) log(`threads: ${n} turn(s) that will not finish went back to the inbox`);
 };
 setTimeout(() => {
   settle();
   if (link.mayRunBackground()) { const n = store.clearFalseErrors(); if (n) log(`threads: cleared a false "ended on an error" from ${n} finished thread(s)`); }
 }, 5000).unref?.();
-setInterval(settle, 60_000).unref?.();
+setInterval(settle, Number(config.settleMs) || 60_000).unref?.();
 // Threads from before the workbench: what a script left among the shown files leaves
 // the list, once per thread (store.pruneArtifacts). A thread Claude works on now waits.
 setTimeout(() => {

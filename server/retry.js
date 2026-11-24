@@ -105,7 +105,7 @@ export function mergePlan({ auto, failure, opts, now = Date.now() }) {
 // The line the thread shows while it waits.
 export function holdLine(held, now = Date.now()) {
   const at = clock(held.until, now);
-  if (held.kind === 'retry') return `Ended on an error: tries again by itself at ${at}`;
+  if (held.kind === 'retry') return held.restart ? 'The app restarted mid-turn: carries on by itself now' : `Ended on an error: tries again by itself at ${at}`;
   if (held.kind === 'continue') return `Waiting (${held.reason}): carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge: Claude fixes it by itself at ${at}`;
   if (held.kind === 'goahead') return `Claude only needed a go-ahead: the supervisor carries on at ${at}`;
@@ -120,6 +120,13 @@ export const gateLine = (held) => (held.reason === 'handover' ? 'Queued for the 
 
 // When the hold is over: what Claude gets, and the note the thread shows.
 export function resumeText(held, now = Date.now()) {
+  if (held.kind === 'retry' && held.restart) {
+    // No failure of the turn: the app itself restarted (an update, or it was closed).
+    return {
+      prompt: `[The app: the app restarted in the middle of the last turn (an update, or it was closed), at ${dateTimeDMY(held.at)}, which cut the turn off. The app started it again by itself; Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. A job you had running in the background ended with the app: check what it left and start it again if needed. The message the turn was about:]\n\n${held.prompt}`,
+      note: `[The app restarted in the middle of this turn; it carried on by itself on ${dateTimeDMY(now)}.]`,
+    };
+  }
   if (held.kind === 'retry') {
     return {
       prompt: `[The app: the last turn ended on an error at ${dateTimeDMY(held.at)}: "${held.reason}". The app started it again by itself (automatic try ${held.tries}); Florian has not written anything since, unless a message follows below. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. If a step failed or timed out before, do it differently this time: smaller steps, a longer timeout, or a long job started in the background with continue_later. The message the turn was about:]\n\n${held.prompt}`,
@@ -166,7 +173,7 @@ ${held.prompt}`,
 // What Claude gets when Florian writes while such a hold waits: his message goes first,
 // at once, and Claude knows what was pending.
 export function interruptedText(held, message) {
-  if (held.kind === 'retry') return `[The app: the turn about the message below ended on an error ("${held.reason}") and was waiting to be tried again by itself. Florian has written since, so this turn starts now, with his new message at the end. Carry on with the work where it stopped, in the light of what he says.]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
+  if (held.kind === 'retry') return `[The app: the turn about the message below ${held.restart ? 'was cut off when the app restarted' : `ended on an error ("${held.reason}")`} and was waiting to be tried again by itself. Florian has written since, so this turn starts now, with his new message at the end. Carry on with the work where it stopped, in the light of what he says.]\n\n${held.prompt}\n\n[Florian's new message:]\n\n${message}`;
   if (held.kind === 'continue') return `[The app: you had called continue_later ("${held.reason}"), and Florian wrote before the app looked again. Answer him, and check on that work too.]\n\n${message}`;
   if (held.kind === 'goahead') return `[The app: your last reply waited for a go-ahead, and the supervisor was about to tell you to carry on. Florian wrote first. Answer him, in the light of the work you were on.]
 

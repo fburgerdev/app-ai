@@ -482,16 +482,18 @@ export function retryInterrupted({ mayRun = () => true, now = Date.now() } = {})
     if (!mayRun()) return started;
     store.updateThread(t.id, { interrupted: 0 }, { quiet: true });
     if (!t.turnPrompt) continue; // from before the app kept the prompt
-    const reason = 'the app was closed in the middle of the turn';
-    const plan = retry.turnPlan({ auto: t.auto, error: reason, didWork: false, opts: config.autoRetry, now });
-    if (plan?.stop) {
-      store.updateThread(t.id, { auto: plan.auto }, { quiet: true });
-      supervisorNote(t.id, `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]`);
+    const reason = 'the app restarted in the middle of the turn';
+    // A restart is no failure of the turn: it counts as a run of the app's own (`maxRuns`),
+    // never towards the errors in a row that stop a thread (`didWork`).
+    const plan = retry.turnPlan({ auto: t.auto, error: reason, didWork: true, opts: config.autoRetry, now });
+    if (!plan?.kind) {
+      // Not carried on by itself after all (switched off, or it ran by itself too often): then it is his.
+      store.updateThread(t.id, { error: 'The app was closed while Claude was working on this. Send a message to pick it up again.', pending: [], ...(plan?.stop ? { auto: plan.auto } : {}) });
+      if (plan?.stop) supervisorNote(t.id, `[The app stopped carrying on by itself: ${plan.stop}. Send a message to pick it up again.]`);
       continue;
     }
-    if (!plan?.kind) continue;
-    store.updateThread(t.id, { auto: plan.auto }, { quiet: true });
-    holdAuto(t.id, { kind: 'retry', until: now, reason, prompt: t.turnPrompt, tier: t.lastTier || '', tries: plan.tries });
+    store.updateThread(t.id, { auto: { ...plan.auto, fails: t.auto?.fails || 0 } }, { quiet: true });
+    holdAuto(t.id, { kind: 'retry', until: now, reason, prompt: t.turnPrompt, tier: t.lastTier || '', tries: plan.tries, extra: { restart: true } });
     started += 1;
   }
   return started;
@@ -502,12 +504,16 @@ let mayRunHere = () => true; // whether this computer does the work now (watchHo
 export function watchHolds(mayRun) {
   mayRunHere = () => { try { return mayRun ? Boolean(mayRun()) : true; } catch { return false; } };
   clearInterval(holdTimer);
-  holdTimer = setInterval(() => {
+  const tick = () => {
     try { retryInterrupted({ mayRun }); } catch (err) { log(`interrupted turns: ${err.stack || err.message}`); }
     try { resumeHeld({ mayRun }); } catch (err) { log(`held turns: ${err.stack || err.message}`); }
     try { retryMerges({ mayRun }); } catch (err) { log(`merges to try again: ${err.stack || err.message}`); }
-  }, config.limits?.checkMs || 20_000);
+  };
+  holdTimer = setInterval(tick, config.limits?.checkMs || 20_000);
   holdTimer.unref?.();
+  // Once right after the start too: a turn the restart cut off carries on at once, instead
+  // of its thread sitting in the inbox with a note for twenty seconds.
+  setTimeout(tick, 1500).unref?.();
 }
 
 // ---------- messages no turn took up ----------
@@ -558,6 +564,12 @@ export function answerLeftOver({ mayRun = () => true, now = Date.now() } = {}) {
   }
   return started;
 }
+
+// A step as the live line shows it while it runs. The list of steps says what was done
+// ("Ran npm test"); on the line that says what Claude is doing now, a ten-minute command
+// read as finished ("Ran npm test · 9 min"), so there it is in the present.
+const DOING = { Ran: 'Running', Read: 'Reading', Wrote: 'Writing', Edited: 'Editing', Searched: 'Searching', Opened: 'Opening', Looked: 'Looking', Listed: 'Listing', Started: 'Starting', Downloaded: 'Downloading', Added: 'Adding', Moved: 'Moving', Renamed: 'Renaming', Created: 'Creating', Described: 'Describing', Marked: 'Marking' };
+export const nowDoing = (summary) => String(summary || '').replace(/^([A-Z][a-z]+)\b/, (w) => DOING[w] || w);
 
 // ---------- background jobs: their last line, for the page ----------
 //
@@ -729,7 +741,7 @@ async function runTurn(threadId, prompt) {
       run.parts.push({ type: 'tool', name: ev.name, summary: ev.summary });
       run.didWork = true;
       emitLive({ op: 'parts', parts: run.parts });
-      activity(ev.summary);
+      activity(nowDoing(ev.summary));
     } else if (ev.type === 'tool-input') {
       logToolRead({ vaultDir: brain.brainDir(), by: 'thread', threadId, tool: ev.name, input: ev.input });
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(ev.name)) serveName(ev.input?.file_path || ev.input?.notebook_path);
@@ -981,7 +993,10 @@ async function runTurn(threadId, prompt) {
     try { store.tidyArtifacts(threadId); } catch { /* next turn */ }
     // Claude Code puts an error into the reply as text too; it is shown once, as the error.
     const repeatsError = (p) => result.error && p.type === 'text' && result.error.includes(p.text.trim());
-    const parts = run.parts.filter((p) => (p.type !== 'text' || p.text.trim()) && !repeatsError(p));
+    // "No response requested." is what Claude writes when a background job wakes it with
+    // nothing to say: not a reply.
+    const filler = (p) => p.type === 'text' && /^no response requested\.?$/i.test(p.text.trim());
+    const parts = run.parts.filter((p) => (p.type !== 'text' || p.text.trim()) && !repeatsError(p) && !filler(p));
     const message = { role: 'assistant', parts, durationMs: result.durationMs, tier: tier.name };
     // Cut off by the usage limit (and not stopped by him): held, not failed.
     const limited = result.limit && !result.aborted ? result.limit : null;
@@ -989,7 +1004,11 @@ async function runTurn(threadId, prompt) {
     heldPrompt.delete(threadId);
     if (result.aborted) { message.stopped = true; store.updateThread(threadId, { stoppedAt: Date.now() }, { quiet: true }); }
     if (limited) message.limit = { type: limited.type || '' };
-    else if (result.error) message.error = result.error;
+    else if (result.error) {
+      message.error = result.error;
+      // The app tries again by itself (retry.js): the page shows the error as a note, not as an alarm.
+      if (!result.aborted && retry.turnPlan({ auto: store.getThread(threadId)?.auto, error: result.error, didWork: run.didWork, opts: config.autoRetry })?.kind === 'retry') message.retried = true;
+    }
     if (parts.length || message.error || message.stopped) store.appendMessage(threadId, message);
 
     // A brain update's thread: what the turn wrote into the vault is committed now, or

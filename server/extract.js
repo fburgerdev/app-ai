@@ -62,6 +62,9 @@ export function initExtraction(cfg) {
 }
 
 // The steps of the running update, shown in its thread like a turn's tool lines.
+// Whether a brain update is running in this thread right now. Its thread says "working"
+// without a turn of the runner's, so whoever looks for turns that are gone asks here too.
+export const runsIn = (threadId) => Boolean(current?.threadId && current.threadId === threadId);
 export const liveParts = (threadId) => (current?.threadId && current.threadId === threadId ? current.parts : null);
 
 // A brain update the usage limit cut off starts again once the limit has lifted. The hold

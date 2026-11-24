@@ -215,9 +215,12 @@ const LIMIT_NAMES = { five_hour: 'five-hour limit', seven_day: 'weekly limit', s
 function heldText(held) {
   if (held.kind === 'gate') return gateText(held);
   const at = holdClock(held.until);
-  if (held.kind === 'retry') return `Ended on an error · tries again by itself at ${at}`;
+  if (held.kind === 'retry') return held.restart ? 'The app restarted mid-turn · carries on by itself now' : `Ended on an error · tries again by itself at ${at}`;
   if (held.kind === 'continue') return `Waiting for ${held.reason || 'work still running'} · carries on by itself at ${at}`;
   if (held.kind === 'merge') return `Could not merge · Claude fixes it by itself at ${at}`;
+  // Parked for a repo: it carries on when the repo is free, not by the clock (its `until` is a week away).
+  if (held.kind === 'repo') return `Waiting for ${held.repo || held.reason}${held.holder ? `, held by ${held.holder}` : ''} · carries on by itself when it is free`;
+  if (held.kind === 'goahead') return `Claude only needed a go-ahead · the supervisor carries on at ${at}`;
   return `Held by the ${LIMIT_NAMES[held.type] || 'usage limit'} · carries on at ${at}`;
 }
 // Waiting for the lock (an update or a handover): it starts once that is through.
@@ -350,13 +353,16 @@ function railItem(t) {
   let sub = '';
   const gated = t.state === 'working' && t.held?.kind === 'gate';
   if (gated) sub = `${gateText(t.held)}${t.doneAfter ? ', closes when finished' : ''}`;
+  else if (t.state === 'working' && t.held?.kind === 'repo') sub = `Waiting for ${String(t.held.repo || t.held.reason).split('/').pop()} · carries on by itself`;
   else if (t.state === 'working' && t.held) sub = `${t.held.kind && t.held.kind !== 'limit' ? 'Carries on by itself' : 'Held: carries on'} at ${holdClock(t.held.until)}${t.doneAfter ? ', closes when finished' : ''}`;
   else if (t.state === 'working') sub = `${t.activity || 'Working'}${t.activityAt && Date.now() - t.activityAt > 60_000 ? ` · ${ago(t.activityAt)}` : ''}${t.doneAfter ? ', closes when finished' : ''}`;
+  // Cut off by a restart of the app: no error of the turn, and it carries on by itself.
+  else if (t.state === 'ready' && t.interrupted) sub = 'Restarted mid-turn · carries on by itself';
   else if (t.state === 'ready') sub = t.error ? 'Stopped with an error' : `waiting ${ago(t.queuedAt)}`;
   else sub = isUnfiled(t) ? 'not in the brain yet' : 'in the brain, archived with the next update';
   const label = kindLabel(t);
   return h('button', {
-    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}${t.later === true ? ' is-later' : ''}${gated ? ' is-gated' : ''}`,
+    class: `item item-${t.state}${t.id === S.current ? ' is-current' : ''}${t.error && !t.interrupted ? ' has-error' : ''}${t.kind === 'card' ? ' is-card' : ''}${t.later === true ? ' is-later' : ''}${gated ? ' is-gated' : ''}`,
     type: 'button',
     title: t.title,
     dataset: { id: t.id },
@@ -1519,7 +1525,8 @@ function messageEl(threadId, m) {
   if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
   if (m.limit) el.append(h('p', { class: 'msg-note' }, `Claude's ${LIMIT_NAMES[m.limit.type] || 'usage limit'} cut the turn off here. The app carries on by itself when it lifts.`));
-  if (m.error) el.append(h('p', { class: 'msg-note is-error' }, m.error));
+  // An error the app tried again after by itself is a note, not an alarm: the work went on below.
+  if (m.error) el.append(m.retried ? h('p', { class: 'msg-note' }, `The turn broke off here (${m.error.replace(/\.$/, '')}). The app carried on by itself.`) : h('p', { class: 'msg-note is-error' }, m.error));
   return el;
 }
 

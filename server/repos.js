@@ -768,8 +768,10 @@ function openMain(threadId, full, dir, base, { share, current = true }) {
   const thread = store.getThread(threadId);
   return serial(full, async () => {
     const on = await currentBranch(dir);
-    if (await dirty(dir)) await commitLeftovers(dir, `Work in progress, saved when another thread took the repo`);
     const { branch, from } = await pickBranch(dir, thread, threadId, full, base);
+    // What is left uncommitted goes onto the branch that is checked out: this thread's own
+    // (it opened the repo a second time in one turn), or the one of the thread before.
+    if (await dirty(dir)) await commitLeftovers(dir, on === branch && !from ? `Work in progress: ${thread.title}` : 'Work in progress, saved when another thread took the repo');
     if (from) await git(dir, ['checkout', '--quiet', '-B', branch, from]);
     else if (on !== branch) await git(dir, ['checkout', '--quiet', branch]);
     if (share) await linkShared(full, dir);

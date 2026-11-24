@@ -55,6 +55,8 @@ export function newId() {
 // ever sees the saved copy of a turn that is still running there, and must leave it be:
 // marking it "ended on an error" was wrong, and its copy then won over the real answer.
 const HOST = os.hostname();
+const CLOSED = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
+export const RESTARTED = 'The app restarted while Claude was working on this. It carries on by itself in a moment.';
 const mine = (meta) => !meta.workingOn || meta.workingOn === HOST;
 
 // Loads every thread from disk. A turn this computer was running when the app closed
@@ -70,11 +72,14 @@ export function loadThreads() {
     if (meta.state === 'working' && mine(meta) && !meta.held) {
       meta.state = 'ready';
       meta.queuedAt = Date.now();
-      meta.error = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
-      // The app carries on with it by itself once it runs again (runner.retryInterrupted).
+      // The app carries on with it by itself once it runs again (runner.retryInterrupted),
+      // so the note says that, and what he added while the turn ran (`pending`) is kept
+      // for the turn that carries on. Only a thread from before the app kept the prompt
+      // needs a message of his.
+      meta.error = meta.turnPrompt ? RESTARTED : CLOSED;
       meta.interrupted = Date.now();
       meta.activity = '';
-      meta.pending = [];
+      if (!meta.turnPrompt) meta.pending = [];
       writeJson(metaFile(id), meta);
     }
     // Left over from older versions: a tier fixed on the thread (no longer read), and a
@@ -157,7 +162,7 @@ export function settleOrphans({ isRunning, otherGone = false, olderThanMs = 10 *
     }
     updateThread(t.id, {
       state: 'ready', queuedAt: now, activity: '', pending: [], workingOn: '',
-      error: here ? 'The app was closed while Claude was working on this. Send a message to pick it up again.'
+      error: here ? CLOSED
         : 'Claude was working on this on the other computer, which went away before it finished. Send a message to pick it up again.',
     });
     settled += 1;

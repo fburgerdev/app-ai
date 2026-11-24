@@ -87,6 +87,20 @@ test('what the thread shows and what Claude is told', () => {
   assert.match(interruptedText({ ...held, kind: 'retry', reason: 'Stream closed' }, 'Use v13 instead'), /Render v14\n\n\[Florian's new message:\]\n\nUse v13 instead$/);
 });
 
+test('a turn cut off by a restart of the app is not called an error', () => {
+  const held = { kind: 'retry', restart: true, until: now, reason: 'the app restarted in the middle of the turn', prompt: 'Render v14', at: now, tries: 1 };
+  assert.equal(holdLine(held, now), 'The app restarted mid-turn: carries on by itself now');
+  const { prompt, note } = resumeText(held, now);
+  assert.ok(!/error/i.test(note) && !/ended on an error/.test(prompt), 'nothing failed');
+  assert.match(note, /The app restarted in the middle of this turn; it carried on by itself/);
+  assert.match(prompt, /Render v14$/);
+  assert.match(interruptedText(held, 'Use v13 instead'), /was cut off when the app restarted/);
+  // A restart is a run of the app's own, never one of the errors in a row that stop a thread.
+  const plan = turnPlan({ auto: { runs: 2, fails: 3 }, error: held.reason, didWork: true, now });
+  assert.equal(plan.kind, 'retry');
+  assert.equal(plan.auto.runs, 3);
+});
+
 // ---------- against the running app ----------
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -174,6 +188,8 @@ test('a turn cut off because the app closed is started again by itself once it r
   await brainReady();
   const t = await settled(id, 1);
   assert.equal(t.thread.error, '');
-  assert.match(notes(t), /the app was closed in the middle of the turn.*the app tried again by itself/);
+  assert.match(notes(t), /The app restarted in the middle of this turn; it carried on by itself/);
+  assert.ok(!/ended on an error/.test(notes(t)), 'a restart is not an error of the turn');
+  assert.ok(!answers(t).some((m) => m.error), 'and no answer carries one');
   assert.equal(answers(t).length, 1, 'the cut-off turn left no answer; the new one finished');
 });

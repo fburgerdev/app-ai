@@ -406,3 +406,47 @@ test('the calendar is worth a run only when it holds an entry no run has looked 
   assert.deepEqual(unseenEntries([...seen, 'c 2026-11-21T15:00:00+01:00'], seen), ['c 2026-11-21T15:00:00+01:00'], 'a new entry');
   assert.deepEqual(unseenEntries(['a 2026-11-20T14:00:00+01:00'], seen), ['a 2026-11-20T14:00:00+01:00'], 'an entry that moved');
 });
+
+test('the live line says what runs now; the steps say what was done', async () => {
+  const { nowDoing } = await import('../server/runner.js');
+  assert.equal(nowDoing('Ran npm test'), 'Running npm test');
+  assert.equal(nowDoing('Read app.js'), 'Reading app.js');
+  assert.equal(nowDoing('Edited server/runner.js'), 'Editing server/runner.js');
+  assert.equal(nowDoing('Thinking'), 'Thinking');
+  assert.equal(nowDoing('Runs the brain update again'), 'Runs the brain update again');
+});
+
+test('in a repo, reading what GitHub has is allowed; changing the repo\'s setup is not', async () => {
+  const can = buildPolicy({ mode: 'thread', cwd: '/vault', artifactsDir: '/a', repoDir: () => '/repos/o/n' });
+  const sh = async (...words) => (await can('Bash', { command: words.join(' ') })).behavior;
+  assert.equal(await sh('git', 'for-each-ref', 'refs/remotes/origin'), 'allow');
+  assert.equal(await sh('git', 'log', 'origin/main..refs/remotes/origin/claude/x'), 'allow');
+  assert.equal(await sh('git', 'remote', '-v'), 'allow');
+  assert.equal(await sh('git', 'remote', 'set-url', 'origin', 'https://example.org/x.git'), 'deny');
+  assert.equal(await sh('git', 'remote', 'add', 'fork', 'https://example.org/x.git'), 'deny');
+  assert.equal(await sh('git', 'branch', '-D', 'main'), 'deny');
+  assert.equal(await sh('git', 'push', 'origin', 'main'), 'deny');
+});
+
+test('a turn the restart cut off keeps what he added and says the app carries on; an old one asks him', async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-restart-'));
+  const threadsDir = path.join(dir, 'threads');
+  const write = (id, meta) => { fs.mkdirSync(path.join(threadsDir, id), { recursive: true }); fs.writeFileSync(path.join(threadsDir, id, 'thread.json'), JSON.stringify({ id, title: id, state: 'working', updatedAt: Date.now(), workingOn: os.hostname(), pending: ['and one more thing'], ...meta })); };
+  write('kept', { turnPrompt: 'Build it' });
+  write('old', {});
+  const { execFileSync } = await import('node:child_process');
+  const script = `
+    const store = await import(${JSON.stringify(new URL('../server/store.js', import.meta.url).href)});
+    store.loadThreads();
+    const pick = (id) => { const t = store.getThread(id); return { state: t.state, error: t.error, pending: t.pending, interrupted: Boolean(t.interrupted) }; };
+    console.log(JSON.stringify({ kept: pick('kept'), old: pick('old') }));`;
+  const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, APP_AI_DATA: dir }, encoding: 'utf8' }).trim().split('\n').pop());
+  assert.deepEqual(out.kept.pending, ['and one more thing'], 'what he added goes in with the turn that carries on');
+  assert.match(out.kept.error, /carries on by itself/);
+  assert.ok(out.kept.interrupted);
+  assert.deepEqual(out.old.pending, []);
+  assert.match(out.old.error, /Send a message to pick it up again/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
