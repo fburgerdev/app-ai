@@ -35,6 +35,10 @@
         <button id="focus-toggle" class="top-btn top-focus" type="button" aria-haspopup="dialog" aria-expanded="false"></button>
         <div id="focus-pop" class="status-pop focus-pop" hidden role="dialog" aria-label="Catch-up or Focus"></div>
       </div>
+      <button id="open-reports" class="top-btn" type="button" aria-haspopup="dialog" title="Daily reports: what you did, the things with a result first">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l4 4v13H6z"/><path d="M14.5 3.5v4.5H19M9 12.5h7M9 16h5"/></svg>
+        <span class="top-label">Reports</span><span id="reports-new" class="reports-new" hidden role="img" aria-label="A new report"></span>
+      </button>
       <div class="laptop-wrap">
         <button id="laptop-status" class="top-btn top-laptop" type="button" hidden aria-haspopup="dialog" aria-expanded="false"></button>
         <div id="status-pop" class="status-pop" hidden role="dialog" aria-label="This computer"></div>
@@ -124,6 +128,16 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
       <div id="settings-body" class="window-body"></div>
+    </div>
+  </dialog>
+
+  <dialog id="reports" class="window reports" aria-label="Daily reports">
+    <div id="reports-days" class="window-side reports-days"></div>
+    <div class="window-main">
+      <button id="reports-close" class="window-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div id="reports-body" class="window-body"></div>
     </div>
   </dialog>
 

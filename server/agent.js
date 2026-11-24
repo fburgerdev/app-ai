@@ -672,6 +672,19 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
     const out = JSON.stringify({ order, why: hits.length ? 'matches your mood line' : 'oldest first' });
     return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
   }
+  if (mode === 'plain' && /DAY-REPORT/.test(prompt)) {
+    // A stand-in report: the first two things of his, a merge called a result, and a line
+    // that rests on nothing (the app throws it away).
+    const ids = [...userPrompt.matchAll(/^\[([A-Z]\d+)\]/gm)].map((m) => m[1]);
+    const own = ids.filter((i) => /^[MA]/.test(i));
+    const merge = ids.find((i) => i.startsWith('G'));
+    const out = JSON.stringify({ headline: 'Stand-in headline of the day.', items: [
+      ...own.slice(0, 2).map((i, n) => ({ level: n ? 'thought' : 'result', area: 'Campaign', text: `Stand-in line for ${i}`, refs: [i] })),
+      ...(merge ? [{ level: 'result', area: '', text: 'A merge', refs: [merge] }] : []),
+      { level: 'result', area: '', text: 'Made up', refs: ['Z99'] },
+    ] });
+    return { sessionId: null, text: out, finalText: out, error: '', aborted: false };
+  }
   if (mode === 'plain' && /LEARN-PROFILE/.test(prompt)) {
     const out = '- Stand-in profile: accepts short messages, requeues long reads.';
     return { sessionId: null, text: out, finalText: out, error: '', aborted: false };

@@ -23,6 +23,7 @@ import * as speech from './speech.js';
 import * as datasync from './datasync.js';
 import * as link from './link.js';
 import * as events from './events.js';
+import * as days from './days.js';
 import { initRepair, report } from './repair.js';
 import { createPruner } from './prune.js';
 import { buildPolicy, runAgent } from './agent.js';
@@ -144,7 +145,7 @@ const pruner = createPruner({
 // A merge being tested counts too: a restart in the middle would leave it half done.
 // Only this computer's own turns: the other computer's are its to wait for. (The Pi's
 // update waited an hour on 23-11-2026 for a turn the laptop ran.)
-const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held && store.mine(t)) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
+const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held && store.mine(t)) || extraction.extractionStatus().running || cards.cardsStatus().running || Boolean(days.reportsRunning()) || pruner.status().partRunning || anyShipping();
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -396,6 +397,7 @@ app.get('/api/events', (req, res) => {
     projects: send('projects'),
     connections: send('connections'),
     update: send('update'),
+    report: send('report'),
     // The page moved to the other computer, or the data was read again from disk: end
     // this stream, so the page connects again and reads the whole state.
     'link-switched': () => res.end(),
@@ -647,6 +649,15 @@ app.get('/api/stats', async (req, res) => {
   try { res.json(await stats({ wait: req.query.wait === '1', fresh: req.query.fresh === '1' })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
+// The daily reports (server/days.js).
+app.get('/api/reports', (req, res) => res.json(days.status()));
+app.get('/api/reports/:day', (req, res) => (days.isDay(req.params.day) ? res.json({ report: days.readReport(req.params.day) }) : res.status(404).json({ error: 'No such day' })));
+app.post('/api/reports/:day/make', (req, res) => {
+  try { res.json(days.request(req.params.day)); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/reports/:day/add', (req, res) => {
+  try { res.json(days.addLine(req.params.day, req.body?.text)); } catch (err) { res.status(400).json({ error: err.message }); }
+});
 // Check for a new version now; `force` updates even while Claude is working.
 app.post('/api/update/check', async (req, res) => res.json(await checkNow({ force: req.body?.force === true })));
 // The line at the top: a new version is there, and what the lock still waits for.
@@ -655,6 +666,7 @@ const lockWaitsFor = () => [
   ...store.listThreads().filter((t) => t.state === 'working' && !t.held).map((t) => ({ id: t.id, title: t.title })),
   ...(extraction.extractionStatus().running ? [{ title: 'the brain update' }] : []),
   ...(cards.cardsStatus().running ? [{ title: 'the card run' }] : []),
+  ...(days.reportsRunning() ? [{ title: 'the daily report' }] : []),
   ...(anyShipping() ? [{ title: 'a merge into main' }] : []),
   ...(pruner.status().partRunning ? [{ title: 'the night prune' }] : []),
 ];
@@ -1143,6 +1155,7 @@ extraction.watchHold(link.mayRunBackground);
 runner.watchLeftOver(link.mayRunBackground);
 // The last line of what Claude runs in the background, for the thread's status line.
 runner.watchBackground();
+days.initDays(config, { mayRun: link.mayRunBackground, notesChanged: () => store.events.emit('brain', extraction.extractionStatus()) });
 events.initEvents({ mayRunHere: link.mayRunBackground, mailConnected: () => config.fake || google.googleConnected() });
 // Threads from before the app named and sorted them by itself get their name, project and
 // type now, in the background.

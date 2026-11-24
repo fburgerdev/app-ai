@@ -22,7 +22,7 @@ const FILE = path.join(DATA_DIR, 'usage.jsonl');
 // What each session had cost in total after its last run. This computer's only: a session
 // lives on the computer that ran it.
 const SESSIONS = path.join(DATA_DIR, 'usage-sessions.json');
-const KINDS = { thread: 'Threads', extract: 'Brain update', cards: 'Cards', plain: 'Small jobs', lookup: 'Talk' };
+const KINDS = { thread: 'Threads', extract: 'Brain update', cards: 'Cards', plain: 'Small jobs', report: 'Daily report', lookup: 'Talk' };
 
 // Dollars per million tokens: input, output, read from the cache, written to the cache
 // (kept for an hour, which is what Claude Code asks for). Measured against the SDK's own
