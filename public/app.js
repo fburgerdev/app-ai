@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   app: $('app'), lists: $('rail-lists'), paneQueue: $('pane-queue'), paneFolders: $('pane-folders'), brain: $('brain'), head: $('thread-head'),
   scroller: $('scroller'), messages: $('messages'), composer: $('composer'), input: $('input'),
-  send: $('send'), spin: $('spin'), sendDone: $('send-done'), defer: $('defer'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
+  send: $('send'), spin: $('spin'), sendDone: $('send-done'), agree: $('agree'), picks: $('picks'), defer: $('defer'), attach: $('attach'), fileInput: $('file-input'), attached: $('attached'), panel: $('panel'), quote: $('quote-btn'), toast: $('toast'),
   tier: $('tier'), tabQueue: $('tab-queue'), tabProjects: $('tab-projects'),
   rail: document.querySelector('.rail'), edge: $('rail-edge'), backdrop: $('rail-backdrop'),
   pin: $('rail-pin'), railClose: $('rail-close'), tree: $('tree'),
@@ -36,6 +36,7 @@ const S = {
   lastThread: null, // where to go back to from the scratchpad
   panel: null,
   drafts: new Map(),
+  picks: new Map(), // thread -> the answers he picked with buttons and has not sent
   attach: new Map(), // files picked for a message not sent yet, by thread ('new' for a new one)
   showDone: false,
 };
@@ -78,6 +79,7 @@ const PARTS = [
   { group: 'Reply box', key: 'effort', label: 'Effort', sel: '#tier' },
   { group: 'Reply box', key: 'spin', label: 'Send into spin-off (Alt Enter still works)', sel: '#spin' },
   { group: 'Reply box', key: 'defer', label: 'Defer', sel: '#defer' },
+  { group: 'Reply box', key: 'agree-btn', label: 'Agree', sel: '#agree' },
   { group: 'Reply box', key: 'done-btn', label: 'Done (Ctrl Enter and Alt X still work)', sel: '#send-done' },
   { group: 'Everywhere', key: 'kbd', label: 'Key hints on buttons (Alt S, Alt N …)', sel: '.btn kbd, .btn-new kbd, .tier-ask-btn kbd' },
 ];
@@ -1510,7 +1512,8 @@ function messageEl(threadId, m) {
   }
   if (m.role === 'user') {
     return h('article', { class: 'msg msg-you' },
-      m.text ? h('div', { class: 'msg-body' }, renderMarkdown(m.text)) : null,
+      ...(m.answers || []).map((a) => h('p', { class: 'answer', title: a.line }, h('span', {}, `${a.short || a.line}: `), h('b', {}, a.confirm ? (a.answer === 'no' ? 'No' : 'Yes') : a.answer))),
+      m.answers?.length ? (m.typed ? h('div', { class: 'msg-body' }, renderMarkdown(m.typed)) : null) : m.text ? h('div', { class: 'msg-body' }, renderMarkdown(m.text)) : null,
       m.files?.length ? h('div', { class: 'msg-files' }, m.files.map((f) => h('a', {
         class: 'chip', href: `/api/threads/${threadId}/upload?name=${encodeURIComponent(f.name)}`, target: '_blank', rel: 'noopener', title: `Open ${f.name}`,
       }, h('span', { class: 'chip-name' }, f.name), h('span', { class: 'chip-size' }, fileSize(f.size))))) : null,
@@ -1519,8 +1522,8 @@ function messageEl(threadId, m) {
   }
   const body = h('div', { class: 'msg-body' });
   partsInto(body, threadId, m.parts || []);
-  markLines(body);
-  const el = h('article', { class: 'msg msg-claude' }, body);
+  const el = h('article', { class: 'msg msg-claude', dataset: { mid: m.id || '' } }, body);
+  markLines(el);
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
   if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
@@ -1786,12 +1789,14 @@ function renderComposer() {
     els.input.placeholder = t.state === 'done' ? 'Reply to reopen this thread.'
       : t.kind === 'event' && t.event && Date.now() > t.event.end ? 'How did it go?' : 'Reply.';
   }
+  els.send.dataset.verb = verb;
   els.send.textContent = verb;
   renderSettings();
   els.defer.hidden = !t || t.state === 'done';
   if (armedDefer && armedDefer !== t?.id) disarmDefer();
   renderDoneButton();
   renderAttached();
+  renderPicks();
 }
 
 // Check for updates now. If a new version waits for Claude, the button offers to update
@@ -1901,6 +1906,7 @@ function renderDoneButton() {
   const empty = !els.input.value.trim() && !attachedNow().length;
   els.sendDone.textContent = 'Done';
   els.sendDone.disabled = empty && (!t || t.state !== 'ready');
+  renderPicks();
 }
 
 // Defer changes a lot (the thread becomes a line in Next Actions.md and is deleted), so
@@ -2242,6 +2248,7 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   placeLevel();
   renderQueued();
   if (S.live) renderLive();
+  renderPicks();
   upgradeMailCards();
   // Start reading at Florian's last message, so he sees what he asked before Claude's answer;
   // without one (a thread the app started), at the start of Claude's latest message.
@@ -2325,18 +2332,21 @@ async function openPad() {
 }
 
 // `done` is "send and done": the message is kept, the thread closes, Claude does not answer.
-async function send(done = false, tier = '', mode = '') {
+// `say` goes out in place of what the box holds (the Agree button).
+async function send(done = false, tier = '', mode = '', say = '') {
   // Send once more while quick select asks: the highlighted choice.
   if (tierAsk && !done && !tier && !mode) {
     if (performance.now() - tierAsk.openedAt > 350) tierAsk.take();
     return;
   }
-  const text = els.input.value.trim();
+  const text = say || els.input.value.trim();
   if (S.pad) return;
   const files = filesToSend();
-  // "Done" with an empty box closes the thread.
-  if (done && files && !text && !files.length) return markDone();
-  if (!files || (!text && !files.length)) return;
+  const answers = S.current ? answersToSend() : [];
+  // "Done" with an empty box closes the thread. A Yes or No on a proposed line is recorded
+  // already; a picked answer goes along and is kept for the brain update.
+  if (done && files && !text && !files.length && !answers.some((a) => !a.confirm)) return markDone();
+  if (!files || (!text && !files.length && !answers.length)) return;
   // Quick select: nothing goes until he has picked how much it is worth. Not for
   // "Done": Claude does not answer that, so there is nothing to pick. Not in a thread
   // that keeps a tier ("Again, higher") either.
@@ -2344,9 +2354,9 @@ async function send(done = false, tier = '', mode = '') {
   // While Claude works: into the running turn, or next. A message added into the running
   // turn belongs to that work and gets its tier; a "Next" is new work and may get its own.
   const running = t?.state === 'working' && !t.held;
-  if (!done && running && !mode) return askWhen((m) => send(false, '', m));
-  if (!done && running && mode === 'next' && !tier && !t?.keepTier && asksTier()) return askTier((n) => send(false, n, 'next'));
-  if (!done && !tier && !t?.keepTier && t?.state !== 'working' && asksTier()) return askTier((n) => send(false, n));
+  if (!done && running && !mode) return askWhen((m) => send(false, '', m, say));
+  if (!done && running && mode === 'next' && !tier && !t?.keepTier && asksTier()) return askTier((n) => send(false, n, 'next', say));
+  if (!done && !tier && !t?.keepTier && t?.state !== 'working' && asksTier()) return askTier((n) => send(false, n, '', say));
   closeTierAsk();
   const from = S.current;
   els.send.disabled = true;
@@ -2354,17 +2364,20 @@ async function send(done = false, tier = '', mode = '') {
   draftPending.delete(from || 'new'); // the text is going out; a delayed save of it must not follow
   try {
     if (from) {
-      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, tier: done ? '' : tier, mode: mode || 'add' });
+      const out = await api('POST', `/api/threads/${from}/messages`, { text, files, done, answers, tier: done ? '' : tier, mode: mode || 'add' });
       S.threads.set(from, out.thread);
+      dropPicks(from, answers);
       if (!done && running && !out.message) toast('Queued as Next: it runs when this turn ends.');
     } else {
       const out = await api('POST', '/api/threads', { text, files, done, tier: done ? '' : tier, project: S.newProject });
       S.threads.set(out.thread.id, out.thread);
       S.newProject = '';
     }
-    els.input.value = '';
-    autosize();
-    forgetDraft(from || 'new');
+    if (!say) {
+      els.input.value = '';
+      autosize();
+      forgetDraft(from || 'new');
+    }
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
     // An event's thread is a session: it stays open while Claude answers.
@@ -2412,8 +2425,9 @@ async function spinOff(tier = '') {
 function onThreadDeleted({ id }) {
   if (!S.threads.delete(id)) return;
   S.drafts.delete(id);
+  S.picks.delete(id);
   draftPending.delete(id);
-  try { localStorage.removeItem(DRAFT_PREFIX + id); } catch { /* fine */ }
+  try { localStorage.removeItem(DRAFT_PREFIX + id); localStorage.removeItem(PICKS_PREFIX + id); } catch { /* fine */ }
   if (S.lastThread === id) S.lastThread = null;
   if (S.current === id) {
     if (S.panel) closePanel();
@@ -3595,6 +3609,7 @@ els.input.addEventListener('keydown', (e) => {
 els.composer.addEventListener('submit', (e) => { e.preventDefault(); send(); });
 els.spin.addEventListener('click', () => spinOff());
 els.sendDone.addEventListener('click', () => send(true));
+els.agree.addEventListener('click', () => send(false, '', '', 'Agree, go ahead.'));
 els.attach.addEventListener('click', () => els.fileInput.click());
 els.fileInput.addEventListener('change', () => { addFiles([...els.fileInput.files]); els.fileInput.value = ''; });
 els.input.addEventListener('paste', (e) => {
@@ -3676,25 +3691,152 @@ document.addEventListener('click', (e) => {
     return;
   }
   const yesNo = e.target.closest('.confirm-btn');
-  if (yesNo && els.messages.contains(yesNo)) answerLine(yesNo);
+  if (!yesNo || !els.messages.contains(yesNo) || yesNo.closest('.is-live')) return;
+  if (yesNo.classList.contains('confirm-all')) answerAll(yesNo);
+  else if (yesNo.closest('.ask-line')) pickAnswer(yesNo.closest('.ask-line'), yesNo.dataset.answer);
+  else answerLine(yesNo.closest('li.confirm-line'), yesNo.dataset.answer);
+  focusInput(); // Enter sends what he picked
 });
 
 // Yes or No on a line Claude proposed. The answer shows on the line at once; the app
-// writes it into the thread, where the next turn and the brain update read it.
-async function answerLine(btn) {
-  const li = btn.closest('li.confirm-line');
+// writes it into the thread, where the next turn and the brain update read it, sent or
+// not. Clicking it once more takes it back, until it has gone to Claude.
+async function answerLine(li, answer, { keep = false } = {}) {
   const threadId = S.current;
   if (!li || !threadId) return;
-  const answer = btn.dataset.answer;
   const before = li.classList.contains('is-yes') ? 'yes' : li.classList.contains('is-no') ? 'no' : '';
-  if (before === answer) return;
+  if (before === answer) {
+    if (keep || !waitingConfirms().some((c) => c.el === li)) return;
+    answer = '';
+  }
   setLineState(li, answer);
   try {
-    await api('POST', `/api/threads/${threadId}/confirm`, { line: li.dataset.line, group: li.dataset.group || '', answer });
+    const out = await api('POST', `/api/threads/${threadId}/confirm`, { line: li.dataset.line, group: li.dataset.group || '', mid: midOf(li), answer });
+    // The message arrives on the page by itself too; the row need not wait for it.
+    if (threadId === S.current && S.view && !S.view.messages.some((m) => m.id === out.message.id)) S.view.messages.push(out.message);
+    if (out.thread) S.threads.set(threadId, out.thread);
+    if (threadId === S.current) { markLines(); renderComposer(); }
   } catch (err) {
     setLineState(li, before);
     toast(err.message);
   }
+}
+
+async function answerAll(btn) {
+  for (const el of btn.closest('.block').querySelectorAll('[data-yes]')) {
+    if (el.classList.contains('ask-line')) pickAnswer(el, el.dataset.yes, { keep: true });
+    else await answerLine(el, 'yes', { keep: true });
+  }
+}
+
+// ---------- answers picked with buttons, not sent yet ----------
+//
+// A question in "Your move" may offer answers (markdown.js, askLines). A click only picks
+// one: it shows in the row over the reply box and goes out with Send, with or without
+// text (Florian, 24-11-2026). Picks are kept on this device until then. A Yes or No on a
+// proposed line stands in the row too, until it has gone to Claude.
+
+const PICKS_PREFIX = 'app-ai-picks:';
+const pickKey = (mid, line) => `${mid}\n${line}`;
+const midOf = (el) => el.closest('.msg')?.dataset.mid || '';
+
+function picksOf(threadId) {
+  if (!threadId) return new Map();
+  if (!S.picks.has(threadId)) {
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(PICKS_PREFIX + threadId) || '[]'); } catch { /* none */ }
+    S.picks.set(threadId, new Map((Array.isArray(list) ? list : []).map((p) => [pickKey(p.mid, p.line), p])));
+  }
+  return S.picks.get(threadId);
+}
+
+function keepPicks(threadId) {
+  const list = [...picksOf(threadId).values()];
+  try {
+    if (list.length) localStorage.setItem(PICKS_PREFIX + threadId, JSON.stringify(list));
+    else localStorage.removeItem(PICKS_PREFIX + threadId);
+  } catch { /* kept in the page only */ }
+}
+
+// Clicking the picked answer again takes it back.
+function pickAnswer(el, answer, { keep = false } = {}) {
+  const threadId = S.current;
+  if (!el || !threadId) return;
+  const picks = picksOf(threadId);
+  const mid = midOf(el);
+  const key = pickKey(mid, el.dataset.line);
+  if (picks.get(key)?.answer === answer) { if (keep) return; picks.delete(key); }
+  else if (sentAnswers().get(key) === answer) picks.delete(key); // back to what he sent
+  else picks.set(key, { mid, line: el.dataset.line, short: el.dataset.short || '', group: el.dataset.group || '', answer });
+  keepPicks(threadId);
+  markLines();
+  renderComposer();
+}
+
+// The answers that went out with his messages.
+function sentAnswers() {
+  const out = new Map();
+  for (const m of S.view?.messages || []) for (const a of m.answers || []) if (!a.confirm) out.set(pickKey(a.mid, a.line), a.answer);
+  return out;
+}
+
+// Yes and No clicks that have not gone to Claude yet, with the line they stand on.
+function waitingConfirms() {
+  const unsent = S.threads.get(S.current)?.unsent || [];
+  const last = new Map();
+  for (const m of S.view?.messages || []) if (m.confirm?.line) last.set(pickKey(m.confirm.mid || '', m.confirm.line), m);
+  return [...last.values()].filter((m) => m.confirm.answer && unsent.includes(m.text)).map((m) => {
+    const el = [...els.messages.querySelectorAll('li.confirm-line')].find((li) => li.dataset.line === m.confirm.line && (!m.confirm.mid || midOf(li) === m.confirm.mid));
+    return { ...m.confirm, mid: m.confirm.mid || '', short: el?.dataset.short || clip(m.confirm.line, 46), el };
+  });
+}
+
+function answersToSend() {
+  return [
+    ...waitingConfirms().map(({ el, ...c }) => ({ ...c, confirm: true })),
+    ...picksOf(S.current).values(),
+  ];
+}
+
+function dropPicks(threadId, sent) {
+  const picks = picksOf(threadId);
+  for (const a of sent) {
+    const key = pickKey(a.mid, a.line);
+    if (!a.confirm && picks.get(key)?.answer === a.answer) picks.delete(key);
+  }
+  keepPicks(threadId);
+}
+
+// The row over the reply box, what Send says, and whether Agree shows: while nothing is
+// typed or picked and Claude's last reply offers no buttons of its own.
+function renderPicks() {
+  const t = S.current ? S.threads.get(S.current) : null;
+  const ready = Boolean(t && S.view && t.kind !== 'card' && !S.pad);
+  const list = ready ? answersToSend() : [];
+  const text = els.input.value.trim();
+  els.picks.hidden = !list.length;
+  els.picks.replaceChildren(...(list.length ? [h('span', {}, 'Goes with it:')] : []), ...list.map((a) => h('span', { class: 'pick-chip', title: a.line },
+    `${a.short || a.line}: `, h('b', {}, a.confirm ? (a.answer === 'no' ? 'No' : 'Yes') : a.answer),
+    h('button', { type: 'button', title: 'Take it back', 'aria-label': 'Take it back', onclick: () => takeBack(a) }, '×'))));
+  const verb = els.send.dataset.verb || 'Send';
+  els.send.textContent = list.length ? `${verb} ${plural(list.length, 'answer', 'answers')}${text ? ' + text' : ''}` : verb;
+  // An answer picked in an empty box can close the thread with Done, kept for the brain update.
+  if (list.length && t.state === 'ready') els.sendDone.disabled = false;
+  const last = ready ? S.view.messages.filter((m) => !m.event).at(-1) : null;
+  const lastEl = last?.role === 'assistant' ? els.messages.querySelector(`.msg-claude[data-mid="${CSS.escape(last.id || '')}"]`) : null;
+  els.agree.hidden = !(lastEl && !last.error && !last.stopped && t.state === 'ready' && !list.length && !text && !attachedNow().length && !lastEl.querySelector('.ask-line, .confirm-line'));
+}
+
+function takeBack(a) {
+  if (a.confirm) {
+    const c = waitingConfirms().find((x) => x.line === a.line && x.mid === a.mid);
+    if (c?.el) answerLine(c.el, c.answer);
+    return;
+  }
+  picksOf(S.current).delete(pickKey(a.mid, a.line));
+  keepPicks(S.current);
+  markLines();
+  renderComposer();
 }
 
 function setLineState(li, answer) {
@@ -3702,16 +3844,27 @@ function setLineState(li, answer) {
   li.classList.toggle('is-no', answer === 'no');
 }
 
-// The last answer to each line in this thread, from its notes.
+// The last answer to each line in this thread, from its notes. One that names its reply
+// counts there only (older ones do not).
 function lineAnswers() {
   const out = new Map();
-  for (const m of S.view?.messages || []) if (m.confirm?.line) out.set(m.confirm.line, m.confirm.answer);
+  for (const m of S.view?.messages || []) if (m.confirm?.line) out.set(pickKey(m.confirm.mid || '', m.confirm.line), m.confirm.answer);
   return out;
 }
 
 function markLines(root = els.messages) {
+  const lines = root.querySelectorAll('li.confirm-line, .ask-line');
+  if (!lines.length) return;
   const answers = lineAnswers();
-  for (const li of root.querySelectorAll('li.confirm-line')) setLineState(li, answers.get(li.dataset.line) || '');
+  const sent = sentAnswers();
+  const picks = picksOf(S.current);
+  for (const el of lines) {
+    const key = pickKey(midOf(el), el.dataset.line);
+    if (el.matches('.ask-line')) {
+      const answer = picks.get(key)?.answer ?? sent.get(key);
+      for (const b of el.querySelectorAll('.confirm-btn')) b.classList.toggle('is-on', b.dataset.answer === answer);
+    } else setLineState(el, answers.get(key) ?? answers.get(pickKey('', el.dataset.line)) ?? '');
+  }
 }
 
 let lastKeyAt = 0;
@@ -3841,9 +3994,11 @@ function onThread(t) {
 
 function onMessage({ threadId, message }) {
   if (threadId !== S.current || !S.view || S.threads.get(threadId)?.kind === 'card') return;
+  if (S.view.messages.some((m) => m.id === message.id)) return; // already here, from his own click
   S.view.messages.push(message);
   // His Yes or No, perhaps clicked on another device: it shows on the line.
-  if (message.confirm) { markLines(); return; }
+  if (message.confirm) { markLines(); renderPicks(); return; }
+  if (message.answers) markLines();
   const stick = nearBottom();
   if (message.role === 'assistant') {
     S.live = null;

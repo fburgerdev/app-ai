@@ -47,10 +47,10 @@ STATUS: pruned | nothing | questions
 
 ## Questions
 **<person, organisation or project>**
-1. <closed question he can answer in a few words, with the file and the date it rests on>
+1. <closed question, its **gist** in bold, with the file and the date it rests on> [Yes] [No]
 ```
 
-- At most two questions, as said above.
+- At most two questions, as said above. Each ends with its answers in square brackets, at least two, nothing after them; the app makes them buttons.
 
 - `STATUS: nothing` when no file changed; leave out "Written".
 - `STATUS: questions` when there is at least one question, whether or not files changed. Leave out any section that would be empty.

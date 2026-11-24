@@ -159,7 +159,7 @@ test('only what is new since the last update is handed over, and questions come 
   assert.equal(run.questionsThread, run.threadId, 'the questions are in the update\'s own thread');
   const questions = await thread(run.threadId);
   assert.equal(questions.thread.state, 'ready');
-  assert.match(questions.messages.at(-1).parts.at(-1).text, /## Questions[\s\S]*Next Actions/);
+  assert.match(questions.messages.at(-1).parts.at(-1).text, /> \[!move\] Questions[\s\S]*> 1\. .*Next Actions/);
   assert.equal((await call('GET', '/api/state')).data.brain.waiting, 0, 'the questions themselves are not something to file');
 
   // His answer there is filed by the thread itself, at once: one commit, and nothing left

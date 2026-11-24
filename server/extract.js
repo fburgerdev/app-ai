@@ -45,7 +45,7 @@ import * as nextActions from './nextactions.js';
 import { exportThreads } from './threadexport.js';
 import { refreshSecrets } from './secrets.js';
 import * as gate from './gate.js';
-import { dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
+import { block, dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
 
 let config;
 let current = null; // { id, startedAt, step, threads, threadId, parts }
@@ -372,8 +372,8 @@ function finishThread(threadId, record, parts) {
   if (record.redacted?.length) problems.push(`A secret value was in ${record.redacted.join(', ')}; it went in as its placeholder.`);
   const text = [
     leadLine(record),
-    record.questions ? `## Questions\n\n${record.questions}` : '',
-    problems.length ? `## Problems\n\n${problems.map((p) => `- ${p}`).join('\n')}` : '',
+    record.questions ? block('move', 'Questions', record.questions) : '',
+    problems.length ? block('found', 'Problems', problems.map((p) => `- ${p}`).join('\n')) : '',
     record.status === 'failed' ? 'Say "retry" to run it again, or ask me to look into it.' : '',
   ].filter(Boolean).join('\n\n');
   store.appendMessage(threadId, { role: 'assistant', parts: [...parts, { type: 'text', text }], durationMs: (record.finishedAt || Date.now()) - record.startedAt });

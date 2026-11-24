@@ -820,11 +820,37 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .md .confirm-btn { font: 600 0.78em/1 var(--sans); padding: 0.38em 0.8em; border: 1px solid var(--you); background: transparent; color: var(--you); cursor: pointer; border-radius: 0; }
 .md .confirm-btn.confirm-no { border-color: var(--faint); color: var(--muted); }
 .md .confirm-btn:hover { background: color-mix(in srgb, var(--you) 16%, transparent); }
+/* A question in "Your move" with the answers Claude offers. */
+.md .ask-line { margin: 0 0 0.5em; }
+.md .ask-line + .ask-line { border-top: 1px solid color-mix(in srgb, var(--you) 18%, transparent); padding-top: 0.45em; }
+.md .ask-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.35em 1em; }
+.md .ask-text { flex: 1 1 15rem; min-width: 0; }
+.md .ask-row .confirm-btns { display: inline-flex; flex-wrap: wrap; gap: 0.35em; padding-top: 0.2em; }
+.md .ask-line .confirm-btn.is-on { background: var(--you); color: var(--you-ink); border-color: var(--you); }
+.md .ask-line .confirm-btn.confirm-no.is-on { background: var(--faint); color: var(--ground); border-color: var(--faint); }
+.md .callout-title:has(.confirm-all) { display: flex; align-items: center; justify-content: space-between; gap: 1em; }
+.md .confirm-btn.confirm-all { text-transform: none; letter-spacing: 0; font-size: 1.05em; padding: 0.35em 0.7em; flex: none; }
+/* While Claude still writes, the reply redraws all the time: the buttons come at its end. */
+.msg.is-live .confirm-btn { visibility: hidden; }
 .md .confirm-btn:disabled { opacity: 0.5; cursor: default; }
 .md li.confirm-line.is-yes .confirm-yes { background: var(--you); color: var(--you-ink); }
 .md li.confirm-line.is-no .confirm-no { background: var(--faint); color: var(--ground); border-color: var(--faint); }
 .md li.confirm-line.is-no { color: var(--muted); text-decoration: line-through; }
 .panel .md .confirm-btns, .msg-you .confirm-btns { display: none !important; }
+
+/* What he picked and has not sent: over the reply box. */
+.picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.picks[hidden] { display: none; }
+.pick-chip { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; border: 1px solid var(--you); padding: 2px 3px 2px 9px; color: var(--text); }
+.pick-chip b { color: var(--you); font-weight: 650; }
+.pick-chip button { border: 0; background: none; color: var(--faint); font-size: 15px; line-height: 1; padding: 2px 5px; cursor: pointer; }
+.pick-chip button:hover { color: var(--text); }
+.composer-foot .btn-agree { border-color: var(--you); color: var(--you); padding: 5px 11px; }
+.btn-agree[hidden] { display: none; }
+.msg-you .answer { margin: 0; font: 15px/1.55 var(--sans); overflow-wrap: anywhere; }
+.msg-you .answer span { color: var(--muted); }
+.msg-you .answer b { color: var(--bright); font-weight: 680; }
+.msg-you .answer + .md { margin-top: 0.4em; }
 
 /* Notes during an event, under the file in the side panel. Enter makes a new line. */
 .notes-box { flex: none; border-top: 1px solid var(--line); padding: 12px 26px 16px; display: flex; flex-direction: column; gap: 8px; background: var(--rail); }

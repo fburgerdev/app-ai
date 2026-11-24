@@ -26,6 +26,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { block } from './util.js';
 
 export const PART_SIZE = 25;
 
@@ -154,7 +155,7 @@ export function reportText(run) {
   if (written.length) lines.push('', '## What went in', '', written.join('\n\n'));
   const questions = run.parts.filter((p) => p.questions).map((p) => p.questions);
   if (questions.length) {
-    lines.push('', '## Questions', '', 'Nothing below has been changed. Answer here in a few words each; this thread files your answers into the brain right away.', '', questions.join('\n\n'));
+    lines.push('', block('move', 'Questions', `Nothing below has been changed. This thread files your answers into the brain right away.\n\n${questions.join('\n\n')}`));
   }
   const left = run.parts.filter((p) => p.status !== 'done');
   if (left.length && !run.stopped) lines.push('', `${left.length === 1 ? 'The part' : `The ${left.length} parts`} that did not go through can run another night; nothing of them was changed.`);
