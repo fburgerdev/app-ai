@@ -118,7 +118,8 @@ function lineText(li) {
 function shortOf(el, line) {
   const bold = el.querySelector('strong')?.textContent.replace(/\s+/g, ' ').trim();
   const s = (bold || line).replace(/[?:.,\s]+$/, '');
-  return s.length > 46 ? `${s.slice(0, 45).trim()}…` : s;
+  const name = s.charAt(0).toUpperCase() + s.slice(1);
+  return name.length > 46 ? `${name.slice(0, 45).trim()}…` : name;
 }
 
 function answerButtons(options) {
