@@ -16,6 +16,14 @@ import path from 'node:path';
 
 function defaultDataDir() {
   if (process.env.APP_AI_DATA) return path.resolve(process.env.APP_AI_DATA);
+  // A test file that imports a module of the app runs in node's test runner, without
+  // APP_AI_DATA (the servers the tests start get their own). It must never use the real
+  // folder: until 24-11-2026 such tests wrote their lines into the real log.txt.
+  if (process.env.NODE_TEST_CONTEXT) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-test-data-'));
+    process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* left behind */ } });
+    return dir;
+  }
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
     return path.join(base, 'app-ai');

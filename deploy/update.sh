@@ -19,23 +19,37 @@ mkdir -p "$STATE"
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" | tee -a "$STATE/update.log"; }
 health() { curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null; }
 
+# "Update now" on the page: at once, whatever runs. Read first and used once, and only a
+# fresh one counts: a click that came to nothing (GitHub out of reach, a version marked
+# bad) must not cut off Claude's work at some later update nobody asked for.
+FORCE=0
+if [ -f "$STATE/force" ]; then
+  [ -n "$(find "$STATE/force" -mmin -3 2>/dev/null)" ] && FORCE=1
+  rm -f "$STATE/force"
+fi
+
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git fetch -q origin "$BRANCH" || { say "could not reach GitHub"; exit 0; }
 OLD="$(git rev-parse HEAD)"
 NEW="$(git rev-parse "origin/$BRANCH")"
-if [ "$OLD" = "$NEW" ]; then rm -f "$STATE/waiting-since" "$STATE/waiting-said" "$STATE/force"; exit 0; fi
+if [ "$OLD" = "$NEW" ]; then rm -f "$STATE/waiting-since" "$STATE/waiting-said"; exit 0; fi
 if [ -f "$STATE/bad" ] && [ "$(cat "$STATE/bad")" = "$NEW" ]; then exit 0; fi
 
-# "Update now" on the page: at once, whatever runs.
-FORCE=0
-if [ -f "$STATE/force" ]; then FORCE=1; rm -f "$STATE/force"; fi
+# Asked once. An app that runs but does not answer (the Pi is busy) may be in the middle of
+# Claude's work: no answer is not "idle", so this waits for the next run. Only an app that
+# is not running at all is updated without asking it.
+HEALTH="$(health)"
+if [ "$FORCE" = 0 ] && [ -z "$HEALTH" ] && systemctl --user is-active --quiet app-ai; then
+  say "new version ${NEW%"${NEW#???????}"} is waiting: the app did not answer"
+  exit 0
+fi
 
 # Never restart while the night prune is in the middle of a part: that part would be lost.
 # (Between parts, and while it waits for the usage limit, it picks up again after a restart.)
-if [ "$FORCE" = 0 ] && health | grep -q '"pruning":true'; then say "new version ${NEW%"${NEW#???????}"} is waiting: the night prune is running"; exit 0; fi
+if [ "$FORCE" = 0 ] && echo "$HEALTH" | grep -q '"pruning":true'; then say "new version ${NEW%"${NEW#???????}"} is waiting: the night prune is running"; exit 0; fi
 
 # Do not restart in the middle of Claude's work. The page offers to lock for the update.
-if [ "$FORCE" = 0 ] && health | grep -q '"busy":true'; then
+if [ "$FORCE" = 0 ] && echo "$HEALTH" | grep -q '"busy":true'; then
   [ -f "$STATE/waiting-said" ] && [ "$(cat "$STATE/waiting-said")" = "$NEW" ] || { say "new version ${NEW%"${NEW#???????}"} is waiting: Claude is working"; echo "$NEW" > "$STATE/waiting-said"; }
   exit 0
 fi

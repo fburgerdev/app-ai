@@ -142,7 +142,9 @@ const pruner = createPruner({
 // A turn held by the usage limit is not work in progress: it must not keep the laptop
 // from handing over, or the app from updating itself.
 // A merge being tested counts too: a restart in the middle would leave it half done.
-const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
+// Only this computer's own turns: the other computer's are its to wait for. (The Pi's
+// update waited an hour on 23-11-2026 for a turn the laptop ran.)
+const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held && store.mine(t)) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -200,8 +202,9 @@ app.post('/api/status/finalize', express.json(), (req, res) => {
   res.json({ finalizing: link.setFinalize(req.body?.on !== false) });
 });
 app.post('/api/sync/push', async (req, res) => {
-  const out = await datasync.saveNow('handover');
-  if (out.error) return res.status(502).json({ error: out.error });
+  await datasync.saveNow('handover');
+  const unsaved = await datasync.notOnGithub();
+  if (unsaved) return res.status(502).json({ error: unsaved });
   res.json({ ok: true });
 });
 // Video Kit (server/videokit.js) runs on this computer and saves into the video repos here,

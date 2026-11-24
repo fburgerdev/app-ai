@@ -57,7 +57,7 @@ export function newId() {
 const HOST = os.hostname();
 const CLOSED = 'The app was closed while Claude was working on this. Send a message to pick it up again.';
 export const RESTARTED = 'The app restarted while Claude was working on this. It carries on by itself in a moment.';
-const mine = (meta) => !meta.workingOn || meta.workingOn === HOST;
+export const mine = (meta) => !meta.workingOn || meta.workingOn === HOST;
 
 // Loads every thread from disk. A turn this computer was running when the app closed
 // cannot still be running, so its thread goes back to the inbox with a note. A turn the
@@ -375,6 +375,8 @@ export function updateThread(id, patch, { quiet = false } = {}) {
   const meta = threads.get(id);
   if (!meta) return null;
   Object.assign(meta, patch);
+  // When this state was last changed, on whichever computer: tells two copies of a thread apart (datasync.pickThread).
+  meta.changedAt = Date.now();
   // Closing or deferring a thread he pinned by hand takes the pin off. An event keeps
   // its place in case it is reopened.
   if (patch.state === 'done' && meta.pinned && meta.kind !== 'event') meta.pinned = false;
@@ -390,6 +392,7 @@ export function appendMessage(id, message) {
   fs.appendFileSync(messagesFile(id), JSON.stringify(full) + '\n');
   meta.messageCount += 1;
   meta.updatedAt = full.ts;
+  meta.changedAt = full.ts;
   // A message the app wrote to start a thread is not something Florian said.
   if (full.role === 'user' && !full.auto) { meta.lastUserAt = meta.messageCount; meta.lastUserTs = Date.now(); }
   writeJson(metaFile(id), meta);

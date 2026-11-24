@@ -42,8 +42,14 @@ let note = '';
 let step = ''; // what the handover is doing right now, in a few words
 let handedOverAt = 0;
 let checkedAt = 0;
-let leaseAt = 0; // on the Pi: when the laptop last said it is doing the work
 const LEASE_MS = 3 * 60_000;
+// On the Pi: when the laptop last said it is doing the work (every 15 seconds while it
+// does). A Pi that has just started does not know yet, so it waits for the laptop's word
+// for the first 45 seconds before it takes the work to be its own. Until 24-11-2026 it
+// started at "never": after every update of the Pi it called the laptop's running turns
+// lost ("went away before it finished") and opened events the laptop had opened already.
+// (`startGraceMs` in config.json; none with the stand-in Claude, so the tests need not wait.)
+let leaseAt = 0;
 const streams = new Set(); // passed-on requests still open (the live updates)
 
 export const enabled = () => Boolean(config?.remote);
@@ -122,8 +128,9 @@ function cutOver(to) {
 async function toRemote() {
   // The laptop's threads go to GitHub and the Pi takes them in, before anything moves.
   step = 'Saving to GitHub';
-  const saved = await datasync.saveNow('handover');
-  if (saved.enabled && saved.error) throw new Error(`could not save to GitHub first (${saved.error})`);
+  await datasync.saveNow('handover');
+  const unsaved = await datasync.notOnGithub();
+  if (unsaved) throw new Error(`could not save to GitHub first (${unsaved})`);
   step = `${config.remoteName} takes everything in`;
   await remoteCall('POST', '/api/sync/pull', { timeout: 120_000 });
   // The Pi does the background work from now on.
@@ -214,7 +221,11 @@ export async function initLink(cfg, { busy }) {
   // A handover he asked for locks this computer until it has gone through: what is sent
   // meanwhile waits, and the Pi starts it once it has taken over (Florian, 23-11-2026).
   gate.alsoWhen(() => (enabled() && choice === 'remote' && active === 'local' ? 'handover' : ''));
-  if (!enabled()) return;
+  if (!enabled()) {
+    const grace = Number(cfg.startGraceMs ?? (cfg.fake ? 0 : 45_000));
+    if (grace > 0) leaseAt = Date.now() - LEASE_MS + grace;
+    return;
+  }
   // Handed over before the app stopped: still handed over. The laptop did nothing since,
   // so the page goes straight to the Pi.
   const kept = recall();

@@ -450,3 +450,86 @@ test('a turn the restart cut off keeps what he added and says the app carries on
   assert.match(out.old.error, /Send a message to pick it up again/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('a thread\'s state changed on both computers: the copy that is further on wins, not blindly GitHub\'s', async () => {
+  const { pickThread } = await import('../server/datasync.js');
+  const j = (o) => JSON.stringify(o);
+  const pick = (ours, theirs) => { const p = pickThread(j(ours), j(theirs), 'laptop'); return { side: p.side, ...JSON.parse(p.text) }; };
+  // 23-11-2026: closed on the laptop with six messages; GitHub had the Pi's stale copy with a false error.
+  const closed = { id: 't', state: 'done', messageCount: 6, error: '', changedAt: 100 };
+  const stale = { id: 't', state: 'ready', messageCount: 1, error: 'Claude was working on this on the other computer, which went away before it finished.', changedAt: 900 };
+  assert.equal(pick(closed, stale).side, 'ours');
+  assert.equal(pick(closed, stale).error, '');
+  assert.equal(pick(stale, closed).side, 'theirs', 'the same the other way round');
+  // The same conversation on both: the computer that runs the turn knows.
+  const running = { id: 't', state: 'working', workingOn: 'laptop', messageCount: 3, changedAt: 100 };
+  const settled = { id: 't', state: 'ready', workingOn: '', messageCount: 3, error: 'went away', changedAt: 900 };
+  assert.equal(pick(running, settled).side, 'ours');
+  assert.equal(pick(settled, { ...running, workingOn: 'pi' }).side, 'theirs');
+  assert.equal(pick({ ...running, workingOn: 'pi' }, settled).side, 'theirs', 'a turn that is not this computer\'s is not ours to vouch for: the later change wins');
+  // Otherwise the later change; if nothing tells, GitHub's, as before.
+  assert.equal(pick({ id: 't', state: 'done', messageCount: 2, changedAt: 500 }, { id: 't', state: 'ready', messageCount: 2, changedAt: 400 }).side, 'ours');
+  assert.equal(pick({ id: 't', messageCount: 2 }, { id: 't', messageCount: 2 }).side, 'theirs');
+  // What he queued or sent with "send and done" on the losing side is not lost.
+  const kept = pick({ id: 't', messageCount: 2, queued: [{ id: 'q1', text: 'then deploy' }], unsent: ['and this'] }, { id: 't', messageCount: 4 });
+  assert.equal(kept.side, 'theirs');
+  assert.deepEqual(kept.queued, [{ id: 'q1', text: 'then deploy' }]);
+  assert.deepEqual(kept.unsent, ['and this']);
+  assert.equal(pickThread('not json', j(closed), 'laptop'), null);
+});
+
+test('the Pi\'s update script: no answer is not "idle", and an old "Update now" does not count', { skip: process.platform === 'win32' }, async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-ai-updatesh-'));
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const hub = path.join(dir, 'hub.git');
+  const seed = path.join(dir, 'seed');
+  const appDir = path.join(dir, 'app');
+  const bin = path.join(dir, 'bin');
+  const state = path.join(dir, 'state', 'app-ai-update');
+  git(dir, 'init', '--bare', '-b', 'main', hub);
+  git(dir, 'clone', hub, seed);
+  fs.writeFileSync(path.join(seed, 'a.txt'), 'one\n');
+  git(seed, 'checkout', '-B', 'main'); git(seed, 'add', '-A'); git(seed, 'commit', '-m', 'one');
+  git(seed, ...['pu' + 'sh', 'origin', 'main']);
+  git(dir, 'clone', hub, appDir);
+  fs.mkdirSync(path.join(appDir, 'deploy'));
+  fs.copyFileSync(new URL('../deploy/update.sh', import.meta.url), path.join(appDir, 'deploy', 'update.sh'));
+  // GitHub has something new.
+  fs.writeFileSync(path.join(seed, 'a.txt'), 'two\n');
+  git(seed, 'commit', '-am', 'two'); git(seed, ...['pu' + 'sh', 'origin', 'main']);
+  // The app, systemd and npm, played by small scripts.
+  fs.mkdirSync(bin); fs.mkdirSync(state, { recursive: true });
+  const stub = (name, body) => fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  stub('curl', `[ -s "${dir}/health" ] && cat "${dir}/health" || exit 7`);
+  stub('systemctl', `case "$*" in *is-active*) [ -f "${dir}/active" ];; *restart*) echo restarted >> "${dir}/restarts";; esac`);
+  stub('npm', 'exit 0');
+  stub('sleep', 'exit 0');
+  const run = () => spawnSync('sh', [path.join(appDir, 'deploy', 'update.sh')], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_STATE_HOME: path.join(dir, 'state') }, encoding: 'utf8' });
+  const restarts = () => (fs.existsSync(path.join(dir, 'restarts')) ? fs.readFileSync(path.join(dir, 'restarts'), 'utf8').trim().split('\n').length : 0);
+  const head = () => git(appDir, 'log', '-1', '--format=%s').trim();
+
+  // The app runs but does not answer: it may be in the middle of Claude's work.
+  fs.writeFileSync(path.join(dir, 'active'), '');
+  assert.match(run().stdout, /is waiting: the app did not answer/);
+  assert.equal(restarts(), 0);
+  assert.equal(head(), 'one');
+
+  // Claude is working, and an "Update now" from long ago is still lying there: it does not count.
+  fs.writeFileSync(path.join(dir, 'health'), '{"ok":true,"busy":true,"pruning":false}');
+  fs.writeFileSync(path.join(state, 'force'), '1\n');
+  const old = new Date(Date.now() - 20 * 60_000);
+  fs.utimesSync(path.join(state, 'force'), old, old);
+  assert.match(run().stdout, /is waiting: Claude is working/);
+  assert.equal(restarts(), 0);
+  assert.ok(!fs.existsSync(path.join(state, 'force')), 'and it is used up');
+
+  // "Update now", just clicked: at once, whatever runs.
+  fs.writeFileSync(path.join(state, 'force'), '1\n');
+  assert.match(run().stdout, /running/);
+  assert.equal(restarts(), 1);
+  assert.equal(head(), 'two');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
