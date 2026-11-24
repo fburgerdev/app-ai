@@ -17,6 +17,7 @@
 
 import { isNetworkError, report } from './repair.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { DATA_DIR, THREADS_DIR, log } from './config.js';
 import { redact, refreshSecrets, secretNames } from './secrets.js';
@@ -240,15 +241,57 @@ async function mergeRemote() {
     // Changed on both sides. What is on GitHub wins, file by file.
     const unmerged = (await git(DATA_DIR, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
     if (!unmerged.length) { await git(DATA_DIR, ['merge', '--abort']).catch(() => {}); throw err; }
+    let own = 0;
     for (const file of unmerged) {
+      // A thread's state: the copy that is further on, not blindly GitHub's (pickThread).
+      if (/^threads\/[^/]+\/thread\.json$/.test(file)) {
+        const ours = await git(DATA_DIR, ['show', `:2:${file}`]).catch(() => '');
+        const theirs = await git(DATA_DIR, ['show', `:3:${file}`]).catch(() => '');
+        const picked = ours && theirs ? pickThread(ours, theirs, os.hostname()) : null;
+        if (picked?.side === 'ours') {
+          fs.writeFileSync(path.join(DATA_DIR, ...file.split('/')), picked.text);
+          await git(DATA_DIR, ['add', '--', file]);
+          own += 1;
+          continue;
+        }
+        if (picked) {
+          fs.writeFileSync(path.join(DATA_DIR, ...file.split('/')), picked.text);
+          await git(DATA_DIR, ['add', '--', file]);
+          continue;
+        }
+      }
       if (await gitOk(DATA_DIR, ['checkout', '--theirs', '--', file])) await git(DATA_DIR, ['add', '--', file]);
       else await git(DATA_DIR, ['rm', '--quiet', '-f', '--', file]).catch(() => {});
     }
     await git(DATA_DIR, ['commit', '--quiet', '--no-edit', '-m', 'merge what the other computer saved']);
-    log(`app data: ${unmerged.length} file(s) changed on both computers; kept the version on GitHub: ${unmerged.slice(0, 5).join(', ')}`);
+    log(`app data: ${unmerged.length} file(s) changed on both computers; kept ${own ? `this computer's version of ${own}, and ` : ''}the version on GitHub${own ? ' of the rest' : ''}: ${unmerged.slice(0, 5).join(', ')}`);
   }
   fs.writeFileSync(path.join(DATA_DIR, '.gitignore'), IGNORE);
   return true;
+}
+
+// A thread's state (thread.json) changed on both computers since they last agreed. Until
+// 24-11-2026 GitHub's copy won, whichever it was: on 23-11-2026 a thread Florian had
+// closed on the laptop (six messages, done) came back as the Pi's stale copy of it (one
+// message, "the other computer went away before it finished"). The copy that is further
+// on wins instead:
+//   1. the one that knows more of the conversation (`messageCount`);
+//   2. then the one whose own computer runs the turn (it is the only one that knows);
+//   3. then the one changed last (`changedAt`); if that does not tell, GitHub's, as before.
+// What he queued or sent with "send and done" on the losing side is kept if the winner
+// has none. `ours` and `theirs` are the files' text; returns { side, text }.
+export function pickThread(ours, theirs, host) {
+  let a; let b;
+  try { a = JSON.parse(ours); b = JSON.parse(theirs); } catch { return null; }
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return null;
+  const runsItself = (t, own) => t.state === 'working' && !t.held && Boolean(t.workingOn) && (t.workingOn === host) === own;
+  let side = 'theirs';
+  if ((a.messageCount || 0) !== (b.messageCount || 0)) side = (a.messageCount || 0) > (b.messageCount || 0) ? 'ours' : 'theirs';
+  else if (runsItself(a, true) !== runsItself(b, false)) side = runsItself(a, true) ? 'ours' : 'theirs';
+  else if ((a.changedAt || 0) !== (b.changedAt || 0)) side = (a.changedAt || 0) > (b.changedAt || 0) ? 'ours' : 'theirs';
+  const [win, lose] = side === 'ours' ? [a, b] : [b, a];
+  for (const k of ['queued', 'unsent']) if (!(win[k] || []).length && (lose[k] || []).length) win[k] = lose[k];
+  return { side, text: `${JSON.stringify(win, null, 2)}\n` };
 }
 
 function reload() {
@@ -359,6 +402,17 @@ export function purgeHistory(paths) {
 }
 
 // What is here but not on GitHub yet: changed files, and commits not pushed.
+// After saveNow: an error if not everything reached GitHub. saveNow itself says nothing
+// about a network that was away for a moment (the next save tries again), which is right
+// for the save every few minutes but not for a handover: the other computer would take
+// in an older state and call it everything.
+export async function notOnGithub() {
+  if (!status.enabled) return '';
+  if (status.error) return status.error;
+  const left = await unsaved();
+  return left.ahead ? 'GitHub could not be reached, so the latest changes are only on this computer' : '';
+}
+
 export async function unsaved() {
   if (!status.enabled) return { enabled: false, files: 0, ahead: 0 };
   // Runs beside a save, not in line with it, so it must not take the index lock itself.

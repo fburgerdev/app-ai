@@ -31,7 +31,7 @@ const GIT_HISTORY = /\bgit\b[^|;&\n]*\b(commit|push|pull|fetch|reset|rebase|chec
 const REPO_FORBIDDEN = [
   [/\bgit\b[^|;&\n]*\bpush\b/, 'Do not push yourself: when the turn ends the app pushes this thread\'s branch, tests it and merges it into main by itself.'],
   [/\bgit\b[^|;&\n]*\b(switch|worktree)\b|\bgit\b[^|;&\n]*\bcheckout\b(?![^|;&\n]*\s--\s)/, 'Stay on this thread\'s branch: the app manages branches. To undo changes to a file use "git restore <file>".'],
-  [/\bgit\b[^|;&\n]*\b(reset\s+--hard|branch\s+-[dD]|remote|filter-branch|clean\s+-[a-z]*f)/, 'That git command can lose work or change the repo\'s setup; the app does not allow it.'],
+  [/\bgit\b[^|;&\n]*\b(reset\s+--hard|branch\s+-[dD]|remote\s+(add|remove|rm|rename|set-url|set-head|set-branches|prune|update)\b|filter-branch|clean\s+-[a-z]*f)/, 'That git command can lose work or change the repo\'s setup; the app does not allow it.'],
   [/\bgh\b[^|;&\n]*\b(repo\s+(delete|rename|archive)|pr\s+(merge|create))/, 'Use the app\'s GitHub tools; deleting a repo is not possible at all.'],
 ];
 
@@ -487,6 +487,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let stateSeen = false; // whether this Claude Code reports its session state at all
   let broken = ''; // set when the app ends the run itself: the line broke, or nothing moved
   let lastAt = Date.now();
+  const began = Date.now();
   const inFlight = new Set(); // tool calls Claude is waiting on
   const outputs = new Map(); // tool_use_id -> the file a background command writes to
   const taskFiles = new Map(); // task_id -> that file
@@ -585,7 +586,11 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
         }
         // The line to Claude Code broke: nothing Claude does from here can work. The run
         // ends as an error, and the app starts it again by itself (retry.js).
-        if (block.is_error && STREAM_CLOSED.test(said)) endRun('Stream closed: the line between the app and Claude Code broke mid-turn.');
+        if (block.is_error && STREAM_CLOSED.test(said)) {
+          // Logged with what the app knew at that moment: why the line breaks is still open (24-11-2026).
+          log(`stream closed: "${said.slice(0, 200)}" after ${Math.round((Date.now() - began) / 1000)} s; reply seen: ${resultSeen}, input closed by the app: ${closed}, background jobs: ${background.length}, tools in flight: ${inFlight.size}`);
+          endRun('Stream closed: the line between the app and Claude Code broke mid-turn.');
+        }
       }
       onEvent?.({ type: 'tool-result' });
     } else if (msg.type === 'result') {

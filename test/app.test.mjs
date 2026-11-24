@@ -74,7 +74,7 @@ git(seed, 'add', '-A');
 git(seed, 'commit', '-m', 'seed');
 git(seed, 'push', 'origin', 'main');
 fs.mkdirSync(data, { recursive: true });
-fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: remote, dataRepo: dataRemote, cards: { auto: false }, queue: { learnEvery: 4 }, google: { clientSecret: 'never-commit-me' } }));
+fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ port, brainRepo: remote, dataRepo: dataRemote, cards: { auto: false }, settleMs: 40, queue: { learnEvery: 4 }, google: { clientSecret: 'never-commit-me' } }));
 const server = spawn(process.execPath, [path.join(root, 'server', 'index.js')], {
   env: { ...process.env, APP_AI_FAKE: '1', APP_AI_FAKE_SPEED: '0.05', APP_AI_DATA: data },
   stdio: 'ignore',
@@ -228,12 +228,20 @@ test('pads save; the scratchpad never reaches a run', async () => {
 test('update brain raises the water level to the press, files the notes and empties them', async () => {
   const before = await thread(mailThread);
   assert.equal(before.thread.extractedCount, 0);
-  assert.equal((await call('POST', '/api/brain/extract', {})).data.started, true);
+  const started = (await call('POST', '/api/brain/extract', {})).data;
+  assert.equal(started.started, true);
+  // While it runs, its thread is working: the check for turns that are gone (every 40 ms
+  // here) must not call it "closed while Claude was working on this".
+  const seen = [];
+  const watch = setInterval(async () => { const th = (await thread(started.threadId).catch(() => null))?.thread; if (th) seen.push(`${th.state}|${th.error}`); }, 25);
   // A message sent during the update stays below the line.
   await call('POST', `/api/threads/${planThread}/messages`, { text: 'one more thing, after the press' });
   const run = await lastRun(1);
+  clearInterval(watch);
   assert.equal(run.status, 'updated');
   assert.equal(run.notes, true);
+  assert.ok(seen.length > 0, 'the update\'s thread was looked at while it ran');
+  assert.deepEqual(seen.filter((s) => /closed while Claude was working/.test(s)), [], 'a running brain update is not a turn that is gone');
 
   const mailNow = await thread(mailThread);
   assert.equal(mailNow.thread.extractedCount, before.messages.length, 'the level is where the thread stood at the press');

@@ -306,6 +306,11 @@ ${out}` };
   } catch (err) {
     const reason = err.message.split('\n')[0];
     const failure = mergeFailure(reason);
+    // Main got the branch's work meanwhile (merged from the other computer, or by hand):
+    // nothing is left to merge, and nothing failed. No note. (23-11-2026: "The app could not
+    // merge this branch … There is nothing on this branch that main does not have", in red,
+    // after a turn that had changed only the vault.)
+    if (!failure) { log(`ship: nothing left to merge for "${thread.title}" in ${full}`); return { done: true }; }
     log(`ship: could not merge for "${thread.title}" in ${full}: ${err.message}`);
     return { failed: { failure, detail: reason, where: { repo: full, branch, main: thread.repoMain || 'main' }, text: (next) => `The app could not merge this branch (${branch} of ${full}) into main by itself: ${next ? reason.replace(/\s*Ask Claude.*$/, '') : reason}${next || ' The branch is on GitHub; the Merge button in the repo panel tries again.'}` } };
   }

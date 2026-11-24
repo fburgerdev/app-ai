@@ -142,7 +142,9 @@ const pruner = createPruner({
 // A turn held by the usage limit is not work in progress: it must not keep the laptop
 // from handing over, or the app from updating itself.
 // A merge being tested counts too: a restart in the middle would leave it half done.
-const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
+// Only this computer's own turns: the other computer's are its to wait for. (The Pi's
+// update waited an hour on 23-11-2026 for a turn the laptop ran.)
+const isBusy = () => store.listThreads().some((t) => t.state === 'working' && !t.held && store.mine(t)) || extraction.extractionStatus().running || cards.cardsStatus().running || pruner.status().partRunning || anyShipping();
 await link.initLink(config, { busy: () => Boolean(isBusy()) });
 app.get('/api/link', (req, res) => res.json(link.status()));
 app.post('/api/link', express.json(), async (req, res) => res.json(await link.choose(req.body?.choice)));
@@ -200,8 +202,9 @@ app.post('/api/status/finalize', express.json(), (req, res) => {
   res.json({ finalizing: link.setFinalize(req.body?.on !== false) });
 });
 app.post('/api/sync/push', async (req, res) => {
-  const out = await datasync.saveNow('handover');
-  if (out.error) return res.status(502).json({ error: out.error });
+  await datasync.saveNow('handover');
+  const unsaved = await datasync.notOnGithub();
+  if (unsaved) return res.status(502).json({ error: unsaved });
   res.json({ ok: true });
 });
 // Video Kit (server/videokit.js) runs on this computer and saves into the video repos here,
@@ -1137,14 +1140,17 @@ setTimeout(() => { if (link.mayRunBackground() && brain.brainStatus().ready) run
 const settle = () => {
   const l = link.status();
   const otherGone = link.mayRunBackground() && (!l.enabled || !l.online);
-  const n = store.settleOrphans({ isRunning: runner.isRunning, otherGone });
+  // A brain update works in its thread without a turn of the runner's: it is running too.
+  // (Until 24-11-2026 it was not asked, so within a minute of every brain update its thread
+  // came back as "The app was closed while Claude was working on this".)
+  const n = store.settleOrphans({ isRunning: (id) => runner.isRunning(id) || extraction.runsIn(id), otherGone });
   if (n) log(`threads: ${n} turn(s) that will not finish went back to the inbox`);
 };
 setTimeout(() => {
   settle();
   if (link.mayRunBackground()) { const n = store.clearFalseErrors(); if (n) log(`threads: cleared a false "ended on an error" from ${n} finished thread(s)`); }
 }, 5000).unref?.();
-setInterval(settle, 60_000).unref?.();
+setInterval(settle, Number(config.settleMs) || 60_000).unref?.();
 // Threads from before the workbench: what a script left among the shown files leaves
 // the list, once per thread (store.pruneArtifacts). A thread Claude works on now waits.
 setTimeout(() => {

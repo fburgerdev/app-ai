@@ -53,6 +53,8 @@ const passHere = { test: 'node -e "0"' };
 const ciGood = bare('ci-good', { ...workflow, 'package.json': JSON.stringify({ name: 'ci-good', private: true, scripts: failHere }) });
 const ciBad = bare('ci-bad', { ...workflow, 'package.json': JSON.stringify({ name: 'ci-bad', private: true, scripts: passHere }) });
 const ciNone = bare('ci-none', { ...workflow, 'package.json': JSON.stringify({ name: 'ci-none', private: true, scripts: passHere }) });
+// Main gets the branch's work from elsewhere while the app still waits for GitHub's tests.
+const ciLate = bare('ci-late', { ...workflow, 'package.json': JSON.stringify({ name: 'ci-late', private: true, scripts: passHere }) });
 const played = (name, run) => fs.writeFileSync(path.join(hub, 'fburgerdev', `${name}.checks.json`), JSON.stringify(run));
 played('ci-good', { conclusion: 'success' });
 played('ci-bad', { conclusion: 'failure', log: '2026-11-19T10:00:00.1234567Z not ok 1 - the thing breaks\n2026-11-19T10:00:00.2234567Z   error: \'boom\'\n2026-11-19T10:00:01.0000000Z # fail 1\n' });
@@ -156,4 +158,15 @@ test('one turn in two repos, the first fails its tests: the second waits and is 
   assert.ok(!onMain(waitsBehind).includes('CHANGED-BY-CLAUDE.md'), 'the one behind it is not merged');
   assert.match(git(waitsBehind, 'branch', '--list', 'claude/*'), /claude\//, 'its branch is on GitHub');
   assert.deepEqual((await thread(t.id)).thread.repoShip.map((r) => r.toLowerCase()), ['fburgerdev/bad-first', 'fburgerdev/waits-behind'], 'both still to merge, in order');
+});
+
+test('main already has the branch\'s work when the merge comes: no note calls that a failed merge', async () => {
+  const t = (await call('POST', '/api/threads', { text: 'REPO-TEST=ci-late change it' })).data.thread;
+  // The branch is on GitHub; before the app stops waiting for a run there, main gets it (as
+  // when the other computer merged it, or he did by hand).
+  const sha = await until(() => git(ciLate, 'for-each-ref', '--format=%(objectname)', 'refs/heads/claude/').trim().split('\n')[0] || null, 'branch on GitHub', 30000);
+  git(ciLate, 'update-ref', 'refs/heads/main', sha);
+  await until(async () => { const th = (await thread(t.id)).thread; return th.state === 'ready' && th.merging === null && !(th.repoShip || []).length ? true : null; }, 'nothing left to ship', 60000);
+  const said = await notes(t.id);
+  assert.ok(!/could not merge/.test(said), `no failed merge is reported: ${said}`);
 });
