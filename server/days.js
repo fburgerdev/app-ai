@@ -211,7 +211,7 @@ export async function gather(day, { now = Date.now() } = {}) {
     const project = projectOf(t);
     for (const m of o.merges) merges.push({ ...m, ref, project });
     if (!o.said.length && !o.did.length && !o.notes) continue;
-    if (o.said.length) { const key = areaOf(project) || project || 'Other'; split.set(key, (split.get(key) || 0) + o.said.length); }
+    if (o.said.length) { const key = t.kind === 'brain-update' ? 'Brain updates' : areaOf(project) || project || 'Other'; split.set(key, (split.get(key) || 0) + o.said.length); }
     const lines = [`### ${t.title}${project ? ` — ${project}${areaOf(project) && areaOf(project) !== project ? `, area ${areaOf(project)}` : ''}` : ''}${t.kind === 'event' ? ' — the thread of a calendar entry' : ''}`];
     const all = [
       ...o.said.map((m) => ({ ...m, letter: 'M', kind: 'said' })),
@@ -288,9 +288,16 @@ export function checkItems(raw, evidence) {
       const ref = evidence.get(r).ref;
       if (ref && !sources.some((s) => s.kind === ref.kind && (s.id || s.href || s.name) === (ref.id || ref.href || ref.name))) sources.push(ref);
     }
-    out.push({ level, area: String(item.area || '').replace(/[[\]]/g, '').trim().slice(0, 60), text, sources: sources.slice(0, 4) });
+    out.push({ level, area: String(item.area || '').replace(/[[\]]/g, '').trim().slice(0, 60), text, sources: shown(sources) });
   }
   return LEVELS.flatMap((l) => out.filter((i) => i.level === l));
+}
+
+// What a line shows as its source: the thread or mail it comes from; a note only when there
+// is neither.
+function shown(sources) {
+  const own = sources.filter((s) => s.kind !== 'note');
+  return (own.length ? own : sources).slice(0, 2);
 }
 
 export function parseAnswer(text) {

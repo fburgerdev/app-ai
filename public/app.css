@@ -2010,7 +2010,10 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 @media (max-width: 700px) {
   .reports { width: 100vw; height: 100dvh; }
   .reports[open] { grid-template-columns: minmax(0, 1fr); }
-  .reports-days { overflow-y: hidden; }
+  .reports-days { overflow-y: hidden; margin-right: 52px; padding-right: 0; }
+  .report-when .status { order: 0; }
+  .top-btn { padding: 0 7px; }
+  .topbar { gap: 4px; }
   .report-missing { font-size: 16px; }
   .report-when { flex-wrap: wrap; }
 }

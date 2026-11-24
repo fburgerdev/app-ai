@@ -3023,7 +3023,7 @@ function drawReport() {
   const items = report?.items || [];
   const write = h('button', { class: 'btn btn-quiet', type: 'button', disabled: busy, onclick: () => writeReportNow(day) },
     busy ? 'Writing…' : items.length ? 'Write again' : today ? 'Write it so far' : 'Write this day');
-  const when = busy ? 'being written, about a minute' : items.length ? `written ${stamp(report.madeAt)}` : '';
+  const when = busy ? 'being written, takes about three minutes' : items.length ? `written ${stamp(report.madeAt)}` : '';
   const idle = report?.madeAt ? 'Nothing recorded for this day.'
     : today && reportsNow?.at ? `Written at ${reportsNow.at}.` : 'No report for this day yet.';
   const old = reportsBody.querySelector('.report-missing');
@@ -3058,7 +3058,7 @@ function drawReport() {
           h('p', {}, i.area ? h('strong', {}, i.area) : null, i.area ? ' · ' : null, i.text),
           i.sources?.length ? h('div', { class: 'report-srcs' }, i.sources.map(reportSource)) : null))));
     }),
-    report?.split?.length ? h('p', { class: 'report-split' }, `Where your ${report.messages} messages went: ${report.split.map((s) => `${s.area} ${s.n}`).join(' · ')}`) : null,
+    report?.split?.length ? h('p', { class: 'report-split' }, `Where your ${plural(report.messages, 'message', 'messages')} went: ${report.split.map((s) => `${s.area} ${s.n}`).join(' · ')}`) : null,
     h('div', { class: 'report-add' },
       h('h4', {}, 'What’s missing?'),
       report?.added?.length ? h('ul', {}, report.added.map((a) => h('li', {}, a.text))) : null,
