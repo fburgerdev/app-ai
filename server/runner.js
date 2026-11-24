@@ -1030,6 +1030,7 @@ async function runTurn(threadId, prompt) {
     await repos.saveWork(threadId).catch(() => {});
     await repos.autoPush(threadId).catch(() => {});
     repos.releaseAll(threadId, run.parkGranted ? run.park.repo : null);
+    run.gaveBack = true;
     // Parked waiting for a repo: held until the repo is free for it, then started again by
     // itself (resumeParked). What he added meanwhile waits in `pending` as with any hold.
     // The slot stays taken until the cleanup below is done: a grant meanwhile only marks
@@ -1139,9 +1140,17 @@ async function runTurn(threadId, prompt) {
     secrets.dropEnvFile(threadId);
     try { fs.rmSync(decryptedDir, { recursive: true, force: true }); } catch { /* next turn */ }
     // What Claude left uncommitted goes onto the thread's branch, and the repo is free again.
-    await repos.saveWork(threadId).catch(() => {});
-    await repos.autoPush(threadId).catch(() => {});
-    repos.releaseAll(threadId, run.parkGranted && run.parked ? run.park.repo : null);
+    // Only for a turn that broke off before it got that far: after a turn that ended in
+    // order, the merge (ship.js) may hold the repo under this thread's name by now, and
+    // giving back "everything the thread holds" would take the repo from under it.
+    if (!run.gaveBack) {
+      await repos.saveWork(threadId).catch(() => {});
+      await repos.autoPush(threadId).catch(() => {});
+      repos.releaseAll(threadId, run.parkGranted && run.parked ? run.park.repo : null);
+    } else if (run.park && run.parkGranted && !run.parked) {
+      // The repo it had waited for was given to it while it ended, and it is not carrying on: given back.
+      repos.release(run.park.repo, threadId);
+    }
     if (run.park && !run.parked) repos.unpark(threadId);
     running.delete(threadId);
     // Its background jobs ended with it.
