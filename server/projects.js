@@ -292,6 +292,18 @@ export function isKnownProject(name) {
   return withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8'))).some((g) => (g.isArea && g.name === name) || g.projects.some((p) => p.name === name));
 }
 
+// Every project and area with the area it belongs to (an area with itself).
+export function areaOfProject() {
+  const file = indexFile();
+  const out = new Map();
+  if (!file) return out;
+  for (const g of withAreaFiles(parseIndex(fs.readFileSync(file.full, 'utf8')))) {
+    if (g.isArea) out.set(g.name, g.name);
+    for (const p of g.projects) if (!out.has(p.name)) out.set(p.name, g.isArea ? g.name : '');
+  }
+  return out;
+}
+
 // Every project and area by name, with what the index says about it, for telling which
 // one a thread is about.
 export function projectChoices() {

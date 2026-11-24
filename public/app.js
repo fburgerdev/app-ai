@@ -54,6 +54,7 @@ let armedDeferTimer = 0;
 // in this browser hides them before the page has loaded.
 const PARTS = [
   { group: 'Top bar', key: 'focus', label: 'Focus switch (Catch-up / Focus)', sel: '#focus-toggle' },
+  { group: 'Top bar', key: 'reports', label: 'Daily reports', sel: '#open-reports' },
   { group: 'Top bar', key: 'computer', label: 'Which computer works (Laptop / Pi)', sel: '.laptop-wrap' },
   { group: 'Top bar', key: 'usage', label: 'What Claude used today', sel: '#usage' },
   { group: 'Top bar', key: 'videokit', label: 'Video Kit', sel: '#videokit-link' },
@@ -2913,6 +2914,172 @@ function showStats(body, s) {
     h('p', { class: 'panel-note' }, `Weeks start on Monday. "All time" goes back to ${new Date(s.since).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}. Projects started and closed, people and areas come from the vault's history (a project note removed is a project closed); merges from the repos this app works in; the rest from the app's own records.`));
 }
 
+// ---------- daily reports ----------
+//
+// Florian, 24-11-2026: a button beside the laptop's, to look through what he did each day:
+// the days on the left, the report on the right. Results first, thinking last and faint;
+// a line opens the thread, mail or note it rests on. Written by the app in the evening
+// (server/days.js); "so far" writes it now.
+
+const reportsWin = $('reports');
+const reportsBody = $('reports-body');
+const reportsDays = $('reports-days');
+const REPORT_SEEN = 'app-ai-report-seen';
+let reportsNow = null; // what the app says: the days, and what is being written
+let reportDay = '';
+let reportShown = null; // { day, report } on screen
+let reportToken = 0;
+const reportDrafts = new Map(); // day -> text typed into "What's missing?" and not added
+const REPORT_LEVELS = {
+  result: ['Results', 'something changed'],
+  out: ['Put out', 'sent or said, still open'],
+  made: ['Made', ''],
+  thought: ['Decided and thought', ''],
+};
+const reportDate = (day) => { const [y, m, d] = day.split('-').map(Number); return new Date(y, m - 1, d, 12); };
+const dmy = (day) => day.split('-').reverse().join('-');
+function reportName(day) {
+  if (day === reportsNow?.today) return 'Today';
+  const d = reportDate(day);
+  return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${dmy(day).slice(0, 5)}`;
+}
+
+// The dot on the button: a report he has not opened yet.
+function markReports() {
+  const latest = Math.max(0, ...(reportsNow?.days || []).filter((d) => d.lines).map((d) => d.madeAt));
+  let seen = 0;
+  try { seen = Number(localStorage.getItem(REPORT_SEEN)) || 0; } catch { /* private mode */ }
+  if (reportsWin.open && latest > seen) { try { localStorage.setItem(REPORT_SEEN, String(latest)); } catch { /* fine */ } seen = latest; }
+  $('reports-new').hidden = !(latest > seen);
+}
+
+async function loadReports() {
+  try { reportsNow = await api('GET', '/api/reports'); markReports(); } catch { /* the page says so itself */ }
+}
+
+function onReports(st) {
+  const entry = (list, day) => list?.days?.find((d) => d.day === day);
+  const before = entry(reportsNow, reportDay);
+  reportsNow = st;
+  markReports();
+  if (!reportsWin.open) return;
+  drawReportDays();
+  const now = entry(st, reportDay);
+  if (now?.madeAt !== before?.madeAt || now?.lines !== before?.lines) showReport(reportDay);
+  else drawReport();
+}
+
+async function openReports(day = '') {
+  if (phone.matches) setRail(false);
+  if (!reportsWin.open) reportsWin.showModal();
+  if (!reportsNow) reportsBody.replaceChildren(h('p', { class: 'panel-note' }, 'Loading…'));
+  await loadReports();
+  // Today once it is written, otherwise the last day that is.
+  showReport(day || reportsNow?.days.find((d) => d.lines)?.day || reportsNow?.today || '');
+}
+
+function drawReportDays() {
+  if (!reportsNow) return;
+  reportsDays.replaceChildren(h('h2', { class: 'window-title' }, 'Reports'),
+    ...reportsNow.days.map((d) => h('button', { class: `window-tab reports-day${d.day === reportDay ? ' is-on' : ''}${d.lines ? '' : ' is-none'}`, type: 'button', title: d.headline || '', onclick: () => showReport(d.day) }, reportName(d.day))));
+  reportsDays.querySelector('.is-on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+async function showReport(day) {
+  if (!day) return;
+  const token = ++reportToken;
+  const moved = reportDay !== day;
+  reportDay = day;
+  drawReportDays();
+  if (moved) { reportShown = null; reportsBody.replaceChildren(h('p', { class: 'panel-note' }, 'Loading…')); }
+  let report = null;
+  try { report = (await api('GET', `/api/reports/${day}`)).report; } catch (err) { if (token === reportToken) reportsBody.replaceChildren(h('p', { class: 'panel-note is-error' }, err.message)); return; }
+  if (token !== reportToken) return;
+  reportShown = { day, report };
+  drawReport();
+  if (moved) reportsBody.scrollTop = 0;
+}
+
+async function writeReportNow(day) {
+  try { onReports(await api('POST', `/api/reports/${day}/make`, {})); } catch (err) { toast(err.message); }
+}
+
+// Where a line comes from: the thread, the mail or the note.
+function reportSource(s) {
+  const label = clip(s.title || s.name || 'Source', 46);
+  if (s.kind === 'mail') return h('a', { class: 'report-src', href: s.href, target: '_blank', rel: 'noopener', title: `The mail “${s.title}” in Gmail` }, label);
+  if (s.kind === 'note') return h('button', { class: 'report-src', type: 'button', title: 'Open the note', onclick: () => { reportsWin.close(); openPanel({ kind: 'note', link: s.name }); } }, label);
+  const there = S.threads.has(s.id);
+  return h('button', { class: 'report-src', type: 'button', disabled: !there, title: there ? 'Open the thread' : 'The thread is no longer in the app', onclick: () => { reportsWin.close(); openThread(s.id); } }, label);
+}
+
+function drawReport() {
+  if (!reportShown || reportShown.day !== reportDay) return;
+  const { day, report } = reportShown;
+  const entry = reportsNow?.days.find((d) => d.day === day);
+  const busy = reportsNow?.running === day || Boolean(reportsNow?.pending?.includes(day));
+  const today = day === reportsNow?.today;
+  const title = `${reportDate(day).toLocaleDateString('en-GB', { weekday: 'long' })}, ${dmy(day)}`;
+  const items = report?.items || [];
+  const write = h('button', { class: 'btn btn-quiet', type: 'button', disabled: busy, onclick: () => writeReportNow(day) },
+    busy ? 'Writing…' : items.length ? 'Write again' : today ? 'Write it so far' : 'Write this day');
+  const when = busy ? 'being written, about a minute' : items.length ? `written ${stamp(report.madeAt)}` : '';
+  const idle = report?.madeAt ? 'Nothing recorded for this day.'
+    : today && reportsNow?.at ? `Written at ${reportsNow.at}.` : 'No report for this day yet.';
+  const old = reportsBody.querySelector('.report-missing');
+  const focused = old && document.activeElement === old ? [old.selectionStart, old.selectionEnd] : null;
+  const field = h('textarea', { class: 'report-missing', rows: '2', placeholder: 'A call, a meeting, a message the app cannot see…', 'aria-label': 'What is missing in this report', oninput: () => reportDrafts.set(day, field.value) });
+  field.value = reportDrafts.get(day) || '';
+  const addIt = async () => {
+    const text = field.value.trim();
+    if (!text) return;
+    try {
+      const st = await api('POST', `/api/reports/${day}/add`, { text });
+      reportDrafts.delete(day);
+      reportsNow = st;
+      await showReport(day);
+    } catch (err) { toast(err.message); }
+  };
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); addIt(); }
+  });
+  const at = reportsBody.scrollTop;
+  reportsBody.replaceChildren(...[
+    h('h3', { class: 'window-head' }, title),
+    h('p', { class: 'report-when' }, h('span', { class: 'status' }, when || idle), write),
+    entry?.error && !busy ? h('p', { class: 'panel-note is-error' }, `The last try failed: ${entry.error}`) : null,
+    report?.headline ? h('p', { class: 'report-line' }, report.headline) : null,
+    ...Object.entries(REPORT_LEVELS).map(([key, [name, about]]) => {
+      const list = items.filter((i) => i.level === key);
+      if (!list.length) return null;
+      return h('section', { class: `report-level is-${key}` },
+        h('h4', {}, name, about ? h('span', {}, about) : null),
+        h('ol', {}, list.map((i) => h('li', {},
+          h('p', {}, i.area ? h('strong', {}, i.area) : null, i.area ? ' · ' : null, i.text),
+          i.sources?.length ? h('div', { class: 'report-srcs' }, i.sources.map(reportSource)) : null))));
+    }),
+    report?.split?.length ? h('p', { class: 'report-split' }, `Where your ${report.messages} messages went: ${report.split.map((s) => `${s.area} ${s.n}`).join(' · ')}`) : null,
+    h('div', { class: 'report-add' },
+      h('h4', {}, 'What’s missing?'),
+      report?.added?.length ? h('ul', {}, report.added.map((a) => h('li', {}, a.text))) : null,
+      field,
+      h('div', { class: 'report-add-foot' }, h('span', { class: 'panel-note' }, 'Goes into the report, and to the next brain update as your words.'), h('button', { class: 'btn btn-brain', type: 'button', onclick: addIt }, 'Add'))),
+  ].filter(Boolean));
+  reportsBody.scrollTop = at;
+  if (focused) { field.focus(); field.setSelectionRange(...focused); }
+}
+
+$('open-reports').addEventListener('click', () => openReports());
+$('reports-close').addEventListener('click', () => reportsWin.close());
+reportsWin.addEventListener('click', (e) => { if (e.target === reportsWin) reportsWin.close(); });
+// Arrow keys page through the days: left is the day before.
+reportsWin.addEventListener('keydown', (e) => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey || e.target.closest('textarea')) return;
+  const list = reportsNow?.days || [];
+  const next = list[list.findIndex((d) => d.day === reportDay) + (e.key === 'ArrowLeft' ? 1 : -1)];
+  if (next) { e.preventDefault(); showReport(next.day); }
+});
+
 // Connections and System both read /api/connections and show it as blocks.
 async function loadConnections(body, token, title) {
   body.append(h('h3', { class: 'window-head' }, title));
@@ -3468,6 +3635,7 @@ async function checkUsage() {
   try { usageNow = await (await fetch('/api/usage')).json(); renderUsage(); } catch { /* next time */ }
 }
 checkUsage();
+loadReports();
 setInterval(() => { if (!document.hidden) checkUsage(); }, 60_000);
 
 // ---------- events: what is coming up in the calendar ----------
@@ -3873,7 +4041,7 @@ window.addEventListener('keydown', (e) => {
   if (!sleepScreen.hidden) { if (!e.target.closest?.('.sleep')) e.preventDefault(); return; }
   if (e.key === 'Escape') {
     if (!els.quote.hidden) { hideQuote(); return; }
-    if (els.settings.open) return; // the window closes itself
+    if (els.settings.open || reportsWin.open) return; // the window closes itself
     if (document.querySelector('.pick.is-open')) { closePickers(); return; }
     if (S.panel) { closePanel(); if (!els.composer.hidden) focusInput(); return; }
     if (typing() && S.cardDecide) document.activeElement.blur();
@@ -4122,6 +4290,7 @@ function connect() {
   on('state', (s) => { S.settings = { ...S.settings, ...s }; applyParts(); renderSettings(); renderFocus(); renderRail(); renderTree(); checkSleep(); });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
   on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
+  on('report', onReports);
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
   // The event itself says "applying" a moment before the restart; the fetch may not get through.
   on('update', (u) => { updateNow = { ...updateNow, ...u }; renderUpdate(); checkUpdate(); });

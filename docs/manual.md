@@ -4,7 +4,7 @@ Everything the app does, feature by feature. What it is, how to install it and w
 
 ## The screen
 
-- **The top bar** is always there: the inbox button with the number waiting, Focus, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
+- **The top bar** is always there: the inbox button with the number waiting, Focus, the daily reports, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **The outline** on the right: projects and areas, People and Someday (see "The outline" below).
 - **Settings** opens as a window: General (light or dark, sleep time), Layout (which parts of the page show), Queue (what the queue has learned), Shortcuts, Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
@@ -252,6 +252,21 @@ A real phone number does the same through Twilio, for a per-minute price: [calli
 
 The whole app works in the phone's browser under the same address as Talk. One column: the top bar, the thread, the reply box at the bottom. The inbox and the folders are behind the inbox button. On a card, swipe right to accept and left to decline, or use the buttons; the text is edited in place. "Add to Home screen" in the browser's menu makes it open like an app.
 
+## Daily reports
+
+**Reports** in the top bar opens a window with the days on the left and one day's report on the right (arrow keys page through the days). A report lists what you did, the things that count most first:
+
+- **Results**: something outside you changed through what you did that day. What merely reached you is not in it.
+- **Put out**: sent or said, what comes of it is open. A draft is not.
+- **Made**: built, written, cut. Work on the app is one line.
+- **Decided and thought**: last, and faint.
+
+Inside a level, the larger consequence comes first, then the order of the areas in 30,000 ft. Each line names where it comes from and opens it. The app throws away a line that rests on nothing recorded, and a merge never counts as a result. Below stands where your messages went, by area.
+
+It is written at 21:00 (`report.at` in config.json), and again after the day has ended if you did something later; a day runs from 04:00 to 04:00. **Write it so far** writes it now; **Write this day** does it for a day without one. A dot on the button means a report you have not opened.
+
+It is made from your threads, the mails you sent, the cards you took, what the brain updates filed with the day's date, what the repos recorded and your calendar. What it cannot see, you type into **What's missing?**: it goes into the report, and onto the notes for Claude, so the next brain update files it as your words. Reports are Claude's selection: they stay in the app (`reports/` in the data folder) and are never written into the vault.
+
 ## Sleep time
 
 From 00:00 to 08:00 the app shows a go-to-sleep screen instead of the queue. **Let me in anyway** gets you past it, but only for as long as the window stays open: opening the app again, or coming back after more than ten minutes away, shows it again. Change the hours or turn it off in Settings → General.
@@ -355,6 +370,7 @@ A computer that starts with an empty data folder takes over the saved state. Two
 | `maxParallel` | `6` | Turns that run at once. Your own messages go first; work the app started by itself leaves one slot free for you. Use 2 on a Pi with 2 GB. |
 | `queue` | Haiku ranks, Sonnet learns, every 30 choices, requeue 20 min | The queue's models and rhythm. |
 | `routeModel` | `haiku` | The model that picks a tier under Auto. |
+| `report` | automatic, 21:00, Opus | The daily report: when it is written in the evening, and by which model. `auto: false` writes it only on request. |
 | `cards` | automatic, keep 3 ready, 3 per run, 45 min pause, calendar every 3 h | The card run, which also looks at the calendar. `auto: false` makes cards and preparations only on request. |
 | `google` | empty | Client id and secret of your Google Cloud project ([google.md](google.md)). |
 | `github` | owner `fburgerdev`, no token | For renaming and creating repos; the token only if git's own does not work ([repos.md](repos.md)). |

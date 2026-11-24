@@ -122,6 +122,10 @@ const DEFAULTS = {
     calendarHours: 3, // how often to look at the calendar for something to prepare
   },
 
+  // The daily report (days.js): written in the evening at `at`, and once more after the
+  // day has ended (04:00) if something came later. `auto: false`: only on request.
+  report: { auto: true, at: '21:00', model: 'opus' },
+
   // Whether Claude may run shell commands inside threads. Off: threads can read the
   // vault, search the web and write artifacts, nothing else.
   threadShell: false,
@@ -224,7 +228,7 @@ export function loadConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(DEFAULTS, null, 2) + '\n');
   }
   const config = { ...DEFAULTS, ...stored };
-  for (const key of ['google', 'voice', 'queue', 'cards', 'github', 'repair', 'limits', 'leftOver', 'autoRetry', 'ci']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
+  for (const key of ['google', 'voice', 'queue', 'cards', 'report', 'github', 'repair', 'limits', 'leftOver', 'autoRetry', 'ci']) config[key] = { ...DEFAULTS[key], ...(stored[key] || {}) };
   const piper = stored.voice?.piper || {};
   config.voice.piper = { ...DEFAULTS.voice.piper, ...piper, voices: { ...DEFAULTS.voice.piper.voices, ...(piper.voices || {}) } };
   if (process.env.APP_AI_PORT) config.port = Number(process.env.APP_AI_PORT);
