@@ -488,13 +488,25 @@ app.get('/api/threads/:id', (req, res) => {
   });
 });
 
+// The answers he picked with buttons: the question, his answer, and the reply it stands in.
+// `confirm` marks a Yes or No on a proposed line, recorded at the click; it is only shown.
+function cleanAnswers(list) {
+  const line = (v, n) => cleanText(v).replace(/\s+/g, ' ').slice(0, n);
+  return (Array.isArray(list) ? list : []).slice(0, 60)
+    .map((a) => ({ line: line(a?.line, 400), answer: line(a?.answer, 60), short: line(a?.short, 80), group: line(a?.group, 120), mid: line(a?.mid, 40), ...(a?.confirm ? { confirm: true } : {}) }))
+    .filter((a) => a.line && a.answer);
+}
+
 app.post('/api/threads/:id/messages', (req, res) => {
   link.setFinalize(false); // he is working again
   const thread = need(req, res);
   if (!thread) return;
-  const text = cleanText(req.body.text);
+  const typed = cleanText(req.body.text);
+  const answers = cleanAnswers(req.body.answers);
+  const text = answers.length ? runner.answersText(answers, typed) : typed;
   const waitingFiles = pendingFiles(req.body.files);
   if (!text && !waitingFiles.length) return res.status(400).json({ error: 'Write a message first.' });
+  if (answers.length && !typed && !waitingFiles.length && answers.every((a) => a.confirm) && !runner.unsentConfirms(thread).length) return res.status(400).json({ error: 'These answers have gone to Claude already.' });
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card takes no reply. Edit its text, then accept or decline.' });
   if (thread.state === 'done') store.updateThread(thread.id, { state: 'ready' });
   // "Send and done": the message is kept and the thread closes, with no answer.
@@ -502,7 +514,7 @@ app.post('/api/threads/:id/messages', (req, res) => {
   queue.recordDecision(done ? 'replied and closed' : 'replied', thread);
   // While Claude works: "add" (read at its next step) or "next" (runs after the turn).
   const mode = req.body.mode === 'next' ? 'next' : 'add';
-  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || ''), mode });
+  const message = runner.sendMessage(thread.id, text, { files: store.attachFiles(thread.id, waitingFiles), doneAfter: done, tier: String(req.body.tier || ''), mode, answers, typed });
   drafts.clearDraft(thread.id);
   cards.maybeMakeCards();
   res.json({ message, thread: store.getThread(thread.id) });
@@ -1017,11 +1029,11 @@ app.post('/api/threads/:id/confirm', (req, res) => {
   if (!thread) return;
   const line = cleanText(req.body.line).replace(/\s+/g, ' ').slice(0, 400);
   const group = cleanText(req.body.group).replace(/\s+/g, ' ').slice(0, 120);
-  const answer = req.body.answer === 'yes' || req.body.answer === 'no' ? req.body.answer : '';
-  if (!line || !answer) return res.status(400).json({ error: 'A line and Yes or No.' });
+  const answer = ['yes', 'no', ''].includes(req.body.answer) ? req.body.answer : null;
+  if (!line || answer === null) return res.status(400).json({ error: 'A line and Yes or No.' });
   if (thread.kind === 'card') return res.status(409).json({ error: 'A card is accepted or declined as a whole.' });
-  const message = runner.recordConfirm(thread.id, { line, group, answer });
-  res.json({ ok: true, message });
+  const message = runner.recordConfirm(thread.id, { line, group, answer, mid: cleanText(req.body.mid).slice(0, 40) });
+  res.json({ ok: true, message, thread: store.getThread(thread.id) });
 });
 
 // What he types into the notes field during an event, saved as he types. The brain

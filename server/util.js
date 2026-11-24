@@ -17,6 +17,11 @@ export function dateTimeDMY(ts = Date.now()) {
   return `${dateDMY(ts)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// A coloured block of a reply, as Claude writes one (prompts/thread.md, "Blocks").
+export function block(kind, title, text) {
+  return [`> [!${kind}]${title ? ` ${title}` : ''}`, ...String(text).trim().split('\n').map((l) => (l.trim() ? `> ${l}` : '>'))].join('\n');
+}
+
 export function todayLine() {
   const weekday = new Date().toLocaleDateString('en-GB', { weekday: 'long' });
   return `${weekday}, ${dateDMY()}`;

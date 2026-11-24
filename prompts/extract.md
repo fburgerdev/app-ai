@@ -25,7 +25,9 @@ Each thread file is a conversation with Florian. It has an "Earlier" part, which
 
 A thread whose first message says the app started it from his calendar is a preparation for an event. What Claude wrote in the briefing is Claude's; what Florian said in the session is filed like any thinking session. A section "Florian's notes during the entry" in a thread file is what he typed into the app's notes field during the entry: his own words, in note form, filed like anything he said in the thread, and only when it says they are new since the last update.
 
-A line "[Florian confirmed with the Yes button, …, the proposed line under "X": …]" is his confirmation of that line, given with a button on Claude's proposal: it counts exactly as if he had written "confirmed" for it, so the line goes into the action file or becomes the project as proposed, under the project or area named. "[Florian declined with the No button, …]" means that line does not go in. When he clicked the same line twice, his last click counts.
+A line "[Florian confirmed with the Yes button, …, the proposed line under "X": …]" is his confirmation of that line, given with a button on Claude's proposal: it counts exactly as if he had written "confirmed" for it, so the line goes into the action file or becomes the project as proposed, under the project or area named. "[Florian declined with the No button, …]" means that line does not go in. When he clicked the same line twice, his last click counts; "[Florian took back his Yes or No, …]" means that line has no answer from him.
+
+A message "[Florian answered with the buttons: - question → answer]" holds his own answers to Claude's questions, picked from the answers Claude offered: each is his decision on that question, as if he had typed it. "Agree, go ahead." is a button too: he agreed with what Claude proposed in that reply, which makes it his decision, but it confirms no line for an action file and no new project.
 
 A thread that worked in a GitHub repo shows it in its events: what was pushed, merged into main, renamed or created. File what that means for the project, not the code itself. When a repo was renamed, change every mention of the old name in the vault, the `repo:` lines included. A thread whose events say the app merged a branch into the vault's own repo (`fburgerdev/brain`) changed the vault's structure or rules itself: that change is already in the vault you are in. Do not make it again or undo it; file the decision behind it, as usual. When Florian says a project has a repo, or a repo was created in a thread on that project, give its note a `repo: owner/name` line under its other field lines.
 
@@ -77,7 +79,7 @@ Each file in `Core/People/` carries a `Status:` line under `Last contacted:`, wh
 
 ## How to finish
 
-End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest, in this update's own thread in the app. He answers the questions there, and the thread files his answers into the vault right away, so ask them as closed questions he can answer in a few words.
+End with one final message in exactly this shape. The app reads the first two lines and the "Mail to answer" list; Florian reads the rest, in this update's own thread in the app. He answers the questions there, and the thread files his answers into the vault right away, so ask them as closed questions he can answer with a click: each ends with its answers in square brackets, at least two and the likelier first, and nothing after them (`… still open? [Yes] [No, it arrived]`). The app makes them buttons. Bold the question's gist in two to four words. Only a question that needs his own words has none.
 
 He wants no report: "Written" is one short sentence, at most 20 words, on what went in (Florian, 23-11-2026: "dont put a report though, or only one sentence, super short. mainly the questions").
 
@@ -91,7 +93,7 @@ COMMIT: thinking: <subject, as "Committing to Git" in Claude/Instructions.md des
 
 ## Questions
 **<project or area>**
-1. <closed question he can answer in a few words>
+1. <closed question, its **gist** in bold> [Yes] [No]
 
 ## Mail to answer
 - <gmail thread id> | <subject> | <who wants what, in a few words>

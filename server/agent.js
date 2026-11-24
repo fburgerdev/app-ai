@@ -732,7 +732,7 @@ async function runFake({ prompt: userPrompt, systemAppend, cwd, resume, mode: gi
       '',
       '## Written',
       '- Core/App Test.md — one test line',
-      ...(wantsQuestions ? ['', '## Questions', '**App test**', '1. Add "Call the office" to Next Actions?'] : []),
+      ...(wantsQuestions ? ['', '## Questions', '**App test**', '1. Add "Call the office" to Next Actions? [Yes] [No]'] : []),
       ...(wantsReply ? ['', '## Mail to answer', '- T-EXAMPLE | Terminvorschlag | asks for a date'] : []),
     ].join('\n');
     await say(report);

@@ -10,6 +10,15 @@ Everything the app does, feature by feature. What it is, how to install it and w
 - **Settings** opens as a window: General (light or dark, sleep time), Layout (which parts of the page show), Queue (what the queue has learned), Shortcuts, Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
 - **Layout** (Settings → Layout) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
 
+## Answering with buttons
+
+- **A question in "Your move"** carries the answers Claude offers as buttons (Yes / No, or named ones). A click only picks one; clicking it again takes it back.
+- **What you picked** shows over the reply box, and Send reads "Send 2 answers". Enter or Send sends them, with or without text. Picks you have not sent are kept on that device.
+- **Yes to all** stands on a block with three or more yes-or-no lines.
+- **Yes / No on a line for your lists** counts for the brain update as soon as you click it, sent or not, so you can click and press Done. It goes to Claude with your next message.
+- **Agree** shows when nothing is typed or picked and the reply has no buttons of its own. It sends "Agree, go ahead." and never counts as a Yes to a line.
+- **Done** with a picked answer keeps it for the brain update and closes the thread without a reply.
+
 ## The queue
 
 The inbox shows what is waiting under **Next up**. The order is not oldest-first: a small model ranks what is waiting, from two things.

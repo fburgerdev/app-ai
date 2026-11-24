@@ -155,16 +155,19 @@ function promptFor(threadId, text, files) {
 // the message is kept and the thread closes, without a turn. He is closing it, so an
 // answer would only cost usage; the brain update reads the message like any other, and
 // if he reopens the thread, Claude gets it with his next message.
-export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false, tier = '', mode = '' } = {}) {
+// `answers` are the ones he picked with buttons; `typed` is what he wrote besides them.
+// `text` holds both already (answersText), so everything that reads a message reads them;
+// the two are kept only to show the message as answers.
+export function sendMessage(threadId, text, { auto = false, files = [], doneAfter = false, tier = '', mode = '', answers = [], typed = '' } = {}) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
   // Claude is on it right here: "Add" goes into the running turn, "Next" waits for its end.
   const run = running.get(threadId);
-  if (!auto && !doneAfter && thread.state === 'working' && !thread.held && run?.steer) return addMidTurn(threadId, thread, run, { text, files, tier, mode });
+  if (!auto && !doneAfter && thread.state === 'working' && !thread.held && run?.steer) return addMidTurn(threadId, thread, run, { text, files, tier, mode, answers, typed });
   // What he had queued as "Next" and the supervisor held: he writes again, so it goes in
   // first, before this message, as he sent it.
   const heldQueued = !auto && !doneAfter && thread.state !== 'working' && thread.queued?.length ? takeQueued(threadId) : [];
-  const stored = { role: 'user', text };
+  const stored = { role: 'user', text, ...(answers.length ? { answers, typed } : {}) };
   if (auto) stored.auto = true;
   if (files.length) stored.files = files;
   if (doneAfter && !auto) stored.unanswered = true;
@@ -215,17 +218,39 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
 // should be taken into account for the next response as well as for brain updates").
 // The click starts no turn. It goes into the thread as a note, which the brain update
 // reads as his answer, and it goes in first with his next message, so Claude knows it
-// too. A second click on the same line is his new answer.
-export function recordConfirm(threadId, { line, group = '', answer }) {
+// too. A second click on the same line is his new answer; an empty answer takes the last
+// one back. `mid` is the message the line stands in: the same words may come up again in
+// a later reply, and are a new line then.
+export function recordConfirm(threadId, { line, group = '', answer = '', mid = '' }) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');
   const yes = answer === 'yes';
-  const text = `[Florian ${yes ? 'confirmed' : 'declined'} with the ${yes ? 'Yes' : 'No'} button, ${dateTimeDMY(Date.now())}, the proposed line${group ? ` under "${group}"` : ''}: ${line}]`;
-  const message = store.appendMessage(threadId, { role: 'user', event: true, text, confirm: { line, group, answer: yes ? 'yes' : 'no' } });
+  const what = `the proposed line${group ? ` under "${group}"` : ''}: ${line}]`;
+  const text = answer
+    ? `[Florian ${yes ? 'confirmed' : 'declined'} with the ${yes ? 'Yes' : 'No'} button, ${dateTimeDMY(Date.now())}, ${what}`
+    : `[Florian took back his Yes or No, ${dateTimeDMY(Date.now())}, on ${what}`;
+  const message = store.appendMessage(threadId, { role: 'user', event: true, text, confirm: { line, group, answer, ...(mid ? { mid } : {}) } });
   // An earlier click on the same line is replaced, not stacked.
-  const unsent = (thread.unsent || []).filter((u) => !(u.startsWith('[Florian confirmed with') || u.startsWith('[Florian declined with')) || !u.endsWith(`: ${line}]`));
-  store.updateThread(threadId, { unsent: [...unsent, text] });
+  const unsent = (thread.unsent || []).filter((u) => !isConfirm(u) || !u.endsWith(what));
+  // Taking back an answer Claude has not seen leaves nothing to tell; the page offers no
+  // taking back of one that was sent.
+  store.updateThread(threadId, { unsent: answer ? [...unsent, text] : unsent });
   return message;
+}
+
+const isConfirm = (u) => u.startsWith('[Florian confirmed with') || u.startsWith('[Florian declined with');
+// The Yes and No clicks that have not gone to Claude yet.
+export const unsentConfirms = (thread) => (thread?.unsent || []).filter(isConfirm);
+
+// What Claude, the brain update and `Threads/` read for a message sent with buttons
+// (Florian, 24-11-2026: "a button to just send without me having to type something").
+// Yes and No on proposed lines go in by themselves (recordConfirm), so they are only named.
+export function answersText(answers, typed = '') {
+  const own = answers.filter((a) => !a.confirm);
+  const head = own.length
+    ? `[Florian answered with the buttons:\n${own.map((a) => `- ${a.group ? `${a.group}: ` : ''}${a.line} → ${a.answer}`).join('\n')}\n]`
+    : typed ? '' : '[Florian sent the Yes and No answers he gave with the buttons.]';
+  return [head, typed].filter(Boolean).join('\n\n');
 }
 
 // ---------- what he adds while Claude works ----------
@@ -244,16 +269,20 @@ export function recordConfirm(threadId, { line, group = '', answer }) {
 
 const qid = () => `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-function addMidTurn(threadId, thread, run, { text, files, tier, mode }) {
+function addMidTurn(threadId, thread, run, { text, files, tier, mode, answers = [], typed = '' }) {
   store.updateThread(threadId, { doneAfter: false, deferred: false, auto: null, remerge: null, interrupted: 0 }, { quiet: true });
   const prompt = promptFor(threadId, text, files);
-  if (mode !== 'next' && run.steer.push?.(`[Florian added this while you were working. Take it into account from your next step on:]\n\n${prompt}`)) {
+  const shown = answers.length ? { answers, typed } : {};
+  // Yes and No clicks that wait go along with it.
+  const clicks = unsentConfirms(thread);
+  if (mode !== 'next' && run.steer.push?.(`[Florian added this while you were working. Take it into account from your next step on:]\n\n${[...clicks, prompt].join('\n\n')}`)) {
+    if (clicks.length) store.updateThread(threadId, { unsent: thread.unsent.filter((u) => !clicks.includes(u)) });
     splitLive(threadId, run);
-    const stored = { role: 'user', text, steered: true };
+    const stored = { role: 'user', text, ...shown, steered: true };
     if (files.length) stored.files = files;
     return store.appendMessage(threadId, stored);
   }
-  const item = { id: qid(), text, files, prompt, tier: TIER_NAMES.includes(tier) ? tier : '', ts: Date.now() };
+  const item = { id: qid(), text, ...shown, files, prompt, tier: TIER_NAMES.includes(tier) ? tier : '', ts: Date.now() };
   store.updateThread(threadId, { queued: [...(thread.queued || []), item], queuedHeld: '' });
   return null;
 }
@@ -276,12 +305,14 @@ function takeQueued(threadId, { into = '' } = {}) {
   const items = t?.queued || [];
   if (!items.length) return [];
   for (const q of items) {
-    const stored = { role: 'user', text: q.text, queuedAt: q.ts };
+    const stored = { role: 'user', text: q.text, ...(q.answers?.length ? { answers: q.answers, typed: q.typed || '' } : {}), queuedAt: q.ts };
     if (q.files?.length) stored.files = q.files;
     store.appendMessage(threadId, stored);
   }
-  const prompts = items.map((q) => q.prompt);
-  store.updateThread(threadId, { queued: [], queuedHeld: '', ...(into === 'pending' ? { pending: [...(store.getThread(threadId).pending || []), ...prompts] } : {}) });
+  // Yes and No clicks that wait go in ahead of them.
+  const clicks = unsentConfirms(t);
+  const prompts = [...clicks, ...items.map((q) => q.prompt)];
+  store.updateThread(threadId, { ...(clicks.length ? { unsent: t.unsent.filter((u) => !clicks.includes(u)) } : {}), queued: [], queuedHeld: '', ...(into === 'pending' ? { pending: [...(store.getThread(threadId).pending || []), ...prompts] } : {}) });
   return prompts;
 }
 

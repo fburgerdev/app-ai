@@ -128,7 +128,7 @@ test('a limit is waited out, a failing part is skipped, the rest is saved part b
   assert.match(text, /saved 5 of 6 parts/);
   assert.match(text, /\| Learnings \| failed: something broke \|/);
   assert.match(text, /Waited for the usage limit 1×/);
-  assert.match(text, /## Questions/);
+  assert.match(text, /> \[!move\] Questions/);
   assert.ok(h.discarded() >= 3, 'half-done edits of a failed or limited part are thrown away');
 });
 

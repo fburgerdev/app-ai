@@ -110,7 +110,100 @@ const BLOCK_TITLE = { move: 'Your move', take: 'My take', found: 'Found', done: 
 function lineText(li) {
   const copy = li.cloneNode(true);
   for (const sub of copy.querySelectorAll('ul, ol, .confirm-btns')) sub.remove();
-  return copy.textContent.replace(/\s+/g, ' ').trim();
+  return copy.textContent.replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+
+// The short name of a question or line, for the row over the reply box: its bold words if
+// it has any, else how it starts.
+function shortOf(el, line) {
+  const bold = el.querySelector('strong')?.textContent.replace(/\s+/g, ' ').trim();
+  const s = (bold || line).replace(/[?:.,\s]+$/, '');
+  const name = s.charAt(0).toUpperCase() + s.slice(1);
+  return name.length > 46 ? `${name.slice(0, 45).trim()}…` : name;
+}
+
+function answerButtons(options) {
+  const btns = document.createElement('span');
+  btns.className = 'confirm-btns';
+  for (const [answer, label, cls] of options) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `confirm-btn${cls ? ` ${cls}` : ''}`;
+    b.dataset.answer = answer;
+    b.textContent = label;
+    btns.append(b);
+  }
+  return btns;
+}
+
+// The answers Claude offers, at the very end of a question: "Merge it now? [Yes] [No]".
+// Takes them off the text and returns them; null when there are none.
+const OPTIONS = /(?:\s*\[[^[\]\n]{1,60}\]){2,}\s*$/;
+function takeOptions(el) {
+  const own = [...el.childNodes].filter((n) => !(n.nodeType === 1 && n.matches('ul, ol, p')));
+  while (own.length && own.at(-1).nodeType === 3 && !own.at(-1).data.trim()) own.pop();
+  const last = own.at(-1);
+  const m = last?.nodeType === 3 ? OPTIONS.exec(last.data) : null;
+  if (!m) return null;
+  last.data = last.data.slice(0, m.index);
+  let end = last;
+  while (end && ((end.nodeType === 3 && !end.data.trim()) || end.nodeName === 'BR')) {
+    const before = end.previousSibling;
+    end.remove();
+    end = before;
+  }
+  return [...m[0].matchAll(/\[([^[\]]+)\]/g)].map((x) => x[1].replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+
+const isNo = (label) => /^(no|not|nein|don't|leave|skip)\b/i.test(label);
+
+// Questions in "Your move" that offer answers get them as buttons (Florian, 24-11-2026).
+// The pick goes out with his next message; the app wires the buttons (app.js).
+function askLines(quote) {
+  let group = '';
+  for (const el of [...quote.querySelectorAll('p, li')]) {
+    if (el.matches('p') && el.parentElement === quote) {
+      const strong = el.querySelector('strong');
+      if (strong && strong.textContent.trim() === el.textContent.trim()) { group = strong.textContent.replace(/[:\s]+$/, '').trim(); continue; }
+    }
+    const options = takeOptions(el);
+    if (!options || options.length < 2) continue;
+    // The answers may stand in a paragraph of their own, under the question.
+    let row = el;
+    if (!lineText(el)) {
+      const above = el.previousElementSibling;
+      if (!above?.matches('p') || above.classList.contains('callout-title')) continue;
+      row = above;
+      el.remove();
+    }
+    const line = lineText(row);
+    if (!line) continue;
+    const short = shortOf(row, line);
+    const text = document.createElement('span');
+    text.className = 'ask-text';
+    text.append(...[...row.childNodes].filter((n) => !(n.nodeType === 1 && n.matches('ul, ol, p'))));
+    const inner = document.createElement('div');
+    inner.className = 'ask-row';
+    inner.append(text, answerButtons(options.map((o, i) => [o, o, i && isNo(o) ? 'confirm-no' : ''])));
+    let holder = row;
+    if (row.matches('p')) { holder = document.createElement('div'); row.replaceWith(holder); }
+    holder.classList.add('ask-line');
+    holder.prepend(inner);
+    Object.assign(holder.dataset, { line, short });
+    if (group) holder.dataset.group = group;
+  }
+}
+
+// From three yes-or-no lines on, one button says Yes to all of them.
+function yesToAll(quote, title) {
+  const lines = [...quote.querySelectorAll('.ask-line, .confirm-line')].filter((l) => /^(yes|ja)\b/i.test(l.querySelector('.confirm-btn')?.textContent || ''));
+  if (lines.length < 3) return;
+  for (const l of lines) l.dataset.yes = l.querySelector('.confirm-btn').dataset.answer;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'confirm-btn confirm-all';
+  b.textContent = 'Yes to all';
+  title.append(b);
 }
 
 // Each item of a confirm block gets a Yes and a No. The project it sits under is the
@@ -125,22 +218,14 @@ function confirmLines(quote) {
     }
     if (!child.matches('ul, ol')) continue;
     for (const li of child.querySelectorAll(':scope > li')) {
+      takeOptions(li.querySelector(':scope > p:last-of-type') || li); // the two buttons are here anyway
       const line = lineText(li);
       if (!line) continue;
       li.classList.add('confirm-line');
+      li.dataset.short = shortOf(li, line);
       li.dataset.line = line;
       if (group) li.dataset.group = group;
-      const btns = document.createElement('span');
-      btns.className = 'confirm-btns';
-      for (const [answer, label] of [['yes', 'Yes'], ['no', 'No']]) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = `confirm-btn confirm-${answer}`;
-        b.dataset.answer = answer;
-        b.textContent = label;
-        btns.append(b);
-      }
-      li.append(btns);
+      li.append(answerButtons([['yes', 'Yes', 'confirm-yes'], ['no', 'No', 'confirm-no']]));
     }
   }
 }
@@ -205,6 +290,8 @@ function decorate(root) {
     if (kind === 'done') { foldDone(quote, m[2] || ''); continue; }
     quote.prepend(title);
     if (kind === 'confirm') confirmLines(quote);
+    if (kind === 'move') askLines(quote);
+    if (kind === 'confirm' || kind === 'move') yesToAll(quote, title);
   }
   // Vault paths
   for (const code of root.querySelectorAll(':not(pre) > code')) {

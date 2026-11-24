@@ -458,6 +458,30 @@ test('send and done keeps the message and closes the thread without an answer; f
   assert.ok(!(await state()).threads.some((t) => t.spunFrom === spun.id), 'and the spin-off does not spin off again');
 });
 
+test('answers picked with buttons are a message of his, with or without text', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Ask me about the fix' })).data.thread.id;
+  await ready(id);
+  assert.equal((await call('POST', `/api/threads/${id}/messages`, { text: '', answers: [{ line: '', answer: 'Yes' }] })).status, 400);
+  const answers = [{ line: 'Should I build the fix now?', short: 'build the fix', answer: 'Yes, build', mid: 'm1' }, { line: 'Where does YouTube go?', answer: '3', group: 'Goals' }];
+  const sent = await call('POST', `/api/threads/${id}/messages`, { text: '', answers });
+  assert.equal(sent.status, 200);
+  assert.equal(sent.data.message.text, '[Florian answered with the buttons:\n- Should I build the fix now? → Yes, build\n- Goals: Where does YouTube go? → 3\n]');
+  assert.equal(sent.data.message.answers.length, 2);
+  let t = await ready(id);
+  assert.match(t.thread.turnPrompt, /build the fix now\? → Yes, build/);
+  await call('POST', `/api/threads/${id}/messages`, { text: 'and tell me when', answers: answers.slice(0, 1) });
+  t = await ready(id);
+  assert.match(t.thread.turnPrompt, /→ Yes, build\n\]\n\nand tell me when$/);
+  const mine = t.messages.filter((m) => m.answers).at(-1);
+  assert.equal(mine.typed, 'and tell me when');
+  // With Done: kept, no answer from Claude.
+  const before = (await thread(id)).messages.length;
+  await call('POST', `/api/threads/${id}/messages`, { text: '', answers: answers.slice(0, 1), done: true });
+  t = await thread(id);
+  assert.equal(t.thread.state, 'done');
+  assert.equal(t.messages.length, before + 1);
+});
+
 test('Yes and No on a proposed line go into the thread and with the next message; notes are kept with the thread', async () => {
   const id = (await call('POST', '/api/threads', { text: 'Propose the lines for the motion' })).data.thread.id;
   await ready(id);
@@ -478,6 +502,18 @@ test('Yes and No on a proposed line go into the thread and with the next message
   t = await ready(id);
   assert.match(t.thread.turnPrompt, /declined with the No button[\s\S]*Go on$/);
   assert.deepEqual(t.thread.unsent, []);
+  // Taken back before it was sent: nothing is left to tell Claude, and the record says so.
+  await call('POST', `/api/threads/${id}/confirm`, { line: 'Call the office', mid: 'reply1', answer: 'yes' });
+  const back = await call('POST', `/api/threads/${id}/confirm`, { line: 'Call the office', mid: 'reply1', answer: '' });
+  assert.deepEqual(back.data.message.confirm, { line: 'Call the office', group: '', answer: '', mid: 'reply1' });
+  assert.deepEqual((await thread(id)).thread.unsent, []);
+  // Yes and No alone can be sent, without a word.
+  const alone = [{ line: 'Call the office', answer: 'yes', short: 'Call', confirm: true }];
+  assert.equal((await call('POST', `/api/threads/${id}/messages`, { text: '', answers: alone })).status, 400, 'nothing waits');
+  await call('POST', `/api/threads/${id}/confirm`, { line: 'Call the office', answer: 'yes' });
+  await call('POST', `/api/threads/${id}/messages`, { text: '', answers: alone });
+  t = await ready(id);
+  assert.match(t.thread.turnPrompt, /confirmed with the Yes button[\s\S]*Call the office\][\s\S]*sent the Yes and No answers/);
   // Notes: saved with the thread, unchanged text is no new save.
   const n1 = (await call('PUT', `/api/threads/${id}/notes`, { text: 'holiday from 07-12\nscope: Uni first' })).data.notes;
   assert.equal(n1.text, 'holiday from 07-12\nscope: Uni first');
