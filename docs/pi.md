@@ -83,7 +83,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now app-ai-update.timer
 ```
 
-Every five minutes the Pi asks GitHub whether there is something new. If there is, it waits until Claude is not working on anything, pulls, installs and restarts the app. It never cuts Claude off by itself: while Claude works, the page shows a line that a new version is there, and **Lock for update** there queues everything new and has the app ask this script for the update as soon as nothing runs; **Update now** leaves `~/.local/state/app-ai-update/force`, which skips the waiting once. The line needs `selfUpdate` left out of the Pi's `config.json` (not `false`). If the new version does not start, it goes back to the one that ran before and leaves the new one alone until GitHub changes again.
+Every five minutes the Pi asks GitHub whether there is something new. If there is, it waits until Claude is not working on anything, pulls, installs and restarts the app. It never cuts Claude off by itself (an app that runs but does not answer counts as working): while Claude works, the page shows a line that a new version is there, and **Lock for update** there queues everything new and has the app ask this script for the update as soon as nothing runs; **Update now** leaves `~/.local/state/app-ai-update/force`, which skips the waiting once (only within three minutes of the click). The line needs `selfUpdate` left out of the Pi's `config.json` (not `false`). If the new version does not start, it goes back to the one that ran before and leaves the new one alone until GitHub changes again.
 
 - What it did: `cat ~/.local/state/app-ai-update/update.log`
 - Which version runs: **Connections** in the app shows it.

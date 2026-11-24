@@ -37,9 +37,8 @@ about how it behaves, and about the one extra for renaming and creating repos.
   turns: the brain update holds the vault's repo while it runs, so a thread opening it waits
   (the repo panel says "The brain update is working in this repo"), and the update waits for
   a thread that holds it.
-- **Only the repo open at the end of a turn is merged by itself.** A thread that switches repos
-  mid-turn leaves the first one's branch pushed but unmerged; it is merged once the thread
-  ends a turn in it again.
+- **Every repo a turn opened is merged by itself**, one after another in the order the turn
+  opened them. If one does not go in (failing tests, a clash), the ones after it wait for it.
 
 ## Threads side by side in one repo
 

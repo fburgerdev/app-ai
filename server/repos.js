@@ -1,13 +1,13 @@
 // Git repositories threads work in.
 //
 // Any thread can work in any of Florian's repos. A repo is cloned the first time a thread
-// uses it and brought up to date each time one does. By default there is one copy of each
-// repo, and only one thread works in it at a time: a thread holds the repo while its turn
-// runs, and any other thread that wants it waits until that turn has ended.
+// uses it and brought up to date each time one does. A thread holds the repo while its turn
+// runs.
 //
-// A repo can let threads work side by side instead (Florian, 23-11-2026): with
-// `.app/repo.json` on its main branch saying `"parallel": true`, every thread gets a git
-// worktree of its own, and the lock has two forms. Normal turns share it; a turn that needs
+// Threads work side by side in every repo but the vault (Florian, 23-11-2026), unless
+// `.app/repo.json` on the repo's main branch says `"parallel": false`: the first thread
+// works in the main copy, one that comes while another works there gets a git worktree of
+// its own, and the lock has two forms. Normal turns share it; a turn that needs
 // the repo quiet (a migration, a rename, a dependency upgrade, changing `.app/repo.json`)
 // takes it alone (`open_repo` with `exclusive: true`), after the turns already working
 // there have ended, and no new ones start meanwhile. A turn that would wait long is parked:
@@ -21,8 +21,8 @@
 // Each thread works on a branch of its own, made from the repo's main branch. When a turn
 // ends, whatever Claude left uncommitted is committed onto that branch, so the copy is
 // clean for the next thread, and the branch is pushed to GitHub (`autoPush`, on by
-// default), so the work never sits on one computer only. Merging into main is Florian's:
-// the button in the thread.
+// default), so the work never sits on one computer only. The branch then goes into main by
+// itself (ship.js), or by the button in the thread's repo panel.
 //
 // Managing repos themselves (renaming, creating, describing) goes through GitHub's API
 // with the token the machine already uses for git, or `github.token` in config.json.
