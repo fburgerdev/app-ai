@@ -318,6 +318,21 @@ export function readVaultFile(rel) {
   return { path: path.relative(config.brainDir, full).split(path.sep).join('/'), full };
 }
 
+// A thread's file by the thread's id ([[Threads/<id>|title]]): the id stays when the thread
+// is renamed and its file with it. Looked up anew each time, since a link is clicked rarely.
+function threadById(id) {
+  const dir = path.join(config.brainDir, THREADS_FOLDER);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return null; }
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue;
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, name), 'utf8').slice(0, 2000); } catch { continue; }
+    if (/^Thread:\s*(\S+)\s*$/m.exec(text)?.[1] === id) return { path: `${THREADS_FOLDER}/${name}`, full: path.join(dir, name) };
+  }
+  return null;
+}
+
 let noteIndex = { head: null, byName: new Map(), at: 0 };
 
 function indexNotes() {
@@ -355,6 +370,10 @@ export function resolveWikilink(target) {
     const direct = readVaultFile(candidate);
     if (direct) return direct;
   }
+  if (clean.startsWith(`${THREADS_FOLDER}/`)) {
+    const id = clean.slice(THREADS_FOLDER.length + 1);
+    if (/^[a-z0-9]+$/.test(id)) return threadById(id);
+  }
   const base = clean.split('/').pop().replace(/\.md$/i, '').toLowerCase();
   if (noteIndex.head !== status.head) indexNotes();
   let full = noteIndex.byName.get(base);
@@ -380,6 +399,21 @@ export function readPreload() {
     out.push({ path: file.path, text: fs.readFileSync(file.full, 'utf8') });
   }
   return out;
+}
+
+// The files a running brain update has changed or added so far, as vault paths.
+export function changedPaths() {
+  return serial(async () => {
+    const out = await git(config.brainDir, ['status', '--porcelain', '-z', '--untracked-files=all']);
+    const paths = [];
+    const parts = out.split('\0');
+    for (let i = 0; i < parts.length; i += 1) {
+      if (!parts[i]) continue;
+      paths.push(parts[i].slice(3));
+      if (/^[RC]/.test(parts[i])) i += 1; // the old name of a renamed file follows
+    }
+    return paths;
+  });
 }
 
 // Throws away whatever is uncommitted in the clone (a brain update that failed midway).

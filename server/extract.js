@@ -43,6 +43,7 @@ import { saveNow } from './datasync.js';
 import { getState, readPad, setState, writePad } from './state.js';
 import * as nextActions from './nextactions.js';
 import { exportThreads } from './threadexport.js';
+import { overLimit } from './notelimits.js';
 import { refreshSecrets } from './secrets.js';
 import * as gate from './gate.js';
 import { block, dateDMY, dateTimeDMY, messageText, readPrompt, safeFileName, todayLine } from './util.js';
@@ -240,6 +241,7 @@ async function writeThreads(dir, changed) {
     const text = [
       `# Thread: ${thread.title}`,
       '',
+      `Link to it: [[${brain.THREADS_FOLDER}/${thread.id}|${dateDMY(thread.createdAt)} ${thread.title.replace(/[[\]|]/g, '')}]]`,
       `Started: ${dateTimeDMY(thread.createdAt)}`,
       `Project or area: ${thread.project || 'none named'}`,
       `Closed by Florian: ${thread.state === 'done' ? 'yes' : 'no, still open'}`,
@@ -567,8 +569,9 @@ async function fileAll(id, changed, pressedAt, mailOnly, dir, state) {
     }
 
     setStep('Reading what is new');
-    const result = await runAgent({
-      prompt: readPrompt('extract.md', { today: todayLine(), transcriptsDir: dir, material: material.join('\n') }),
+    const ask = (prompt, resume) => runAgent({
+      prompt,
+      resume,
       cwd: brain.brainDir(),
       systemAppend: 'You are running inside Florian\'s inbox app as its brain update. The run\'s instructions are in the user message.',
       model: state.model,
@@ -587,10 +590,22 @@ async function fileAll(id, changed, pressedAt, mailOnly, dir, state) {
         else if (ev.type === 'text-start') setStep('Writing the report');
       },
     });
+    const result = await ask(readPrompt('extract.md', { today: todayLine(), transcriptsDir: dir, material: material.join('\n') }));
     if (result.limit) throw Object.assign(new Error(result.error), { limit: result.limit });
     if (result.error) throw new Error(result.error);
 
     const report = parseReport(result.finalText || result.text);
+    // A project or area note that grew past its limit is shortened in the same session.
+    // Going over is no reason to lose what was filed: if this fails, the note stays long
+    // and the next update that changes it tries again.
+    const tooLong = overLimit(brain.brainDir(), await brain.changedPaths());
+    if (tooLong.length) {
+      setStep(`Shortening ${tooLong.map((n) => path.basename(n.path, '.md')).join(', ')}`);
+      const cut = await ask(readPrompt('shorten.md', { notes: tooLong.map((n) => `- \`${n.path}\`: ${n.words} words, limit ${n.limit}`).join('\n') }), result.sessionId || undefined);
+      if (cut.error || cut.limit) log(`brain update: the long notes were not shortened: ${cut.error || 'usage limit'}`);
+      const left = overLimit(brain.brainDir(), tooLong.map((n) => n.path));
+      if (left.length) log(`brain update: still over the limit: ${left.map((n) => `${n.path} (${n.words}/${n.limit})`).join(', ')}`);
+    }
     // The threads as they stand now, written into the vault by the app itself; they go
     // into the same commit. A failure here must not cost the update what it filed.
     let exportError = '';
