@@ -104,7 +104,12 @@ test('the app starts on Auto, with the five tiers', async () => {
   assert.equal((await call('PUT', '/api/settings', { tier: 'ask' })).data.tier, 'ask');
   assert.equal((await call('PUT', '/api/settings', { tier: 'high' })).data.tier, 'ask', 'a tier is ignored');
   assert.equal((await call('PUT', '/api/settings', { tier: 'enormous' })).data.tier, 'ask', 'unknown values are ignored');
-  await call('PUT', '/api/settings', { tier: 'auto' });
+  // What quick select starts on.
+  assert.equal(s.settings.askDefault, 'default');
+  assert.equal((await call('PUT', '/api/settings', { askDefault: 'low' })).data.askDefault, 'low');
+  assert.equal((await call('PUT', '/api/settings', { askDefault: 'enormous' })).data.askDefault, 'low', 'unknown values are ignored');
+  assert.equal((await state()).settings.askDefault, 'low', 'saved');
+  await call('PUT', '/api/settings', { tier: 'auto', askDefault: 'default' });
 });
 
 test('parts of the page switched off in Layout are kept, cleaned of anything odd', async () => {
