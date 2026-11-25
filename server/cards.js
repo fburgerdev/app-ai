@@ -20,7 +20,7 @@ import * as google from './google.js';
 import * as store from './store.js';
 import * as runner from './runner.js';
 import { createEvent } from './events.js';
-import { isNetworkError, report } from './repair.js';
+import { isNetworkError, isNotCode, report } from './repair.js';
 import { isKnownProject } from './projects.js';
 import { getState, inFocus, readPad } from './state.js';
 import { parseMail, serializeMail } from './mail.js';
@@ -232,7 +232,8 @@ export async function makeCards({ cards: wantCards = true } = {}) {
     if (!config.fake && google.googleConnected()) seenEntries = await upcomingEntries().catch(() => seenEntries);
     log(`cards: made ${count}${preps ? `, ${preps} event${preps === 1 ? '' : 's'} to prepare` : ''}`);
   } catch (err) {
-    lastError = isNetworkError(err.message) ? '' : err.message;
+    // The network being away or the usage limit is nothing to tell him about: the next round runs.
+    lastError = isNetworkError(err.message) || isNotCode(err.message) ? '' : err.message;
     report('looking for opportunities', err.message);
     lastMade = -1;
     log(`cards: run failed: ${err.message}`);

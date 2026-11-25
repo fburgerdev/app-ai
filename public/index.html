@@ -52,6 +52,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
         <span class="top-label">Talk</span>
       </a>
+      <button id="open-search" class="top-btn top-icon" type="button" aria-label="Search" title="Search every thread, or run a command (Ctrl K)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5"/></svg>
+      </button>
       <button id="open-settings" class="top-btn top-icon" type="button" aria-label="Settings" title="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
       </button>
@@ -95,6 +98,7 @@
             <input id="file-input" type="file" multiple hidden>
             <div id="tier" class="pick" data-label="Effort"></div>
             <span class="foot-space"></span>
+            <span id="replies" class="replies" hidden></span>
             <button id="spin" class="btn btn-quiet btn-spin" type="button" title="Send this into a spin-off: a new thread that starts as a copy of this one. Nothing is sent here, and this thread goes to the back of the queue. (Alt Enter)">Send into spin-off</button>
             <button id="defer" class="btn btn-quiet" type="button" title="Defer: not now, but it stays yours. The thread sleeps under Next actions; the next brain update writes it into Next Actions.md and deletes the thread. Text in the box is kept as where you left off. Asks once more: click twice.">Defer</button>
             <button id="agree" class="btn btn-agree" type="button" hidden title="Sends “Agree, go ahead.” It never counts as a Yes to a line for your lists.">Agree</button>
@@ -139,6 +143,12 @@
       </button>
       <div id="reports-body" class="window-body"></div>
     </div>
+  </dialog>
+
+  <dialog id="palette" class="palette" aria-label="Search and commands">
+    <input id="palette-input" class="palette-input" type="text" autocomplete="off" spellcheck="false" placeholder="Search threads, or type a command…" aria-label="Search threads, or type a command" aria-controls="palette-list">
+    <div id="palette-list" class="palette-list" role="listbox"></div>
+    <p class="palette-foot"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</p>
   </dialog>
 
   <button id="quote-btn" class="quote-btn" type="button" hidden>Quote in reply</button>

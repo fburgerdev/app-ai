@@ -356,7 +356,7 @@ function startTurn(threadId, prompt, background = false) {
   if (gate.isLocked()) { waitForGate(threadId, prompt); return; }
   // The prompt is kept with the thread, so a turn cut off by the app closing can be started
   // again by itself (retryInterrupted).
-  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null, interrupted: 0, turnPrompt: prompt });
+  store.updateThread(threadId, { state: 'working', error: '', archived: false, activity: 'Starting', workingOn: os.hostname(), held: null, interrupted: 0, turnPrompt: prompt, turnStartedAt: Date.now() });
   if (!slotFree(background)) {
     waiting.push({ threadId, prompt, background });
     store.updateThread(threadId, { activity: background ? 'Waiting its turn (your own messages go first)' : 'Waiting for a free slot' }, { quiet: true });
@@ -365,10 +365,19 @@ function startTurn(threadId, prompt, background = false) {
   running.set(threadId, { abort: new AbortController(), parts: [] }); // holds the slot until runTurn takes over
   runTurn(threadId, prompt).catch((err) => {
     log(`turn failed unexpectedly: ${err.stack || err.message}`);
-    if (store.getThread(threadId)?.kind !== 'repair') repair.report('a turn', err.stack || err.message);
+    if (store.getThread(threadId)?.kind !== 'repair' && !repair.isAway(err)) repair.report('a turn', err.stack || err.message);
     running.delete(threadId);
     heldPrompt.delete(threadId);
-    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', error: err.message });
+    // What a turn trips over before Claude even starts (GitHub away while the vault is
+    // brought up to date) is tried again like any other error, not handed to him.
+    const t = store.getThread(threadId);
+    const plan = t ? retry.turnPlan({ auto: t.auto, error: err.message, didWork: false, opts: config.autoRetry }) : null;
+    if (plan?.kind === 'retry') {
+      store.updateThread(threadId, { auto: plan.auto }, { quiet: true });
+      holdAuto(threadId, { kind: 'retry', until: plan.until, reason: plan.reason || err.message, prompt, tier: t.lastTier || '', tries: plan.tries });
+      return;
+    }
+    store.updateThread(threadId, { state: 'ready', queuedAt: Date.now(), activity: '', error: err.message, ...(plan?.stop ? { auto: plan.auto } : {}) });
   });
 }
 
@@ -562,8 +571,11 @@ export function watchHolds(mayRun) {
 // long it ran); the two computers' clocks may differ by a few seconds. Not counted:
 // what the app wrote itself, notes about what he did, messages sent with "send and
 // done" (they wait for his next one), and anything from before he pressed Stop.
-export function leftOver(messages, { stoppedAt = 0, slackMs = 5000 } = {}) {
-  let lastStart = 0;
+export function leftOver(messages, { stoppedAt = 0, slackMs = 5000, turnStartedAt = 0 } = {}) {
+  // A turn that left no answer in the thread (Claude had nothing to say, or only an error
+  // went in) took the messages before it up all the same: the thread knows when its last
+  // turn started.
+  let lastStart = turnStartedAt;
   for (const m of messages) if (m.role === 'assistant') lastStart = Math.max(lastStart, (m.ts || 0) - (m.durationMs || 0));
   return messages.filter((m) => m.role === 'user' && !m.auto && !m.event && !m.unanswered && !m.steered && !m.queuedAt && (m.ts || 0) > stoppedAt && (m.ts || 0) - slackMs > lastStart);
 }
@@ -579,7 +591,7 @@ export function answerLeftOver({ mayRun = () => true, now = Date.now() } = {}) {
     // Cheap first: nothing of his since the thread was last looked at.
     if (!t.lastUserTs || now - t.lastUserTs > maxAgeMs || t.leftOverAt === t.lastUserTs) continue;
     if (!mayRun()) return started;
-    const owed = leftOver(store.readMessages(t.id), { stoppedAt: t.stoppedAt || 0, slackMs });
+    const owed = leftOver(store.readMessages(t.id), { stoppedAt: t.stoppedAt || 0, slackMs, turnStartedAt: t.turnStartedAt || 0 });
     const newest = owed.at(-1);
     if (newest && now - newest.ts < minAgeMs) continue; // too fresh to tell: looked at again
     store.updateThread(t.id, { leftOverAt: t.lastUserTs }, { quiet: true });
@@ -1472,6 +1484,24 @@ export async function tierFor(threadId, prompt) {
 }
 
 // The same message again, one tier higher, pinned on the thread from now on.
+// "Try again", his click on a thread that stopped with an error: the same work once more,
+// from where it stopped. Until 25-11-2026 the only way was to type a message for it.
+export function tryAgain(threadId) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('No such thread');
+  if (thread.state === 'working') throw new Error('Claude is already working on this thread.');
+  if (!thread.error) throw new Error('This thread did not stop with an error.');
+  const last = [...store.readMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.event && !m.auto);
+  const about = thread.turnPrompt || (last ? promptFor(threadId, messageText(last), last.files || []) : '');
+  if (!about) throw new Error('There is nothing to try again here.');
+  const prompt = `[The app: the last turn ended on an error ("${String(thread.error).split('\n')[0].slice(0, 300)}"). Florian pressed "Try again" at ${dateTimeDMY(Date.now())}; he has not written anything new. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]\n\n${about}`;
+  store.appendMessage(threadId, { role: 'user', event: true, text: `[Florian pressed "Try again" after the error, ${dateTimeDMY(Date.now())}.]` });
+  // His click counts like a message of his: the app's own tries start from nothing again.
+  store.updateThread(threadId, { auto: null, state: thread.state === 'done' ? 'ready' : thread.state }, { quiet: true });
+  startTurn(threadId, prompt);
+  return { thread: store.getThread(threadId) };
+}
+
 export function againHigher(threadId) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');

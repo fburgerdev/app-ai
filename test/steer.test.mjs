@@ -14,6 +14,25 @@ import { fileURLToPath } from 'node:url';
 import { cleanup, freePort, until } from './helpers.mjs';
 import { turnPlan, holdLine, resumeText, interruptedText } from '../server/retry.js';
 import { parseVerdict, fakeVerdict } from '../server/supervise.js';
+import { turnOver } from '../server/agent.js';
+
+test('the line to Claude Code stays open while a background job can still wake Claude', () => {
+  // The reply is in and nothing runs: the turn is over.
+  assert.equal(turnOver({ resultSeen: true, idle: true }), true);
+  // "Started" while a render runs in the background: every reply used to close the line
+  // here, and the tool call after the render failed with "Stream closed" (25-11-2026).
+  assert.equal(turnOver({ resultSeen: true, background: 1, idle: true }), false);
+  assert.equal(turnOver({ resultSeen: true, background: 1, quietMs: 3_600_000 }), false);
+  // The job ended: Claude is woken within a second, so a short silence is no end yet...
+  assert.equal(turnOver({ resultSeen: true, background: 0, quietMs: 5_000 }), false);
+  // ...and when it was woken, the reply seen before no longer counts, however long it thinks.
+  assert.equal(turnOver({ resultSeen: false, background: 0, quietMs: 600_000 }), false);
+  // No wake came at all: over.
+  assert.equal(turnOver({ resultSeen: true, background: 0, quietMs: 31_000 }), true);
+  // Something he added still waits to go in, or a tool call is open: not over.
+  assert.equal(turnOver({ resultSeen: true, queued: 1, idle: true }), false);
+  assert.equal(turnOver({ resultSeen: true, inFlight: 1, idle: true }), false);
+});
 
 const now = new Date(2026, 10, 23, 14, 0).getTime();
 

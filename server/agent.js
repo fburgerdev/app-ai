@@ -443,7 +443,14 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   // closes the line to Claude Code, after which every tool call failed with "Stream
   // closed" (22-11-2026, hour-long renders). Its ceiling goes up, and the line is kept open
   // by the app itself until Claude Code says the session is idle (input() below).
-  if (!plain) options.env = { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_MS), ...(options.env || {}) };
+  //
+  // What still closed it (found 25-11-2026 with a real run): Claude Code does not say
+  // "idle" unless asked to, so the app took every reply for the end and closed the line
+  // while a job still ran. Any word from Claude before a job ended did that, and the next
+  // tool call after the job failed with "Stream closed". And "idle" itself comes right
+  // after the reply, jobs or not. So: the state reports are asked for, and the line closes
+  // only when the reply is in AND no background job is left (turnOver below).
+  if (!plain) options.env = { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_WAIT_MS), CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1', ...(options.env || {}) };
 
   // The prompt as a stream that stays open while the turn runs: what Florian adds
   // mid-turn ("Add") goes in here, and Claude reads it at its next step.
@@ -483,8 +490,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   let code = ''; // its kind, e.g. 'rate_limit'
   let rejected = null; // the last limit Claude Code reported as reached
   let context = 0; // how many tokens the conversation held at Claude's last step
-  let resultSeen = false;
-  let stateSeen = false; // whether this Claude Code reports its session state at all
+  let resultSeen = false; // Claude's reply is in and it has not started on anything since
   let broken = ''; // set when the app ends the run itself: the line broke, or nothing moved
   let lastAt = Date.now();
   const began = Date.now();
@@ -500,9 +506,11 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
   // background job: it hangs. Ended, so the app tries again (retry.js).
   const watchdog = plain ? null : setInterval(() => {
     const quiet = Date.now() - lastAt;
-    // The reply is there, nothing runs, and Claude Code never said "idle": the turn is over.
-    if (resultSeen && !background.length && !inFlight.size && !queue.length && quiet > 30_000) close();
-    const limit = background.length ? Infinity : inFlight.size ? WATCHDOG_TOOL_MS : WATCHDOG_MS;
+    // The reply is in and the last background job has ended, but Claude Code did not wake
+    // Claude for it (it does within a second when it is going to): the turn is over.
+    if (turnOver({ resultSeen, background: background.length, inFlight: inFlight.size, queued: queue.length, quietMs: quiet })) close();
+    // Background jobs that never end (a watch nobody stopped) do not hold the turn forever.
+    const limit = background.length ? (resultSeen ? BG_WAIT_MS : Infinity) : inFlight.size ? WATCHDOG_TOOL_MS : WATCHDOG_MS;
     if (quiet > limit) endRun(`No sign of life from Claude Code for ${Math.round(quiet / 60_000)} minutes, so the app ended the run.`);
   }, 15_000);
   watchdog?.unref?.();
@@ -515,10 +523,13 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       onEvent?.({ type: 'session', sessionId });
     }
     if (msg.type === 'system') {
-      if (msg.subtype === 'session_state_changed') {
-        stateSeen = true;
-        // Idle after the reply: nothing runs any more, the turn is over.
-        if (msg.state === 'idle' && resultSeen && !queue.length) close();
+      if (msg.subtype === 'init' || (msg.subtype === 'session_state_changed' && msg.state !== 'idle')) {
+        // Claude Code starts on something again (a job ended and woke Claude, or he added
+        // a message): the reply seen before is no longer the last word.
+        resultSeen = false;
+      } else if (msg.subtype === 'session_state_changed') {
+        // Idle after the reply, and no job left that could wake Claude: the turn is over.
+        if (turnOver({ resultSeen, background: background.length, inFlight: inFlight.size, queued: queue.length, idle: true })) close();
       } else if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
         background = msg.tasks.filter((t) => !t.ambient && !t.parent_task_id).map((t) => ({ id: t.task_id, description: t.description || t.task_type || 'a job', type: t.task_type || '' }));
         reportBackground();
@@ -534,6 +545,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       rejected = fromEvent(msg.rate_limit_info);
     } else if (msg.type === 'stream_event') {
       if (msg.parent_tool_use_id) continue; // a helper's own text is not shown
+      resultSeen = false; // Claude is writing again
       const ev = msg.event;
       if (ev.type === 'content_block_start' && ev.content_block?.type === 'text') {
         lastText = '';
@@ -595,8 +607,9 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
       onEvent?.({ type: 'tool-result' });
     } else if (msg.type === 'result') {
       resultSeen = true;
-      // An older Claude Code that does not say when it is idle: the reply is the end.
-      if (!stateSeen && !queue.length) close();
+      // Nothing runs in the background: the reply is the end. With a job still running the
+      // line stays open, Claude is woken when it ends, and the next reply comes back here.
+      if (turnOver({ resultSeen, background: background.length, inFlight: inFlight.size, queued: queue.length, idle: true })) close();
       if (msg.is_error || msg.subtype !== 'success') {
         raw = msg.result || (msg.errors || []).join(' ') || raw || msg.subtype;
         error = friendlyError(raw);
@@ -625,6 +638,17 @@ const BG_WAIT_MS = 3 * 3600_000;
 const WATCHDOG_MS = 20 * 60_000;
 const WATCHDOG_TOOL_MS = 70 * 60_000; // a tool may run long (pi_shell up to 60 minutes)
 const STREAM_CLOSED = /stream closed|Tool permission (stream closed|request failed)/i;
+const WAKE_GRACE_MS = 30_000;
+
+// Whether the app may close its line to Claude Code: Claude's reply is in, he has nothing
+// waiting to go in, no tool call is open and no background job is left that would wake
+// Claude again. Right after the reply (or on "idle") that is enough. When the last job
+// ended after the reply, Claude Code wakes Claude within a second; only when nothing has
+// come for a while was there no wake, and the turn is over.
+export function turnOver({ resultSeen, background = 0, inFlight = 0, queued = 0, idle = false, quietMs = 0 }) {
+  if (!resultSeen || background || inFlight || queued) return false;
+  return idle || quietMs > WAKE_GRACE_MS;
+}
 
 // Where a command sent to the background writes its output, from what the tool said.
 export function backgroundOutput(said) {

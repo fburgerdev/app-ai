@@ -43,6 +43,7 @@ const S = {
 
 // Declared up here because opening a thread touches them, whenever that first happens.
 let tierAsk = null; // the quick-select row over the reply box, while it asks
+let sending = false; // a message is on its way to the app
 let armedDefer = ''; // the thread whose Defer button was clicked once
 let armedDeferTimer = 0;
 
@@ -115,6 +116,120 @@ async function setPart(key, show) {
 try { S.settings.hidden = JSON.parse(localStorage.getItem(HIDDEN_SAVED) || '[]'); } catch { S.settings.hidden = []; }
 applyParts();
 
+// ---------- how he arranged the page: button order, keys, his own buttons, the look ----------
+//
+// Florian, 25-11-2026: "make the app more customizable, like deciding on the button order".
+// All of it is saved with the app's state (Settings → Layout, Shortcuts and General), so
+// laptop, Pi and phone agree. The app's own order is the order of the lists below.
+
+// The rows of buttons whose order is his. [key, name in the settings, where it is on the page].
+const ROWS = {
+  topbar: { label: 'Top bar', box: '.topbar', items: [
+    ['inbox', 'Inbox', '#open-inbox'], ['gap', '↔ gap', '.top-space'], ['focus', 'Focus', '.focus-wrap'], ['reports', 'Reports', '#open-reports'],
+    ['computer', 'Laptop / Pi', '.laptop-wrap'], ['usage', 'Usage', '#usage'], ['videokit', 'Video Kit', '#videokit-link'], ['talk', 'Talk', '#talk-link'],
+    ['search', 'Search', '#open-search'], ['settings', 'Settings', '#open-settings']] },
+  composer: { label: 'Reply box', box: '.composer-foot', items: [
+    ['attach', 'Attach', '#attach'], ['effort', 'Effort', '#tier'], ['gap', '↔ gap', '.foot-space'], ['replies', 'Your own buttons', '#replies'],
+    ['spin', 'Spin-off', '#spin'], ['defer', 'Defer', '#defer'], ['agree', 'Agree', '#agree'], ['done-btn', 'Done', '#send-done'], ['send', 'Send', '#send']] },
+  // Built anew with every thread (renderHead), which sorts by this.
+  head: { label: 'Thread header', items: [
+    ['repo', 'Repo'], ['files', 'Files'], ['notes', 'Notes'], ['stop', 'Stop'], ['retry', 'Try again'], ['tier-again', 'Tier'], ['requeue', 'Requeue'],
+    ['reopen', 'Reopen'], ['pin', 'Pin'], ['later', 'Later'], ['delete', 'Delete']] },
+};
+// His order for a row: what he saved, with any button he has not placed (a new one) put
+// behind the button it follows in the app's own order.
+function rowOrder(row) {
+  const known = ROWS[row].items.map((i) => i[0]);
+  const out = (S.settings.order?.[row] || []).filter((k) => known.includes(k));
+  known.forEach((k, i) => {
+    if (out.includes(k)) return;
+    const before = known.slice(0, i).reverse().find((p) => out.includes(p));
+    out.splice(before ? out.indexOf(before) + 1 : 0, 0, k);
+  });
+  return out;
+}
+function applyOrder() {
+  for (const row of ['topbar', 'composer']) {
+    const box = document.querySelector(ROWS[row].box);
+    if (!box) continue;
+    const sel = Object.fromEntries(ROWS[row].items.map((i) => [i[0], i[2]]));
+    const want = rowOrder(row).map((k) => box.querySelector(`:scope > ${sel[k]}`)).filter(Boolean);
+    const now = [...box.children].filter((c) => want.includes(c));
+    // Moving a button takes the focus off it, so only when the order really differs.
+    if (now.some((c, i) => c !== want[i])) box.append(...want);
+  }
+}
+async function saveSetting(patch) {
+  S.settings = { ...S.settings, ...patch };
+  applyCustom();
+  try { await api('PUT', '/api/settings', patch); } catch (err) { toast(err.message); }
+}
+
+// The actions that have a key with Alt, and the key the app gives each.
+const KEY_ACTIONS = [
+  { id: 'new', code: 'KeyN', group: 'Threads', text: 'New thread' },
+  { id: 'requeue', code: 'KeyS', group: 'Threads', text: 'Requeue: not now, show me the next' },
+  { id: 'done', code: 'KeyX', group: 'Threads', text: 'Done: close this thread' },
+  { id: 'next', code: 'KeyJ', group: 'Threads', text: 'Next thread in the inbox (also Alt ↓)' },
+  { id: 'prev', code: 'KeyK', group: 'Threads', text: 'Previous thread in the inbox (also Alt ↑)' },
+  { id: 'search', code: 'KeyP', group: 'Showing and hiding', text: 'Search every thread, or run a command (also Ctrl K)' },
+  { id: 'inbox', code: 'KeyL', group: 'Showing and hiding', text: 'Show or hide the inbox (or move the pointer to the left edge)' },
+  { id: 'files', code: 'KeyA', group: 'Showing and hiding', text: 'Show or hide the files Claude made in this thread' },
+  { id: 'brain', code: 'KeyU', group: 'Brain', text: 'Update the brain' },
+];
+// Key -> action. A key he gave to one action is taken from the action that had it.
+function keyMap() {
+  const mine = S.settings.keys || {};
+  const map = new Map();
+  for (const a of KEY_ACTIONS) if (mine[a.id]) map.set(mine[a.id], a.id);
+  for (const a of KEY_ACTIONS) if (!mine[a.id] && !map.has(a.code)) map.set(a.code, a.id);
+  return map;
+}
+const KEY_NAMES = { Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", Minus: '-', Equal: '=', Backquote: '`', BracketLeft: '[', BracketRight: ']', Backslash: '\\' };
+let keyLayout = null; // what this keyboard prints on each key, where the browser tells (a German Z is "KeyY")
+navigator.keyboard?.getLayoutMap?.().then((map) => { keyLayout = map; applyCustom(); }).catch(() => {});
+const keyName = (code) => (keyLayout?.get(code) || KEY_NAMES[code] || code.replace(/^(Key|Digit)/, '')).toUpperCase();
+function keyHint(id) {
+  const code = [...keyMap()].find(([, action]) => action === id)?.[0];
+  return code ? `Alt ${keyName(code)}` : '';
+}
+// The key hint on a button, or nothing when the action has no key.
+const kbdFor = (id) => { const text = keyHint(id); return text ? h('kbd', {}, text) : null; };
+
+// The look beyond light and dark: the colour of what is yours, and the size of the text in
+// a thread. Kept in this browser too, so the page has it before the app's state has come.
+const LOOK_SAVED = 'app-ai-look-more';
+const ACCENTS = [['', 'Amber'], ['orange', 'Orange'], ['rose', 'Rose'], ['lime', 'Lime']];
+const SIZES = [['small', 'Small'], ['', 'Normal'], ['large', 'Large'], ['larger', 'Larger']];
+function applyLookMore() {
+  const look = S.settings.look || {};
+  const root = document.documentElement;
+  if (look.accent) root.dataset.accent = look.accent; else delete root.dataset.accent;
+  if (look.size) root.dataset.size = look.size; else delete root.dataset.size;
+  try { localStorage.setItem(LOOK_SAVED, JSON.stringify({ accent: look.accent || '', size: look.size || '' })); } catch { /* private mode */ }
+}
+try { S.settings.look = JSON.parse(localStorage.getItem(LOOK_SAVED) || '{}'); } catch { S.settings.look = {}; }
+applyLookMore();
+
+// Everything above, put onto the page. Called when the settings come or change.
+function applyCustom() {
+  applyOrder();
+  applyLookMore();
+  const hint = document.querySelector('#new-thread kbd');
+  if (hint) { hint.textContent = keyHint('new'); hint.hidden = !hint.textContent; }
+  renderReplies();
+}
+
+// His own reply buttons: a click sends the text, like Agree.
+function renderReplies() {
+  const box = document.getElementById('replies');
+  if (!box) return;
+  const t = S.current ? S.threads.get(S.current) : null;
+  const list = t && t.kind !== 'card' && !S.pad ? S.settings.replies || [] : [];
+  box.hidden = !list.length;
+  box.replaceChildren(...list.map((r) => h('button', { class: 'btn btn-quiet btn-reply', type: 'button', title: `Sends: “${r.text}”`, onclick: () => send(false, '', '', r.text) }, r.label)));
+}
+
 // ---------- small helpers ----------
 
 function h(tag, attrs = {}, ...children) {
@@ -175,12 +290,19 @@ document.documentElement.addEventListener('mouseleave', () => foldPointer(''));
 const notesDraft = new Map();
 let flushNotes = () => {};
 
+// A request that did not reach the app at all: nearly always the app restarting for an
+// update. Said in plain words (the browser's own are "Failed to fetch"), and not at all
+// while the pill at the top already says the app is away.
+const AWAY = 'The app is not answering right now; it is probably restarting. Nothing is lost: try again in a moment.';
 async function api(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch { throw new Error(AWAY); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `The app answered with an error (${res.status}).`);
   return data;
@@ -205,6 +327,10 @@ async function copyFilled(text) {
 
 let toastTimer;
 function toast(text) {
+  if (text === AWAY && conn.shown) return; // the pill says it already
+  // A window opened as a dialog covers the page, the toast included: it goes into the window.
+  const host = [...document.querySelectorAll('dialog[open]')].at(-1) || document.body;
+  if (els.toast.parentElement !== host) host.append(els.toast);
   els.toast.textContent = text;
   els.toast.hidden = false;
   enter(els.toast, 'pop');
@@ -947,9 +1073,22 @@ async function moveToProject(id, project) {
   } catch (err) { toast(err.message); }
 }
 
+// A press on the inbox that is still down: drawing the lists afresh between the press and
+// the release would swallow the click (every step of a working thread redraws them).
+let railPress = 0;
+let railStale = false;
+els.rail.addEventListener('pointerdown', () => { railPress = Date.now(); }, true);
+for (const type of ['pointerup', 'pointercancel', 'dragend']) {
+  document.addEventListener(type, () => {
+    railPress = 0;
+    if (railStale) { railStale = false; setTimeout(renderRail, 0); }
+  }, true);
+}
+
 function renderRail() {
   // While a thread is being dragged the lists stay as they are; they are drawn afresh on the drop.
   if (drag?.active) { drag.stale = true; return; }
+  if (railPress && Date.now() - railPress < 1200) { railStale = true; setTimeout(() => { if (railStale) { railStale = false; renderRail(); } }, 1300); return; }
   const before = new Map([...els.paneQueue.querySelectorAll('.item')].map((el) => [el.dataset.id, el.getBoundingClientRect().top]));
   els.paneQueue.replaceChildren(...queueLists());
   renderFolders();
@@ -1526,11 +1665,21 @@ function messageEl(threadId, m) {
   const el = h('article', { class: 'msg msg-claude', dataset: { mid: m.id || '' } }, body);
   markLines(el);
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
-  if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
+  // The reply as Claude wrote it (Markdown), for pasting somewhere else.
+  const written = (m.parts || []).filter((p) => p.type === 'text' && p.text.trim()).map((p) => p.text.trim()).join('\n\n');
+  const copy = written ? h('button', { class: 'msg-copy', type: 'button', title: 'Copy this reply as text', onclick: async (e) => {
+    const button = e.currentTarget;
+    try { await copyFilled(written); button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy'; }, 1600); } catch { toast('The browser did not allow copying.'); }
+  } }, 'Copy') : null;
+  if (m.ts || tier || copy) el.append(h('p', { class: 'msg-time msg-tier' }, copy, h('span', { title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier)));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
   if (m.limit) el.append(h('p', { class: 'msg-note' }, `Claude's ${LIMIT_NAMES[m.limit.type] || 'usage limit'} cut the turn off here. The app carries on by itself when it lifts.`));
   // An error the app tried again after by itself is a note, not an alarm: the work went on below.
-  if (m.error) el.append(m.retried ? h('p', { class: 'msg-note' }, `The turn broke off here (${m.error.replace(/\.$/, '')}). The app carried on by itself.`) : h('p', { class: 'msg-note is-error' }, m.error));
+  if (m.error && m.retried) {
+    // Nothing of the turn to show: the note of the app right below says what happened, once.
+    if (!(m.parts || []).length) el.classList.add('is-bare');
+    el.append(h('p', { class: 'msg-note', title: m.error }, 'The turn broke off here; the app carried on by itself.'));
+  } else if (m.error) el.append(h('p', { class: 'msg-note is-error' }, m.error));
   return el;
 }
 
@@ -1574,7 +1723,10 @@ function renderLive() {
     const box = els.messages.querySelector('.queued-box');
     if (box) box.before(liveEl); else els.messages.append(liveEl);
   }
+  // The reply is drawn afresh with every piece that arrives: what he unfolded stays unfolded.
+  const open = [...liveEl.querySelectorAll('details')].map((d) => d.open);
   partsInto(liveEl.firstChild, S.current, S.live, { live: true });
+  liveEl.querySelectorAll('details').forEach((d, i) => { if (open[i]) d.open = true; });
   liveEl.firstChild.append(liveStatus(S.threads.get(S.current)));
   if (stick) els.scroller.scrollTop = els.scroller.scrollHeight;
 }
@@ -1592,7 +1744,9 @@ function liveStatus(t) {
     ...jobs.map((j) => h('p', { class: 'live-tail', title: `${j.description}: the last line it wrote` }, j.tail)));
 }
 // The time on the status line moves on by itself.
-setInterval(() => { if (S.live && liveEl?.isConnected) scheduleLive(); }, 5000);
+// Not while he is selecting text in the live reply: redrawing would drop the selection.
+const selectingIn = (el) => { const sel = window.getSelection(); return Boolean(sel && !sel.isCollapsed && el.contains(sel.anchorNode)); };
+setInterval(() => { if (S.live && liveEl?.isConnected && !selectingIn(liveEl)) scheduleLive(); }, 5000);
 
 // What he queued as "Next": under the live reply while Claude works, and once the turn is
 // over, with why the supervisor held it and a button to run it.
@@ -1619,7 +1773,7 @@ async function unqueue(threadId, q, edit) {
     S.threads.set(threadId, out.thread);
     if (edit) {
       els.input.value = [out.item.text, els.input.value].filter((x) => x.trim()).join('\n\n');
-      autosize();
+      els.input.dispatchEvent(new Event('input'));
       focusInput();
     }
     renderQueued();
@@ -1678,24 +1832,36 @@ function renderHead() {
   });
   title.value = t.title;
   let status;
-  const actions = [];
+  // Each button under its key (ROWS.head); his order sorts them at the end.
+  const keyed = [];
+  const actions = { push: (key, el) => keyed.push([key, el]) };
   if (t.kind === 'card') {
     status = h('span', { class: `status status-${t.state === 'ready' ? 'ready' : 'done'}` }, t.state === 'ready' ? kindLabel(t) : `${kindLabel(t)}, ${t.card?.outcome || 'decided'}`);
-    if (t.state === 'ready') actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbd('Alt S')));
+    if (t.state === 'ready') actions.push('requeue', h('button', { class: 'btn btn-quiet', type: 'button', onclick: requeue }, 'Requeue ', kbdFor('requeue')));
   } else if (t.state === 'working') {
     status = t.held
       ? h('span', { class: `status ${t.held.kind === 'gate' ? 'status-gated' : 'status-held'}` }, heldText(t.held))
       : h('span', { class: 'status status-working' }, h('span', { class: 'pulse' }), 'Claude is working', t.lastTier ? ` · ${tierText(t.lastTier)}` : '');
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held?.kind === 'gate' ? 'Take it back' : t.held ? 'Cancel the hold' : 'Stop'));
+    actions.push('stop', h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/stop`, {}).catch((e) => toast(e.message)) }, t.held?.kind === 'gate' ? 'Take it back' : t.held ? 'Cancel the hold' : 'Stop'));
   } else if (t.state === 'ready' && t.kind === 'event' && t.event) {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
   } else if (t.state === 'ready') {
     status = h('span', { class: 'status status-ready' }, 'Waiting for you');
+    // Stopped with an error: one click runs it once more, from where it stopped.
+    if (t.error) {
+      actions.push('retry', h('button', {
+        class: 'btn btn-retry', type: 'button', title: `The last turn ended on an error: ${t.error}\nTry again: Claude carries on where it stopped. You can also just write.`,
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try { S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/retry`, {})).thread); renderHead(); renderRail(); } catch (err) { toast(err.message); renderHead(); }
+        },
+      }, 'Try again'));
+    }
     // What the last turn was worth, and the way to say "that deserved more".
     if (t.lastTier && t.kind !== 'card') {
       const label = S.settings.tiers?.[t.lastTier]?.label || t.lastTier;
       const top = t.lastTier === (S.settings.tierNames || []).at(-1);
-      actions.push(h('button', {
+      actions.push('tier-again', h('button', {
         class: 'btn btn-quiet btn-tier', type: 'button', disabled: top,
         title: top ? `This ran on ${label}, the highest tier.` : `This ran on ${label}${t.keepTier ? ' (kept for this thread)' : ' (picked for the message)'}. Run the same message again one tier up, and keep that tier for this thread.`,
         onclick: async () => {
@@ -1703,14 +1869,14 @@ function renderHead() {
         },
       }, label, top ? null : h('span', { class: 'tier-up', 'aria-hidden': 'true' }, '↑')));
     }
-    actions.push(h('button', { class: 'btn btn-quiet btn-requeue', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbd('Alt S')));
+    actions.push('requeue', h('button', { class: 'btn btn-quiet btn-requeue', type: 'button', title: 'Not now: put it back and show me the next', onclick: requeue }, 'Requeue ', kbdFor('requeue')));
   } else {
     status = h('span', { class: 'status status-done' }, t.archived ? 'Archived: done, and in the brain' : 'Done');
-    actions.push(h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
+    actions.push('reopen', h('button', { class: 'btn btn-quiet', type: 'button', onclick: () => api('POST', `/api/threads/${t.id}/state`, { state: 'ready' }).catch((e) => toast(e.message)) }, 'Reopen'));
   }
   if (t.kind === 'event' && t.event?.started) {
     const on = S.panel?.kind === 'notes' && S.panel.threadId === t.id;
-    actions.unshift(h('button', {
+    actions.push('notes', h('button', {
       class: `btn btn-quiet${on || t.notes?.text?.trim() ? ' is-on' : ''}`, type: 'button',
       title: 'Notes during the call: Enter makes a new line, saved as you type. Also under the briefing when it is open.',
       onclick: () => { if (on) closePanel(); else openPanel({ kind: 'notes', threadId: t.id }); renderHead(); },
@@ -1718,16 +1884,16 @@ function renderHead() {
   }
   const files = t.kind === 'card' ? [] : S.view?.artifacts || [];
   if (files.length) {
-    actions.unshift(h('button', { class: 'btn btn-quiet', type: 'button', onclick: toggleFiles }, `${files.length} ${files.length === 1 ? 'file' : 'files'} `, kbd('Alt A')));
+    actions.push('files', h('button', { class: 'btn btn-quiet', type: 'button', onclick: toggleFiles }, `${files.length} ${files.length === 1 ? 'file' : 'files'} `, kbdFor('files')));
   }
   if (t.kind !== 'card' && t.repo) {
     const shortName = t.repo.split('/').pop();
-    actions.unshift(h('button', { class: `btn btn-quiet repo-btn${S.panel?.kind === 'repo' ? ' is-on' : ''}`, type: 'button', title: `This thread works in ${t.repo}${t.repoBranch ? ` on ${t.repoBranch}` : ''}`, onclick: toggleRepo },
+    actions.push('repo', h('button', { class: `btn btn-quiet repo-btn${S.panel?.kind === 'repo' ? ' is-on' : ''}`, type: 'button', title: `This thread works in ${t.repo}${t.repoBranch ? ` on ${t.repoBranch}` : ''}`, onclick: toggleRepo },
       h('span', { class: 'repo-glyph', 'aria-hidden': 'true' }, '⑂'), shortName, t.repoBranch ? h('span', { class: 'repo-dot', title: 'Has work on its branch' }) : null));
   }
   if (t.kind !== 'card' && t.state !== 'done') {
     const on = isPinned(t);
-    actions.push(h('button', {
+    actions.push('pin', h('button', {
       class: `btn btn-quiet pin-btn${on ? ' is-on' : ''}`, type: 'button', 'aria-pressed': String(on),
       title: on ? 'Pinned on top of the inbox, outside the queue. Click to unpin: it goes back among the other threads.' : 'Pin this thread on top of the inbox. It leaves the queue and stays there until you unpin or close it.',
       onclick: async () => {
@@ -1743,7 +1909,7 @@ function renderHead() {
   if (t.state !== 'done') {
     const on = isLater(t);
     const mine = typeof t.later === 'boolean';
-    actions.push(h('button', {
+    actions.push('later', h('button', {
       class: `btn btn-quiet later-btn${on ? ' is-on' : ''}`, type: 'button', 'aria-pressed': String(on),
       title: on
         ? `${mine ? 'You marked this "Later"' : 'Started by the app'}: in Focus it waits under "waiting for later". Click to keep it in your Focus queue.`
@@ -1751,8 +1917,10 @@ function renderHead() {
       onclick: () => setLater(t, !on),
     }, on ? 'Back to focus' : 'Later'));
   }
-  if (t.state !== 'working') actions.push(deleteButton(t));
-  els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, actions), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
+  if (t.state !== 'working') actions.push('delete', deleteButton(t));
+  const place = rowOrder('head');
+  const sorted = keyed.sort((a, b) => place.indexOf(a[0]) - place.indexOf(b[0])).map(([, el]) => el);
+  els.head.replaceChildren(...[title, status, h('div', { class: 'head-actions' }, sorted), t.kind === 'card' ? null : pathEl(t.project)].filter(Boolean));
   markGated(t);
 }
 
@@ -1798,6 +1966,7 @@ function renderComposer() {
   renderDoneButton();
   renderAttached();
   renderPicks();
+  renderReplies();
 }
 
 // Check for updates now. If a new version waits for Claude, the button offers to update
@@ -2259,6 +2428,45 @@ async function openThread(id, { keepPanel = false, byQueue = false } = {}) {
   else els.scroller.scrollTop = els.scroller.scrollHeight;
 }
 
+// After a lost connection (the app restarted, the phone woke up): the open thread is
+// brought up to date where it stands. Opening it again would empty and refill the page,
+// jump the scroll, pull the cursor out of whatever he was typing in, and close the quick
+// select; here only what changed is drawn, and nothing at all when nothing did.
+async function refreshThread() {
+  const id = S.current;
+  if (!id || S.pad) return;
+  if (!S.view) { openThread(id, { keepPanel: true, byQueue: true }); return; } // it never loaded
+  let data;
+  try { data = await api('GET', `/api/threads/${id}`); } catch { return; }
+  if (S.current !== id || !S.view) return;
+  const was = S.view.messages;
+  const same = was.length === data.messages.length && was.at(-1)?.id === data.messages.at(-1)?.id;
+  S.threads.set(id, data.thread);
+  S.view.artifacts = data.artifacts;
+  if (data.thread.kind === 'card') return;
+  const working = data.thread.state === 'working';
+  if (!document.activeElement?.classList.contains('thread-title')) renderHead();
+  renderComposer();
+  if (same) {
+    if (working) { S.live = data.live || []; scheduleLive(); } else if (S.live) { S.live = null; liveEl?.remove(); liveEl = null; }
+    renderQueued();
+    return;
+  }
+  const top = els.scroller.scrollTop;
+  const stick = nearBottom();
+  S.view.messages = data.messages;
+  S.live = working ? (data.live || []) : null;
+  liveEl = null;
+  els.messages.replaceChildren(...data.messages.map((m) => messageEl(id, m)));
+  markGated(data.thread);
+  placeLevel();
+  renderQueued();
+  if (S.live) renderLive();
+  renderPicks();
+  upgradeMailCards();
+  els.scroller.scrollTop = stick ? els.scroller.scrollHeight : top;
+}
+
 function openNew(project = '') {
   saveDraft();
   closeTierAsk();
@@ -2341,7 +2549,7 @@ async function send(done = false, tier = '', mode = '', say = '') {
     return;
   }
   const text = say || els.input.value.trim();
-  if (S.pad) return;
+  if (S.pad || sending) return; // a second Enter while the first is on its way sends nothing twice
   const files = filesToSend();
   const answers = S.current ? answersToSend() : [];
   // "Done" with an empty box closes the thread. A Yes or No on a proposed line is recorded
@@ -2362,6 +2570,7 @@ async function send(done = false, tier = '', mode = '', say = '') {
   const from = S.current;
   els.send.disabled = true;
   els.sendDone.disabled = true;
+  sending = true;
   draftPending.delete(from || 'new'); // the text is going out; a delayed save of it must not follow
   try {
     if (from) {
@@ -2374,19 +2583,22 @@ async function send(done = false, tier = '', mode = '', say = '') {
       S.threads.set(out.thread.id, out.thread);
       S.newProject = '';
     }
+    // He may have moved to another thread while it was on its way (a slow line): then the
+    // box holds that thread's text, which stays, and he stays where he is.
+    const still = S.current === from;
     if (!say) {
-      els.input.value = '';
-      autosize();
+      if (still) { els.input.value = ''; autosize(); }
       forgetDraft(from || 'new');
     }
     S.attach.delete(from || 'new');
     if (done) toast(from && S.threads.get(from)?.state === 'working' ? 'Kept. The thread closes when this turn ends; Claude does not answer it.' : 'Kept for the brain update. Done, with no answer.');
     // An event's thread is a session: it stays open while Claude answers.
-    if (!done && from && S.threads.get(from)?.kind === 'event') { renderRail(); return; }
+    if (!still || (!done && from && S.threads.get(from)?.kind === 'event')) { renderRail(); return; }
     advance(from);
   } catch (err) {
     toast(err.message);
   } finally {
+    sending = false;
     els.send.disabled = false;
     renderDoneButton();
   }
@@ -2410,12 +2622,12 @@ async function spinOff(tier = '') {
     const out = await api('POST', `/api/threads/${from}/spinoff`, { text, files, tier });
     S.threads.set(out.thread.id, out.thread);
     S.threads.set(out.from.id, out.from);
-    els.input.value = '';
-    autosize();
+    const still = S.current === from;
+    if (still) { els.input.value = ''; autosize(); }
     forgetDraft(from);
     S.attach.delete(from);
     toast(`Spun off: “${clip(out.thread.title, 48)}”`);
-    advance(from);
+    if (still) advance(from); else renderRail();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -3094,7 +3306,7 @@ async function loadConnections(body, token, title) {
   S.connections = c;
   return c;
 }
-const connBlock = (title, state, ...rest) => h('section', { class: 'conn' },
+const connBlock = (title, state, ...rest) => h('section', { class: 'conn-block' },
   h('h3', { class: 'conn-title' }, title, h('span', { class: `conn-state${state.on ? ' is-on' : ''}${state.bad ? ' is-error' : ''}` }, state.text)), ...rest);
 const connNote = (text) => h('p', { class: 'panel-note' }, text);
 
@@ -3174,6 +3386,12 @@ function lookFields() {
     h('h3', { class: 'window-head' }, 'Look'),
     h('p', { class: 'panel-note' }, 'Dark, or light on beige paper. Chosen on each device by itself.'),
     h('div', { class: 'sleep-fields' }, option('dark', 'Dark'), option('light', 'Light'), option('', 'Like this device')),
+    h('p', { class: 'panel-note' }, 'The colour of what is yours (what waits for you, Send, your move), and the size of the text in a thread. These two are the same on every device.'),
+    h('div', { class: 'sleep-fields look-accents' }, ACCENTS.map(([value, label]) => h('label', { class: 'check' },
+      h('input', { type: 'radio', name: 'accent', checked: (S.settings.look?.accent || '') === value, onchange: () => saveSetting({ look: { ...S.settings.look, accent: value } }) }),
+      h('span', { class: 'swatch', dataset: { accent: value }, 'aria-hidden': 'true' }), label))),
+    h('div', { class: 'sleep-fields' }, 'Text ', SIZES.map(([value, label]) => h('label', { class: 'check' },
+      h('input', { type: 'radio', name: 'size', checked: (S.settings.look?.size || '') === value, onchange: () => saveSetting({ look: { ...S.settings.look, size: value } }) }), ` ${label}`))),
   ];
 }
 
@@ -3228,7 +3446,8 @@ function fillLayout(body) {
       h('h4', { class: 'layout-head' }, g),
       ...PARTS.filter((p) => p.group === g).map((p) => h('label', { class: 'check layout-row' },
         h('input', { type: 'checkbox', checked: !hidden.has(p.key), onchange: (e) => setPart(p.key, e.target.checked) }), ` ${p.label}`))))),
-    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Brain in the inbox drawer.'));
+    h('p', { class: 'panel-note' }, 'The right bar is only there on a wide window; on a narrower one, and on the phone, the same lists are under Brain in the inbox drawer.'),
+    ...orderFields(), ...replyFields());
 }
 
 // "Pick on the page": everything that can go is outlined; a click hides it, or brings a
@@ -3284,35 +3503,271 @@ for (const type of ['pointerdown', 'mousedown', 'click']) {
 document.addEventListener('keydown', (e) => { if (arranging && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stopArranging(); } }, true);
 
 function fillKeys(body) {
-  const groups = [
-    ['Writing', [
+  const fixed = {
+    Writing: [
       ['Enter', 'Send, then open what the queue puts next'],
       ['Shift Enter', 'New line'],
       ['Ctrl Enter', 'Send and done: the message is kept for the brain update and the thread closes, with no answer from Claude'],
       ['Alt Enter', 'Send into a spin-off: a new thread that starts as a copy of this one'],
-    ]],
-    ['Threads', [
-      ['Alt N', 'New thread'],
-      ['Alt S', 'Requeue: not now, show me the next'],
-      ['Alt X', 'Done: close this thread'],
-      ['Alt J / Alt K', 'Next / previous thread in the inbox'],
-      ['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)'],
-    ]],
-    ['Showing and hiding', [
-      ['Alt L', 'Show or hide the inbox (or move the pointer to the left edge)'],
-      ['Alt A', 'Show or hide the files Claude made in this thread'],
-      ['Esc', 'Close the side panel or this window'],
-    ]],
-    ['Brain', [
-      ['Alt U', 'Update the brain'],
-    ]],
-  ];
+    ],
+    Threads: [['Y / N', 'On a card: accept / decline (Alt Y, Alt N or Ctrl Enter while typing)']],
+    'Showing and hiding': [['Ctrl K', 'Search every thread, or run a command'], ['Esc', 'Close the side panel or this window']],
+  };
+  const mine = S.settings.keys || {};
+  // "Change" waits for the next key: a letter or a digit takes it, Escape leaves it.
+  const change = (action, button) => {
+    button.textContent = 'Press a letter… (Esc leaves it)';
+    button.disabled = true;
+    const take = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (['Alt', 'Control', 'Shift', 'Meta'].includes(e.key)) return;
+      window.removeEventListener('keydown', take, true);
+      if (e.key !== 'Escape' && /^(Key[A-Z]|Digit[0-9]|Comma|Period|Slash|Semicolon|Quote|Minus|Equal|Backquote|BracketLeft|BracketRight|Backslash)$/.test(e.code)) {
+        // The key leaves whichever action he had given it to before.
+        const keys = Object.fromEntries(Object.entries(mine).filter(([id, code]) => id !== action.id && code !== e.code));
+        if (e.code !== action.code || keyMap().get(e.code) !== action.id) keys[action.id] = e.code;
+        saveSetting({ keys });
+        if (S.current) renderHead();
+      }
+      openSettings('keys');
+    };
+    window.addEventListener('keydown', take, true);
+  };
+  const row = (action) => {
+    const hint = keyHint(action.id);
+    return [
+      h('dt', {}, hint ? kbd(hint) : h('span', { class: 'key-none' }, 'no key')),
+      h('dd', {}, action.text, ' ', h('button', { class: 'link key-change', type: 'button', onclick: (e) => change(action, e.currentTarget) }, 'Change')),
+    ];
+  };
+  const groups = ['Writing', 'Threads', 'Showing and hiding', 'Brain'];
   body.append(h('h3', { class: 'window-head' }, 'Shortcuts'),
-    ...groups.map(([g, rows]) => h('section', { class: 'keys-group' },
+    h('p', { class: 'panel-note' }, 'The keys with Alt are yours: “Change”, then press the letter or digit you want. A key you give to one action is taken from the one that had it. Some belong to the browser and will not arrive (Alt D, Alt F).',
+      Object.keys(mine).length ? [' ', h('button', { class: 'link', type: 'button', onclick: async () => { await saveSetting({ keys: {} }); if (S.current) renderHead(); openSettings('keys'); } }, 'The app’s own keys')] : null),
+    ...groups.map((g) => h('section', { class: 'keys-group' },
       h('h4', { class: 'layout-head' }, g),
-      h('dl', { class: 'keys' }, rows.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)])))),
+      h('dl', { class: 'keys' },
+        (fixed[g] || []).filter(([k]) => g !== 'Threads').map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)]),
+        KEY_ACTIONS.filter((a) => a.group === g).map(row),
+        g === 'Threads' ? fixed.Threads.map(([k, text]) => [h('dt', {}, kbd(k)), h('dd', {}, text)]) : null))),
     h('p', { class: 'panel-note' }, 'Select any text in a reply, a file or a vault note to quote it in your reply. Drag a thread to reorder the inbox, onto Done to close it, or onto a folder to file it.'));
 }
+
+// ---------- Settings: the order of the buttons, and his own reply buttons ----------
+
+function orderFields() {
+  return [
+    h('h3', { class: 'window-head' }, 'Order of the buttons'),
+    h('p', { class: 'panel-note' }, 'Drag a button to where you want it, or move it with its arrows. “↔ gap” is the empty space: what stands after it sits on the right. The thread header shows only the buttons that fit the thread’s state.'),
+    ...Object.keys(ROWS).map(orderRow),
+  ];
+}
+function orderRow(row) {
+  const box = h('section', { class: 'order-row' });
+  const names = Object.fromEntries(ROWS[row].items.map((i) => [i[0], i[1]]));
+  let dragged = '';
+  const save = (keys) => {
+    const order = { ...(S.settings.order || {}) };
+    if (keys) order[row] = keys; else delete order[row];
+    saveSetting({ order });
+    if (row === 'head') renderHead();
+    draw();
+  };
+  const move = (key, to) => {
+    const keys = rowOrder(row).filter((k) => k !== key);
+    keys.splice(Math.max(0, Math.min(keys.length, to)), 0, key);
+    save(keys);
+  };
+  function draw() {
+    const keys = rowOrder(row);
+    box.replaceChildren(
+      h('div', { class: 'order-head' },
+        h('h4', { class: 'layout-head' }, ROWS[row].label),
+        S.settings.order?.[row]?.length ? h('button', { class: 'link', type: 'button', onclick: () => save(null) }, 'The app’s own order') : null),
+      h('div', { class: 'order-chips' }, keys.map((key, i) => {
+        const chip = h('span', { class: `order-chip${key === 'gap' ? ' is-gap' : ''}`, draggable: 'true', dataset: { key } },
+          h('button', { class: 'order-move', type: 'button', disabled: i === 0, 'aria-label': `Move ${names[key]} left`, onclick: () => move(key, i - 1) }, '‹'),
+          h('span', { class: 'order-name' }, names[key]),
+          h('button', { class: 'order-move', type: 'button', disabled: i === keys.length - 1, 'aria-label': `Move ${names[key]} right`, onclick: () => move(key, i + 1) }, '›'));
+        chip.addEventListener('dragstart', (e) => { dragged = key; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); chip.classList.add('is-dragged'); });
+        chip.addEventListener('dragend', () => { dragged = ''; draw(); });
+        chip.addEventListener('dragover', (e) => {
+          if (!dragged || dragged === key) return;
+          e.preventDefault();
+          const r = chip.getBoundingClientRect();
+          const after = e.clientX > r.left + r.width / 2;
+          chip.classList.toggle('drop-after', after);
+          chip.classList.toggle('drop-before', !after);
+        });
+        chip.addEventListener('dragleave', () => chip.classList.remove('drop-after', 'drop-before'));
+        chip.addEventListener('drop', (e) => {
+          if (!dragged || dragged === key) return;
+          e.preventDefault();
+          const after = chip.classList.contains('drop-after');
+          const rest = rowOrder(row).filter((k) => k !== dragged);
+          const was = dragged;
+          dragged = '';
+          rest.splice(rest.indexOf(key) + (after ? 1 : 0), 0, was);
+          save(rest);
+        });
+        return chip;
+      })));
+  }
+  draw();
+  return box;
+}
+
+function replyFields() {
+  const rows = h('div', { class: 'reply-rows' });
+  const collect = () => [...rows.children].map((r) => ({ label: r.children[0].value.trim(), text: r.children[1].value.trim() })).filter((r) => r.text || r.label)
+    .map((r) => ({ label: r.label || r.text.slice(0, 24), text: r.text || r.label }));
+  const save = () => saveSetting({ replies: collect() });
+  const add = h('button', { class: 'btn btn-quiet', type: 'button' }, 'Add a button');
+  const row = (r = { label: '', text: '' }) => {
+    const el = h('div', { class: 'reply-row' },
+      h('input', { class: 'reply-label', type: 'text', maxlength: '24', placeholder: 'On the button', 'aria-label': 'What the button says', onchange: save }),
+      h('input', { class: 'reply-text', type: 'text', maxlength: '600', placeholder: 'What it sends, e.g. “Build it.”', 'aria-label': 'What the button sends', onchange: save }),
+      h('button', { class: 'btn btn-quiet btn-icon', type: 'button', 'aria-label': 'Remove this button', title: 'Remove', onclick: () => { el.remove(); save(); add.disabled = false; } }, '×'));
+    el.children[0].value = r.label;
+    el.children[1].value = r.text;
+    return el;
+  };
+  rows.append(...(S.settings.replies || []).map(row));
+  add.disabled = rows.children.length >= 8;
+  add.addEventListener('click', () => { rows.append(row()); rows.lastChild.children[0].focus(); add.disabled = rows.children.length >= 8; });
+  return [
+    h('h3', { class: 'window-head' }, 'Your own reply buttons'),
+    h('p', { class: 'panel-note' }, 'For what you write again and again. A button stands next to Send and sends its text with one click (with what you typed left in the box), like Agree. Up to eight; place them with “Your own buttons” in the reply box’s order above.'),
+    rows, h('div', {}, add),
+  ];
+}
+
+// ---------- search and commands (Ctrl K) ----------
+//
+// One box for getting anywhere: a thread by its name (done and archived ones too), a
+// thread by something that was said in it, or a command. Names and commands are matched
+// here at once; the conversations are searched by the app a moment after he stops typing.
+
+const palette = { el: $('palette'), input: $('palette-input'), list: $('palette-list'), rows: [], at: 0, hits: [], hitsFor: '', token: 0 };
+
+function paletteCommands() {
+  const settingsTab = (tab, name) => ({ title: `Settings: ${name}`, run: () => openSettings(tab) });
+  const t = S.current ? S.threads.get(S.current) : null;
+  return [
+    { title: 'New thread', hint: keyHint('new'), run: () => openNew() },
+    t?.state === 'ready' ? { title: 'Requeue this thread', hint: keyHint('requeue'), run: requeue } : null,
+    t?.state === 'ready' && t.kind !== 'card' ? { title: 'Done: close this thread', hint: keyHint('done'), run: markDone } : null,
+    { title: 'Update the brain', hint: keyHint('brain'), run: () => updateBrain() },
+    { title: 'Daily reports', run: () => $('open-reports').click() },
+    { title: 'Catch-up or Focus', run: () => $('focus-toggle').click() },
+    { title: 'Show or hide the inbox', hint: keyHint('inbox'), run: () => setRail(!els.app.classList.contains('rail-open')) },
+    { title: 'Layout: pick on the page what to hide', run: () => startArranging() },
+    settingsTab('general', 'General (look, sleep time)'), settingsTab('layout', 'Layout (what shows, button order, your own buttons)'), settingsTab('keys', 'Shortcuts'),
+    settingsTab('queue', 'Queue'), settingsTab('connections', 'Connections'), settingsTab('stats', 'Stats'), settingsTab('system', 'System'),
+    { title: 'Talk to the host', run: () => { location.href = '/walk'; } },
+  ].filter(Boolean);
+}
+
+const stateWord = (t) => (t.state === 'working' ? (t.held ? 'held' : 'Claude is working') : t.state === 'ready' ? 'waiting for you' : t.archived ? 'archived' : t.deferred ? 'deferred' : 'done');
+const stateClass = (t) => (t.kind === 'event' ? 'event' : t.state === 'working' ? 'working' : t.state === 'ready' ? 'ready' : 'done');
+const lastTouched = (t) => Math.max(t.lastUserAt || 0, t.updatedAt || 0, t.doneAt || 0);
+
+function drawPalette() {
+  const q = palette.input.value.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
+  const has = (text) => words.every((w) => text.toLowerCase().includes(w));
+  const rank = { ready: 0, working: 1, done: 2 };
+  const threads = all().filter((t) => t.kind !== 'card' && (!q || has(`${t.title} ${t.project || ''}`)))
+    .sort((a, b) => (q ? (rank[a.state] ?? 2) - (rank[b.state] ?? 2) : 0) || lastTouched(b) - lastTouched(a))
+    .slice(0, q ? 12 : 6);
+  const commands = paletteCommands().filter((c) => !q || has(c.title));
+  const named = new Set(threads.map((t) => t.id));
+  const hits = palette.hitsFor === q ? palette.hits.filter((x) => !named.has(x.id) && S.threads.has(x.id)).slice(0, 12) : [];
+  const threadRow = (t, sub, find = '') => ({
+    run: () => openFound(t.id, find),
+    el: h('span', { class: 'palette-main' },
+      h('span', { class: `palette-dot is-${stateClass(t)}`, 'aria-hidden': 'true' }),
+      h('span', { class: 'palette-text' }, h('span', { class: 'palette-title' }, t.title), h('span', { class: 'palette-sub' }, sub))),
+  });
+  const sections = [
+    [q ? 'Threads' : 'Recent threads', threads.map((t) => threadRow(t, [stateWord(t), t.project, ago(lastTouched(t))].filter(Boolean).join(' · ')))],
+    ['Commands', commands.map((c) => ({ run: c.run, el: h('span', { class: 'palette-main' }, h('span', { class: 'palette-dot is-command', 'aria-hidden': 'true' }), h('span', { class: 'palette-text' }, h('span', { class: 'palette-title' }, c.title)), c.hint ? h('kbd', {}, c.hint) : null) }))],
+    ['Said in a thread', hits.map((x) => threadRow(S.threads.get(x.id), `${{ you: 'You', claude: 'Claude', app: 'The app' }[x.who] || ''}: ${x.snippet}`, words[0]))],
+  ];
+  palette.rows = [];
+  const out = [];
+  for (const [title, rows] of sections) {
+    if (!rows.length) continue;
+    out.push(h('p', { class: 'palette-head' }, title));
+    for (const r of rows) {
+      const i = palette.rows.length;
+      const el = h('button', { class: 'palette-row', type: 'button', role: 'option', onclick: () => runPalette(i), onpointermove: () => { if (palette.at !== i) { palette.at = i; markPalette(); } } }, r.el);
+      palette.rows.push({ run: r.run, el });
+      out.push(el);
+    }
+  }
+  if (!palette.rows.length) out.push(h('p', { class: 'palette-none' }, q.length < 2 ? 'Nothing by that name.' : palette.hitsFor === q ? 'Nothing found, in no thread’s name and in no conversation.' : 'Searching the conversations…'));
+  palette.list.replaceChildren(...out);
+  palette.at = Math.min(palette.at, Math.max(0, palette.rows.length - 1));
+  markPalette();
+}
+function markPalette() {
+  palette.rows.forEach((r, i) => { r.el.classList.toggle('is-on', i === palette.at); r.el.setAttribute('aria-selected', String(i === palette.at)); });
+  palette.rows[palette.at]?.el.scrollIntoView({ block: 'nearest' });
+}
+function runPalette(i) {
+  const row = palette.rows[i];
+  if (!row) return;
+  palette.el.close();
+  row.run();
+}
+const searchSoon = debounce(async () => {
+  const q = palette.input.value.trim().toLowerCase();
+  if (q.length < 2) return;
+  const token = ++palette.token;
+  try {
+    const { hits } = await api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+    if (token !== palette.token || palette.input.value.trim().toLowerCase() !== q) return;
+    palette.hits = hits;
+    palette.hitsFor = q;
+    if (palette.el.open) drawPalette();
+  } catch { /* the names still work */ }
+}, 220);
+function togglePalette() {
+  if (palette.el.open) { palette.el.close(); return; }
+  if (!sleepScreen.hidden) return;
+  if (els.settings.open) els.settings.close();
+  palette.input.value = '';
+  palette.at = 0;
+  palette.el.showModal();
+  drawPalette();
+  palette.input.focus();
+}
+// Opens a thread found by what was said in it, at the place where it was said.
+async function openFound(id, word) {
+  await openThread(id);
+  if (!word || S.current !== id) return;
+  const place = [...els.messages.querySelectorAll('.msg')].reverse().find((m) => m.textContent.toLowerCase().includes(word));
+  if (!place) return;
+  els.scroller.scrollTop = Math.max(0, place.offsetTop - 24);
+  place.classList.add('is-found');
+  setTimeout(() => place.classList.remove('is-found'), 2600);
+}
+palette.input.addEventListener('input', () => { palette.at = 0; drawPalette(); searchSoon(); });
+palette.input.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = palette.rows.length;
+    if (n) { palette.at = (palette.at + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; markPalette(); }
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!e.repeat) runPalette(palette.at);
+  }
+});
+palette.el.addEventListener('click', (e) => { if (e.target === palette.el) palette.el.close(); });
+palette.el.addEventListener('close', () => { if (!els.composer.hidden && !document.querySelector('dialog[open]')) focusInput(); });
+$('open-search').addEventListener('click', () => togglePalette());
 
 // ---------- sleep time ----------
 //
@@ -3729,7 +4184,7 @@ function insertQuote() {
   const block = `${lines.map((l) => `> ${l}`).join('\n')}\n\n`;
   const current = els.input.value;
   els.input.value = `${current}${current && !current.endsWith('\n') ? '\n\n' : ''}${block}`;
-  autosize();
+  els.input.dispatchEvent(new Event('input')); // saved as a draft, and Done and Send follow
   hideQuote();
   window.getSelection().removeAllRanges();
   focusInput();
@@ -3771,6 +4226,8 @@ els.input.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
+    // A held Enter is one Enter: its repeats would send the next thread's draft, or close it.
+    if (e.repeat) return;
     if (e.altKey) spinOff(); else send(e.ctrlKey);
   }
 });
@@ -3818,6 +4275,7 @@ els.scroller.addEventListener('scroll', hideQuote, { passive: true });
 // are not offered here; quick select is how one is chosen. A thread that keeps a tier
 // ("Again, higher") says so; picking either option lets it go.
 function renderSettings() {
+  if (els.tier.classList.contains('is-open')) return; // he is choosing: redrawing would close the menu
   const s = S.settings;
   const t = S.current ? S.threads.get(S.current) : null;
   const kept = t?.keepTier && (s.tierNames || []).includes(t.keepTier) ? t.keepTier : '';
@@ -4041,7 +4499,7 @@ window.addEventListener('keydown', (e) => {
   if (!sleepScreen.hidden) { if (!e.target.closest?.('.sleep')) e.preventDefault(); return; }
   if (e.key === 'Escape') {
     if (!els.quote.hidden) { hideQuote(); return; }
-    if (els.settings.open || reportsWin.open) return; // the window closes itself
+    if (els.settings.open || reportsWin.open || palette.el.open) return; // the window closes itself
     if (document.querySelector('.pick.is-open')) { closePickers(); return; }
     if (S.panel) { closePanel(); if (!els.composer.hidden) focusInput(); return; }
     if (typing() && S.cardDecide) document.activeElement.blur();
@@ -4051,29 +4509,40 @@ window.addEventListener('keydown', (e) => {
   // A burst of keys is someone typing with the cursor in the wrong place, not a verdict.
   const burst = e.timeStamp - lastKeyAt < 400;
   lastKeyAt = e.timeStamp;
-  if (S.cardDecide && !e.metaKey && !e.repeat) {
+  // A window in front (Settings, Reports, search): no key decides a card behind it.
+  const windowOpen = Boolean(document.querySelector('dialog[open]'));
+  if (S.cardDecide && !e.metaKey && !e.repeat && !windowOpen) {
     const plain = !typing() && !e.altKey && !e.ctrlKey && !burst;
-    const accept = (plain && e.key.toLowerCase() === 'y') || (e.altKey && e.code === 'KeyY') || (e.ctrlKey && e.key === 'Enter');
+    // Alt Y by what the key says, so it is the Y key on a German keyboard too (it sits where
+    // the American one has Z). Only where Alt turns the letter into a sign, by its place.
+    const altY = e.altKey && (e.key.toLowerCase() === 'y' || (e.key.length !== 1 && e.code === 'KeyY'));
+    const accept = (plain && e.key.toLowerCase() === 'y') || altY || (e.ctrlKey && e.key === 'Enter');
     const decline = (plain && e.key.toLowerCase() === 'n') || (e.altKey && e.code === 'KeyN' && typing());
     if (accept && !S.cardIsMail) { e.preventDefault(); S.cardDecide('accepted'); return; }
     if (decline) { e.preventDefault(); S.cardDecide('declined'); return; }
   }
+  // Search and commands: Ctrl K (or Cmd K), from anywhere.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyK') { e.preventDefault(); if (!e.repeat) togglePalette(); return; }
   if (!e.altKey || e.ctrlKey || e.metaKey) return;
+  if (palette.el.open && keyMap().get(e.code) !== 'search') return; // nothing happens behind the search window
   const actions = {
-    KeyN: () => openNew(),
-    KeyS: requeue,
-    KeyX: markDone,
-    KeyU: () => updateBrain(),
-    KeyA: toggleFiles,
-    KeyL: () => setRail(!els.app.classList.contains('rail-open')),
-    KeyJ: () => step(1),
-    KeyK: () => step(-1),
-    ArrowDown: () => step(1),
-    ArrowUp: () => step(-1),
+    new: () => openNew(),
+    requeue,
+    done: markDone,
+    brain: () => updateBrain(),
+    files: toggleFiles,
+    inbox: () => setRail(!els.app.classList.contains('rail-open')),
+    next: () => step(1),
+    prev: () => step(-1),
+    search: () => togglePalette(),
   };
-  const action = actions[e.code];
+  // The keys are his (Settings → Shortcuts); the arrows always step through the inbox.
+  const id = { ArrowDown: 'next', ArrowUp: 'prev' }[e.code] || keyMap().get(e.code);
+  const action = actions[id];
   if (!action) return;
   e.preventDefault();
+  // A held key steps on through the inbox, but never requeues or closes thread after thread.
+  if (e.repeat && id !== 'next' && id !== 'prev') return;
   action();
 });
 
@@ -4287,9 +4756,15 @@ function connect() {
   on('artifacts', onArtifacts);
   on('brain', setBrain);
   on('projects', () => loadProjects()); // e.g. the Someday labels are ready
-  on('state', (s) => { S.settings = { ...S.settings, ...s }; applyParts(); renderSettings(); renderFocus(); renderRail(); renderTree(); checkSleep(); });
+  on('state', (s) => {
+    const arranged = JSON.stringify([S.settings.order, S.settings.keys, S.settings.replies]);
+    S.settings = { ...S.settings, ...s };
+    applyParts(); applyCustom(); renderSettings(); renderFocus(); renderRail(); renderTree(); checkSleep();
+    // Arranged on another device: the thread's header follows (unless he is naming the thread).
+    if (arranged !== JSON.stringify([s.order, s.keys, s.replies]) && !document.activeElement?.classList.contains('thread-title')) renderHead();
+  });
   on('queue', (q) => { S.queue = q; renderRail(); renderComposer(); });
-  on('cards', (c) => { S.cards = c; renderRail(); if (c.lastError) toast(`Looking for opportunities failed: ${c.lastError}`); });
+  on('cards', (c) => { const said = S.cards?.lastError; S.cards = c; renderRail(); if (c.lastError && c.lastError !== said) toast(`Looking for opportunities failed: ${c.lastError}`); });
   on('report', onReports);
   on('connections', () => { if (els.settings.open && S.settingsTab === 'connections') openSettings('connections'); });
   // The event itself says "applying" a moment before the restart; the fetch may not get through.
@@ -4326,7 +4801,7 @@ function connect() {
       // Back from signing in with Google: show that it worked.
       if (new URLSearchParams(location.search).has('google')) { history.replaceState(null, '', '/'); openSettings('connections'); }
     } else if (S.current && S.threads.has(S.current)) {
-      openThread(S.current, { keepPanel: true, byQueue: true });
+      refreshThread();
     } else if (S.current) {
       // The side changed and this thread is not there (yet).
       const first = inbox()[0];
@@ -4344,6 +4819,7 @@ async function load() {
   S.connections = state.connections;
   S.settings = state.settings;
   applyParts();
+  applyCustom();
   checkSleep();
   navigator.clearAppBadge?.().catch(() => {}); // the old count, from before it was taken off
   S.queue = state.queue;

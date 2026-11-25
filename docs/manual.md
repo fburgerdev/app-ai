@@ -4,11 +4,30 @@ Everything the app does, feature by feature. What it is, how to install it and w
 
 ## The screen
 
-- **The top bar** is always there: the inbox button with the number waiting, Focus, the daily reports, which computer does the work, what Claude used today, Video Kit, Talk and Settings.
+- **The top bar** is always there: the inbox button with the number waiting, Focus, the daily reports, which computer does the work, what Claude used today, Video Kit, Talk, Search and Settings.
 - **The inbox** is out of the way until you want it: move the pointer to the left edge of the window and it slides in; move away and it leaves. Alt+L or the inbox button does the same, and "Keep open" at its top makes it a fixed column.
 - **The outline** on the right: projects and areas, People and Someday (see "The outline" below).
-- **Settings** opens as a window: General (light or dark, sleep time), Layout (which parts of the page show), Queue (what the queue has learned), Shortcuts, Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
+- **Settings** opens as a window: General (light or dark, the colour of what is yours, the size of the text, sleep time), Layout (which parts of the page show, the order of the buttons, your own reply buttons), Queue (what the queue has learned), Shortcuts (the keys with Alt can be changed), Connections (Google, calling by phone), Stats, System (version and updates, backup to GitHub, where the app runs). Stats show the last count at once, with its time, and count again in the background at most every five minutes.
 - **Layout** (Settings → Layout) switches off what you do not use: buttons of the top bar, the reply box and the thread's header, parts of the inbox drawer, the right bar or its parts, the key hints. **Pick on the page** outlines everything that can go; click a part to hide it, a faded one to bring it back. Saved with the app's state, so laptop, Pi and phone look the same; keys keep working.
+
+## Search and commands
+
+**Ctrl+K** (or the magnifying glass in the top bar, or Alt+P) opens one box for getting anywhere:
+
+- **A thread by its name**, done and archived ones included. Those waiting for you come first.
+- **A thread by something that was said in it**: type a few words, and a moment later the threads whose conversation holds all of them are listed under "Said in a thread", each with the place. Opening one jumps to that place.
+- **A command**: New thread, Requeue, Done, Update the brain, Daily reports, Focus, any tab of the settings, Pick on the page.
+
+Arrow keys move, Enter opens, Esc closes. With nothing typed it shows the threads you touched last.
+
+## Arranging the page
+
+Beyond switching parts off, these are yours to arrange. All are saved with the app's state, so every device agrees.
+
+- **The order of the buttons** (Settings → Layout → Order of the buttons): the top bar, the reply box and the thread header. Drag a button, or move it with the arrows on it. "↔ gap" is the empty space: what stands after it sits on the right. "The app's own order" puts a row back. A button the app gains later appears behind the one it follows in the app's own order.
+- **Your own reply buttons** (same tab): up to eight, each with what it says and what it sends ("Build" → "Build it."). They stand next to Send and send their text with one click, like Agree; what you typed stays in the box.
+- **The keys with Alt** (Settings → Shortcuts): "Change", then press a letter or a digit. A key you give to one action is taken from the one that had it, which then shows "no key". The hints on the buttons follow. Enter, Ctrl+Enter, Alt+Enter, Y / N, Ctrl+K and Esc are fixed.
+- **The look** (Settings → General): besides light or dark (per device), the colour of what is yours (amber, orange, rose or lime; the other colours each mean a state) and the size of the text in a thread.
 
 ## Answering with buttons
 
@@ -44,6 +63,8 @@ The order is worked out in the background, so moving on never waits for a model.
 
 You can also ask for a spin-off in the message itself: "…also spin off a new task only about the mail draft". Claude then starts that thread, which works in parallel, and carries on with the rest of your message where you are. It does this only when you ask.
 
+**Try again**, in the header of a thread that stopped with an error, runs it once more from where it stopped, without your having to write. **Copy**, under a reply when the pointer is on it, copies the reply as Claude wrote it.
+
 **Delete**, in a thread's header, removes it for good after a second click: for chats that were a test, random, or nothing for the brain. What an update already filed from it stays in the brain.
 
 | Key | What it does |
@@ -61,6 +82,9 @@ You can also ask for a spin-off in the message itself: "…also spin off a new t
 | Alt+A | Show or hide the files Claude made in this thread |
 | Esc | Close the side panel or the settings window |
 | Alt+U | Update the brain |
+| Ctrl+K, Alt+P | Search every thread, or run a command |
+
+The keys with Alt are the app's own; you can change them (see "Arranging the page").
 
 ## What a message is worth
 
@@ -296,7 +320,8 @@ Most of the time the status is only the small item in the top bar. The row under
   - **Lock for update**: what runs finishes; everything new (your messages, Claude carrying on, retries, threads the app starts, the brain update) waits, shown in teal as *Queued for the update*. As soon as nothing runs, the app restarts and starts what waited, in the order it came. **Unlock** undoes it, and what waited starts at once. A message into a queued thread goes along with it.
   - **Update now**: at once; what runs is cut off and carries on by itself after the restart. A merge into main cut off this way (or by a crash, or the laptop shutting down) is tried again by itself half a minute after the app is back, so a finished branch is never left behind.
 - **Handing over to the Pi locks the same way.** From the click until the handover has gone through, everything new waits in teal as *Queued for the handover*, and the Pi starts it once it has taken over.
-- **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again by itself with growing pauses and says nothing, unless it lasts more than ten minutes.
+- **The network is away** (the laptop just woke, GitHub cannot be reached): the app tries again by itself with growing pauses and says nothing, unless it lasts more than ten minutes. The same holds when the other computer saved first, and when Claude's usage limit stops a background run: neither is said, and neither opens a Repair thread.
+- **The page lost the app for a moment** (a restart for an update, a phone waking up): a pill at the top says so, and when the app is back the open thread is brought up to date where it stands. What you were typing, the cursor and the scroll position stay.
 - **A message nobody answered.** A message sent just as the work moved between the laptop and the Pi could end up in a thread with no turn to take it up. The app looks for such messages every minute (on the computer doing the work, for messages of the last six hours) and starts the turn itself, with a note in the thread. After Stop it does not.
 - **Anything else fails** (the card run, saving, updating, a crash): the app opens a **Repair** thread by itself. Claude gets the error and the end of the log, finds the cause, and if it is a bug fixes it in the app's own repo. Its fix is tested and merged like any thread's work, the thread closes, and the self-update takes it (and goes back if the new version does not start). If the tests fail, the thread waits in the inbox. One repair thread per kind of error per day. Turn it off with `"repair": { "auto": false }`, or only its merging with `"repair": { "autoMerge": false }`.
 
@@ -317,7 +342,7 @@ When Claude's five-hour or weekly limit cuts a turn off, the thread does not com
   - **Add now**, the default: Claude reads it at its next step, in the running turn. It shows where Claude read it, with Claude's reply so far above it.
   - **Next**: it waits under the live reply ("Next, when this turn ends") and runs after the turn as a new command, on the tier you pick for it. Change or × takes it back.
 - **The status line** at the end of the live reply always says what Claude is doing and for how long. While a background job runs (a render), it also shows the last line the job wrote.
-- **Long jobs** keep the turn open for up to three hours: Claude runs them in the background and is woken when they end. Until 23-11-2026 the line to Claude Code closed after ten minutes, and every tool call after that failed with "Stream closed".
+- **Long jobs** keep the turn open for up to three hours: Claude runs them in the background and is woken when they end. The app keeps its line to Claude Code open for as long as a background job (or a helper Claude started) can still wake it. Until 25-11-2026 it closed the line at Claude's first reply, also while a job still ran, and the first tool call after the job failed with "Stream closed"; the retry then picked the work up, with a note in the thread.
 - **The supervisor** is the app acting by itself. Its messages have their own colour, and "What Claude got" shows what it sent. When a turn ends, a cheap model reads the reply:
   - it only waits for a go-ahead ("say go on when you're back"): the supervisor tells Claude to carry on a minute later;
   - it asks you something only you can decide: it waits for you, and so does a queued Next ("Held by the supervisor: …", with **Run it**; writing again sends the held Next first, then your message);

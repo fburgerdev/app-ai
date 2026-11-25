@@ -379,6 +379,17 @@ test('a message no turn took up is found, whatever order the two computers\' lin
   assert.deepEqual(leftOver([user(t0), claude(t0 + 60_000, 50_000), late], { stoppedAt: t0 + 40_000 }), []);
   // Clocks a few seconds apart do not make an answered message look unanswered.
   assert.deepEqual(leftOver([user(t0 + 3000), claude(t0 + 60_000, 60_000)]), []);
+  // A turn that left no answer behind (Claude had nothing to say) still took the message up.
+  assert.deepEqual(leftOver([user(t0)]), [user(t0)]);
+  assert.deepEqual(leftOver([user(t0)], { turnStartedAt: t0 + 200 }), []);
+  assert.deepEqual(leftOver([user(t0), user(t0 + 90_000)], { turnStartedAt: t0 + 200 }).length, 1);
+});
+
+test('what no change to the code can fix opens no repair thread', async () => {
+  const { isNotCode } = await import('../server/repair.js');
+  assert.equal(isNotCode('Claude Code returned an error result: You\'ve hit your 5-hour limit · resets 1:50am (Europe/Berlin)'), true);
+  assert.equal(isNotCode('Invalid API key · Please run /login'), true);
+  assert.equal(isNotCode('TypeError: cannot read properties of undefined'), false);
 });
 
 test('Auto does not step down to the cheaper model while a big conversation is still ready', async () => {

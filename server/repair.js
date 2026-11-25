@@ -29,6 +29,11 @@ export const isNetworkError = (message) => NETWORK.test(String(message || ''));
 // is the same trouble: the laptop slept in the middle of it, or woke before the network did.
 export const isAway = (err) => err?.timedOut === true || isNetworkError(err?.message);
 
+// Failures no change to the code can fix: Claude's usage limit ("You've hit your 5-hour
+// limit", which opened a repair thread on 16-11-2026), the service being overloaded, not
+// being signed in.
+export const isNotCode = (message) => /usage limit|rate.?limit|hit your .*limit|limit reached|out of (extra )?usage|overloaded|not logged in|\/login|API key/i.test(String(message || ''));
+
 let config;
 let deps = { send: null, mayRun: () => true };
 
@@ -43,7 +48,7 @@ function seen() { try { return JSON.parse(fs.readFileSync(SEEN, 'utf8')); } catc
 export function report(source, message) {
   try {
     if (!message || isNetworkError(message) || config?.repair?.auto === false) return null;
-    if (/usage limit|rate limit|overloaded|not logged in|\/login|API key/i.test(message)) return null; // nothing code can fix
+    if (isNotCode(message)) return null; // nothing code can fix
     if (!deps.mayRun()) return null;
     const sig = signature(source, message);
     const all = seen();
