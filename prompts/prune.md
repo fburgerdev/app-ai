@@ -16,6 +16,7 @@ For each file in the list:
 
 1. Outdated (a project that is done, an event that has passed, a resolved to-do): move its lasting lines into the person, organisation, project or area file they belong to, then delete it; the note of a done or dropped project is not deleted but moved to `Archive/Projects/` with `git mv`, as it is. You may write those lines into any file in `Core/`, inside or outside this part's list. Deleting or archiving a note and moving its content happen in this same part, never split across two.
 2. Still current: check its form and cut what "What a Core file is for" says to cut (interpretation, appended update blocks, cross-references that describe contents). Edit in place.
+   A project or area note also gets the shape and the word limit of "The shape of a project or area note" in `Claude/Instructions.md`.
 3. When you delete or rename a note, fix the index lines and wikilinks that point to it (`People Index`, `Organizations Index`, `Projects Index`, `Learnings Index`) in this part too, so the vault is consistent after every part.
 
 ## What this run does not decide
