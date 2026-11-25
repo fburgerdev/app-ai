@@ -37,6 +37,8 @@ It is a personal tool, built for one person's way of working (Getting Things Don
 
 There is more, all of it in the [manual](docs/manual.md):
 
+- **Search and commands.** Ctrl+K finds any thread by its name or by something said in it, or runs a command.
+- **Arranged by you.** The order of the buttons, your own reply buttons, the keys with Alt, the accent colour and the text size.
 - **Repos.** Any thread can work in a GitHub repo. It gets a branch of its own, and the app runs the tests and merges into main when the turn ends.
 - **Events.** Calendar entries worth preparing get a briefing thread the day before.
 - **Usage limits.** A turn that hits Claude's limit is held and carries on by itself when the limit lifts.
