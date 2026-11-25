@@ -39,7 +39,7 @@ Most chats hold little that is durable. A thread with nothing to file is a norma
 
 ## Notes for Claude
 
-If `Notes for Claude.md` is there, it holds lines Florian wrote for you: half-sentences, updated facts, nudges about how you work. They are his own words. File them the way the vault describes for `For Claude/Inbox.md`. A line you cannot place goes under Questions.
+If `Notes for Claude.md` is there, it holds lines Florian wrote for you: half-sentences, updated facts, nudges about how you work. They are his own words. File them like anything else he states: a fact into the `Core/` note it concerns, a rule about how you work into the `Claude/` file it concerns, both under `Claude/Instructions.md`. A line you cannot place goes under Questions.
 
 ## Mail
 
@@ -51,7 +51,7 @@ If `Mail.md` is there, it holds the mail that arrived and went out since the las
 
 ## Cards
 
-If `Cards.md` is there, it lists the opportunity and chase cards Florian accepted or declined since the last update, with the text as proposed and as he sent it. Where he wrote something about a card, those are his own words: a reason is a stated rule about that kind of item, to be logged with the outcome as the vault describes. A correction ("this is outdated, we already met") is a fact: fix it in the `Core/` note it concerns, as "Florian said DD-MM-YYYY that …". An accepted opportunity or chase card is a message he sent: record it where the vault says sent messages go, with the Waiting For row for the reply, and for a chase card move the row's chase date on by a week. A proposal card is different: it is work Claude offered to do. An accepted one became a thread, which is filed as a thread; for the card itself only the outcome is logged. Log every card's outcome the way `Claude/Learning From Feedback.md` describes for opportunities.
+If `Cards.md` is there, it lists the opportunity and chase cards Florian accepted or declined since the last update, with the text as proposed and as he sent it. Where he wrote something about a card, those are his own words: a reason is a stated rule about that kind of item, to be logged with the outcome as the vault describes. A correction ("this is outdated, we already met") is a fact: fix it in the `Core/` note it concerns, as "Florian said DD-MM-YYYY that …". An accepted opportunity or chase card is a message he sent: record it where the vault says sent messages go, with the Waiting For row for the reply, and for a chase card set the row's chase date to ten days after the day he sent it (Florian, 12-11-2026: ten days, not seven). A proposal card is different: it is work Claude offered to do. An accepted one became a thread, which is filed as a thread; for the card itself only the outcome is logged. Log every card's outcome the way `Claude/Learning From Feedback.md` describes for opportunities.
 
 ## Next actions: woken and deferred
 
