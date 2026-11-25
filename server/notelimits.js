@@ -23,8 +23,10 @@ export function overLimit(vaultDir, paths) {
     if (!limit) continue;
     let text = '';
     try { text = fs.readFileSync(path.join(vaultDir, rel), 'utf8'); } catch { continue; } // deleted or moved
+    // A note can carry its own limit in a field line ("word limit: 2500").
+    const own = Number(/^word limit:\s*(\d+)\s*$/m.exec(text)?.[1]) || limit;
     const words = countWords(text);
-    if (words > limit) out.push({ path: rel, words, limit });
+    if (words > own) out.push({ path: rel, words, limit: own });
   }
   return out;
 }

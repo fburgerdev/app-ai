@@ -17,6 +17,9 @@ test('project and area notes have a word limit, nothing else has', () => {
   fs.mkdirSync(path.join(dir, 'Core', 'Projects'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'Core/Projects/Long.md'), 'word '.repeat(1201));
   fs.writeFileSync(path.join(dir, 'Core/Projects/Fits.md'), 'word '.repeat(1200));
+  fs.writeFileSync(path.join(dir, 'Core/Projects/Own.md'), `word limit: 2500
+${'word '.repeat(2000)}`);
+  assert.deepEqual(overLimit(dir, ['Core/Projects/Own.md']), []);
   assert.deepEqual(
     overLimit(dir, ['Core/Projects/Long.md', 'Core/Projects/Fits.md', 'Core/Projects/Gone.md']),
     [{ path: 'Core/Projects/Long.md', words: 1201, limit: 1200 }],
