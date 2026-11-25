@@ -441,12 +441,16 @@ export function startExtraction({ only = '', threadId = '' } = {}) {
       return { id, startedAt: pressedAt, finishedAt: Date.now(), status: 'failed', error: err.message, threads: current.threads, mailOnly };
     })
     .then(async (record) => {
-      if (record.status === 'failed' || record.status === 'held') await brain.discardChanges();
-      const runDir = path.join(EXTRACTIONS_DIR, id);
-      fs.mkdirSync(runDir, { recursive: true });
+      // Whatever fails while tidying up, the update must not stay "running" for good: that
+      // would keep the app from updating and handing over.
       const { sessionId, ...kept } = record;
-      fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ ...kept, threadId: ownThread }, null, 2));
       const parts = current?.parts || [];
+      try {
+        if (record.status === 'failed' || record.status === 'held') await brain.discardChanges();
+        const runDir = path.join(EXTRACTIONS_DIR, id);
+        fs.mkdirSync(runDir, { recursive: true });
+        fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ ...kept, threadId: ownThread }, null, 2));
+      } catch (err) { log(`brain update: tidying up after it failed: ${err.stack || err.message}`); }
       current = null;
       try { finishThread(ownThread, { ...record, sessionId: config.fake ? null : sessionId }, parts); } catch (err) { log(`brain update: its thread could not be finished: ${err.stack || err.message}`); }
       store.events.emit('brain', extractionStatus());

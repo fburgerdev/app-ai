@@ -54,6 +54,7 @@ export const IGNORE = [
 let config;
 let timer = null;
 let netSince = 0;
+let raced = 0; // saves in a row that lost the push to the other computer
 let stalled = 0; // saves in a row in which a git step was stopped by its timeout
 let chain = Promise.resolve(); // one git operation on the data folder at a time
 const reloaders = []; // what reads its data from disk again after a merge
@@ -351,6 +352,7 @@ export function saveNow(reason = 'state') {
       }
       netSince = 0;
       stalled = 0;
+      raced = 0;
       if (status.error) { status.error = ''; events.emit('connections-changed'); }
     } catch (err) {
       if (isNetworkError(err.message)) {
@@ -362,6 +364,9 @@ export function saveNow(reason = 'state') {
       // A step stopped by its timeout (the laptop slept in the middle of it) is not a
       // failure yet: the next save does it again. Only said when it happens twice in a row.
       if (err.timedOut && (stalled += 1) < 2) { log(`app data: ${err.message}; the next save tries again`); return dataSyncStatus(); }
+      // The other computer pushed in between, several times in a row: nothing is lost, the
+      // next save takes its commits in and pushes again. Only said when it keeps happening.
+      if (/remote counterpart|fetch first|non-fast-forward|cannot lock ref|failed to push some refs/i.test(err.message) && (raced += 1) < 5) { log(`app data: the other computer pushed first (${raced}); the next save tries again`); return dataSyncStatus(); }
       const message = `The app's state could not be saved to GitHub: ${err.message}`;
       if (status.error !== message) { status.error = message; log(message); events.emit('connections-changed'); report('saving the app\'s state', err.message); }
     }

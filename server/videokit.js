@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { DATA_DIR, log } from './config.js';
 import { git } from './git.js';
 import * as repos from './repos.js';
+import { isAway } from './repair.js';
 
 const KIT = 'app-ytvideo-kit';
 export const isVideoRepo = (full) => /^[\w.-]+\/ytvideo-[\w.-]+$/i.test(String(full || ''));
@@ -46,7 +47,8 @@ export function initVideoKit(cfg) {
   // A little after the start, so cloning does not slow the app's own start down.
   setTimeout(() => { start().catch((err) => log(`video kit: could not start: ${err.message}`)); }, 3000).unref?.();
   setInterval(() => { syncVideoRepos().catch((err) => log(`video kit: syncing the video repos failed: ${err.message}`)); }, 10 * 60_000).unref?.();
-  setInterval(() => { updateKit().catch((err) => log(`video kit: could not look for a new version: ${err.message}`)); }, CHECK_MS).unref?.();
+  // Away from the network there is nothing to look for, and nothing to say about it.
+  setInterval(() => { updateKit().catch((err) => { if (!isAway(err)) log(`video kit: could not look for a new version: ${err.message}`); }); }, CHECK_MS).unref?.();
   process.on('exit', () => { stopped = true; child?.kill(); });
 }
 
