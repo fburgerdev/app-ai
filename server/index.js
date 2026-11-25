@@ -665,6 +665,11 @@ app.post('/api/threads/:id/again', (req, res) => {
   if (!thread) return;
   try { res.json(runner.againHigher(thread.id)); } catch (err) { res.status(409).json({ error: err.message }); }
 });
+app.post('/api/threads/:id/retry', (req, res) => {
+  const thread = need(req, res);
+  if (!thread) return;
+  try { res.json(runner.tryAgain(thread.id)); } catch (err) { res.status(409).json({ error: err.message }); }
+});
 // Next Actions, as sleeping threads; waking one makes it a thread in the inbox.
 app.get('/api/next-actions', (req, res) => res.json(nextActions.list()));
 // An event that has not opened yet, opened now because he wants to prepare already.

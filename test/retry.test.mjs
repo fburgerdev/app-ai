@@ -161,6 +161,20 @@ test('a turn that keeps failing without getting anything done stops by itself an
   await until(async () => { const x = await thread(id); return x.thread.state === 'ready' && answers(x).length === 8 ? x : null; }, 'four more turns');
 });
 
+test('"Try again" runs a thread that stopped with an error once more, without a message from him', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Sign me in FAIL-TEST' })).data.thread.id;
+  const t = await until(async () => { const x = await thread(id); return x.thread.state === 'ready' && x.thread.error ? x : null; }, 'stopped with an error');
+  assert.equal(answers(t).length, 1, 'being signed out is not tried again by the app itself');
+  const out = await call('POST', `/api/threads/${id}/retry`, {});
+  assert.equal(out.data.thread.state, 'working');
+  const again = await until(async () => { const x = await thread(id); return x.thread.state === 'ready' && answers(x).length === 2 ? x : null; }, 'ran once more');
+  assert.match(notes(again), /Florian pressed "Try again" after the error/);
+  // A thread without an error has nothing to try again.
+  const fine = (await call('POST', '/api/threads', { text: 'A plain question' })).data.thread.id;
+  await settled(fine, 1);
+  assert.equal((await call('POST', `/api/threads/${fine}/retry`, {})).status, 409);
+});
+
 test('when Claude calls continue_later the app carries on by itself, and a message of his starts at once', async () => {
   const id = (await call('POST', '/api/threads', { text: 'Render v14 CONTINUE-TEST' })).data.thread.id;
   const t = await settled(id, 2);

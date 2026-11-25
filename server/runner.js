@@ -1484,6 +1484,24 @@ export async function tierFor(threadId, prompt) {
 }
 
 // The same message again, one tier higher, pinned on the thread from now on.
+// "Try again", his click on a thread that stopped with an error: the same work once more,
+// from where it stopped. Until 25-11-2026 the only way was to type a message for it.
+export function tryAgain(threadId) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('No such thread');
+  if (thread.state === 'working') throw new Error('Claude is already working on this thread.');
+  if (!thread.error) throw new Error('This thread did not stop with an error.');
+  const last = [...store.readMessages(threadId)].reverse().find((m) => m.role === 'user' && !m.event && !m.auto);
+  const about = thread.turnPrompt || (last ? promptFor(threadId, messageText(last), last.files || []) : '');
+  if (!about) throw new Error('There is nothing to try again here.');
+  const prompt = `[The app: the last turn ended on an error ("${String(thread.error).split('\n')[0].slice(0, 300)}"). Florian pressed "Try again" at ${dateTimeDMY(Date.now())}; he has not written anything new. Carry on where you stopped and finish the work. Do not start over: look first at what is already there (what you wrote above, the files in the artifacts folder, commits on the thread's branch), and open the repo again if you were working in one. The message the turn was about:]\n\n${about}`;
+  store.appendMessage(threadId, { role: 'user', event: true, text: `[Florian pressed "Try again" after the error, ${dateTimeDMY(Date.now())}.]` });
+  // His click counts like a message of his: the app's own tries start from nothing again.
+  store.updateThread(threadId, { auto: null, state: thread.state === 'done' ? 'ready' : thread.state }, { quiet: true });
+  startTurn(threadId, prompt);
+  return { thread: store.getThread(threadId) };
+}
+
 export function againHigher(threadId) {
   const thread = store.getThread(threadId);
   if (!thread) throw new Error('No such thread');

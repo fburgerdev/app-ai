@@ -2113,3 +2113,11 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 .palette-dot.is-command { border-radius: 2px; background: none; border: 1.5px solid var(--faint); }
 .palette-foot { margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; display: flex; gap: 6px; align-items: center; }
 @media (max-width: 700px) { .palette { margin-top: 2vh; max-height: 70dvh; } .palette-foot { display: none; } }
+
+/* Copy a reply: quiet until the pointer is on the reply; always there on a touch screen. */
+.msg-copy { border: 0; background: none; color: var(--faint); font: inherit; padding: 0 10px 0 0; cursor: pointer; opacity: 0; transition: opacity 120ms; }
+.msg-claude:hover .msg-copy, .msg-copy:focus-visible { opacity: 1; }
+.msg-copy:hover { color: var(--text); }
+@media (hover: none) { .msg-copy { opacity: 0.8; } }
+.btn-retry { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+.btn-retry:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }

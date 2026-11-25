@@ -133,7 +133,7 @@ const ROWS = {
     ['spin', 'Spin-off', '#spin'], ['defer', 'Defer', '#defer'], ['agree', 'Agree', '#agree'], ['done-btn', 'Done', '#send-done'], ['send', 'Send', '#send']] },
   // Built anew with every thread (renderHead), which sorts by this.
   head: { label: 'Thread header', items: [
-    ['repo', 'Repo'], ['files', 'Files'], ['notes', 'Notes'], ['stop', 'Stop'], ['tier-again', 'Tier'], ['requeue', 'Requeue'],
+    ['repo', 'Repo'], ['files', 'Files'], ['notes', 'Notes'], ['stop', 'Stop'], ['retry', 'Try again'], ['tier-again', 'Tier'], ['requeue', 'Requeue'],
     ['reopen', 'Reopen'], ['pin', 'Pin'], ['later', 'Later'], ['delete', 'Delete']] },
 };
 // His order for a row: what he saved, with any button he has not placed (a new one) put
@@ -1665,7 +1665,13 @@ function messageEl(threadId, m) {
   const el = h('article', { class: 'msg msg-claude', dataset: { mid: m.id || '' } }, body);
   markLines(el);
   const tier = tierText(m.tier || (isLastAnswer(threadId, m) ? S.threads.get(threadId)?.lastTier : ''));
-  if (m.ts || tier) el.append(h('p', { class: 'msg-time msg-tier', title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier));
+  // The reply as Claude wrote it (Markdown), for pasting somewhere else.
+  const written = (m.parts || []).filter((p) => p.type === 'text' && p.text.trim()).map((p) => p.text.trim()).join('\n\n');
+  const copy = written ? h('button', { class: 'msg-copy', type: 'button', title: 'Copy this reply as text', onclick: async (e) => {
+    const button = e.currentTarget;
+    try { await copyFilled(written); button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy'; }, 1600); } catch { toast('The browser did not allow copying.'); }
+  } }, 'Copy') : null;
+  if (m.ts || tier || copy) el.append(h('p', { class: 'msg-time msg-tier' }, copy, h('span', { title: tier ? 'The effort this answer ran on' : '' }, m.ts ? stamp(m.ts) : '', m.ts && tier ? ' · ' : '', tier)));
   if (m.stopped) el.append(h('p', { class: 'msg-note' }, 'You stopped Claude here.'));
   if (m.limit) el.append(h('p', { class: 'msg-note' }, `Claude's ${LIMIT_NAMES[m.limit.type] || 'usage limit'} cut the turn off here. The app carries on by itself when it lifts.`));
   // An error the app tried again after by itself is a note, not an alarm: the work went on below.
@@ -1841,6 +1847,16 @@ function renderHead() {
     status = h('span', { class: 'status status-ready' }, `${eventPhase(t.event)} · ${eventWhen(t.event)}${t.event.where ? ` · ${t.event.where}` : ''}`);
   } else if (t.state === 'ready') {
     status = h('span', { class: 'status status-ready' }, 'Waiting for you');
+    // Stopped with an error: one click runs it once more, from where it stopped.
+    if (t.error) {
+      actions.push('retry', h('button', {
+        class: 'btn btn-retry', type: 'button', title: `The last turn ended on an error: ${t.error}\nTry again: Claude carries on where it stopped. You can also just write.`,
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try { S.threads.set(t.id, (await api('POST', `/api/threads/${t.id}/retry`, {})).thread); renderHead(); renderRail(); } catch (err) { toast(err.message); renderHead(); }
+        },
+      }, 'Try again'));
+    }
     // What the last turn was worth, and the way to say "that deserved more".
     if (t.lastTier && t.kind !== 'card') {
       const label = S.settings.tiers?.[t.lastTier]?.label || t.lastTier;
