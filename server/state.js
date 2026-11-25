@@ -27,6 +27,7 @@ const DEFAULTS = {
   model: 'opus',
   effort: 'high',
   tier: 'auto', // auto: a cheap model picks per message | ask: choose on sending (quick select)
+  askDefault: 'default', // the tier quick select starts on
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
@@ -96,6 +97,7 @@ function load() {
   if (!EFFORTS.includes(state.effort)) state.effort = DEFAULTS.effort;
   // Until 13-11-2026 a fixed tier could be set here too. Such a state reads as Auto now.
   if (state.tier !== 'ask') state.tier = 'auto';
+  if (!TIER_NAMES.includes(state.askDefault)) state.askDefault = DEFAULTS.askDefault;
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   state.focus = { ...DEFAULTS.focus, ...(state.focus || {}) };
   state.hidden = Array.isArray(state.hidden) ? state.hidden.filter((k) => PART.test(k)) : [];
@@ -157,6 +159,7 @@ export function setState(patch) {
   if (MODELS.includes(patch.model)) next.model = patch.model;
   if (EFFORTS.includes(patch.effort)) next.effort = patch.effort;
   if (patch.tier === 'auto' || patch.tier === 'ask') next.tier = patch.tier;
+  if (TIER_NAMES.includes(patch.askDefault)) next.askDefault = patch.askDefault;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   // A brain update held by the usage limit: { until, type, only } (extract.js), or null.

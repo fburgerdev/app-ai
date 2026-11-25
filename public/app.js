@@ -2002,13 +2002,17 @@ function updateButton() {
 
 // Quick select: a row of choices over the reply box. 1 to 9 or a click picks one; the
 // arrow keys move the highlight, and Enter, or Send once more, takes the highlighted one.
-// Each row starts on its default, so every message starts from Default again. Escape goes
+// Each row starts on its default; for the tiers he picks it in Settings → General. Escape goes
 // back to writing. Nothing is sent until one is picked.
 //
 // Two rows use it. "How much?", the five tiers, where a message starts new work (Send,
 // Start, a spin-off, a "Next"); never for "Done", which Claude does not answer, nor for a
 // message added into the running turn. And "When?", while Claude works: "Add now"
 // (Claude reads it at its next step) or "Next" (runs after the turn, with its own tier).
+const askDefault = () => {
+  const names = S.settings.tierNames || [];
+  return [S.settings.askDefault, 'default'].find((n) => names.includes(n)) || names[Math.floor(names.length / 2)];
+};
 const asksTier = () => S.settings.tier === 'ask';
 function askChoice({ label, aria, items, def, go }) {
   closeTierAsk();
@@ -2042,7 +2046,7 @@ function askTier(go) {
   askChoice({
     label: 'How much?', aria: 'How much is this worth?',
     items: names.map((n) => ({ key: n, label: S.settings.tiers?.[n]?.label || n, about: S.settings.tiers?.[n]?.about || '' })),
-    def: names.includes('default') ? 'default' : names[Math.floor(names.length / 2)],
+    def: askDefault(),
     go,
   });
 }
@@ -3074,9 +3078,9 @@ function openSettings(tab = S.settingsTab) {
   return fillConnections(els.settingsBody, token);
 }
 
-// General: how the app looks on this device, and when it sends you to sleep.
+// General: how the app looks on this device, what quick select starts on, and when it sends you to sleep.
 function fillGeneral(body) {
-  body.append(...lookFields(), ...sleepFields());
+  body.append(...lookFields(), ...tierFields(), ...sleepFields());
 }
 
 for (const b of els.settings.querySelectorAll('.window-tab')) b.addEventListener('click', () => openSettings(b.dataset.tab));
@@ -3395,6 +3399,16 @@ function lookFields() {
   ];
 }
 
+// Florian, 25-11-2026: so that Low can be the default when he runs low on tokens.
+function tierFields() {
+  return [
+    h('h3', { class: 'window-head' }, 'Quick select'),
+    h('p', { class: 'panel-note' }, 'What Enter takes when sending asks "How much?". Pick a cheaper one when you run low on tokens. Auto is not affected.'),
+    h('div', { class: 'sleep-fields ask-default' }, (S.settings.tierNames || []).map((n) => h('label', { class: 'check', title: S.settings.tiers?.[n]?.about || '' },
+      h('input', { type: 'radio', name: 'ask-default', value: n, checked: askDefault() === n, onchange: () => { closeTierAsk(); saveSetting({ askDefault: n }); } }), ` ${S.settings.tiers?.[n]?.label || n}`))),
+  ];
+}
+
 function sleepFields() {
   const sl = S.settings.sleep || { on: true, from: '00:00', to: '08:00' };
   const save = (patch) => {
@@ -3663,7 +3677,7 @@ function paletteCommands() {
     { title: 'Catch-up or Focus', run: () => $('focus-toggle').click() },
     { title: 'Show or hide the inbox', hint: keyHint('inbox'), run: () => setRail(!els.app.classList.contains('rail-open')) },
     { title: 'Layout: pick on the page what to hide', run: () => startArranging() },
-    settingsTab('general', 'General (look, sleep time)'), settingsTab('layout', 'Layout (what shows, button order, your own buttons)'), settingsTab('keys', 'Shortcuts'),
+    settingsTab('general', 'General (look, quick select default, sleep time)'), settingsTab('layout', 'Layout (what shows, button order, your own buttons)'), settingsTab('keys', 'Shortcuts'),
     settingsTab('queue', 'Queue'), settingsTab('connections', 'Connections'), settingsTab('stats', 'Stats'), settingsTab('system', 'System'),
     { title: 'Talk to the host', run: () => { location.href = '/walk'; } },
   ].filter(Boolean);
@@ -4285,7 +4299,7 @@ function renderSettings() {
     value: kept ? 'kept' : mode,
     name: (n) => (n === 'auto' ? 'Auto' : n === 'ask' ? 'Quick select' : `${s.tiers?.[kept]?.label || kept}, kept`),
     describe: (n) => (n === 'auto' ? 'Picked per message by a cheap model, so you never have to choose.'
-      : 'Send asks first: five buttons over the box, 1 to 5, or Enter for Default (3).'),
+      : `Send asks first: five buttons over the box, 1 to 5, or Enter for ${s.tiers?.[askDefault()]?.label || 'Default'}. Settings → General changes that one.`),
     onPick: (n) => {
       closeTierAsk();
       if (kept) {
