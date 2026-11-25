@@ -287,10 +287,43 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-// The mood line, the model, the effort, the sleep time and the parts of the page switched
-// off. Saved as you change them; nothing is sent.
+// Search (Ctrl K on the page): every thread whose conversation holds all the words, the
+// most recent first, each with the place where they stand. Titles are matched on the page,
+// which has them already; this reads the conversations themselves, done and archived
+// threads included.
+const searchTexts = new Map(); // thread id -> { at, texts, whole }
+app.get('/api/search', (req, res) => {
+  const words = String(req.query.q || '').toLowerCase().split(/\s+/).filter((w) => w.length > 1).slice(0, 6);
+  if (!words.length) return res.json({ hits: [] });
+  const hits = [];
+  const threads = store.listThreads().filter((t) => t.kind !== 'card').sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const t of threads) {
+    // A conversation is read once and kept until it changes: every key he types searches again.
+    let kept = searchTexts.get(t.id);
+    if (!kept || kept.at !== t.updatedAt) {
+      let messages;
+      try { messages = store.readMessages(t.id); } catch { continue; }
+      const texts = messages.filter((m) => !m.event).map((m) => ({ who: m.role === 'user' ? (m.auto ? 'app' : 'you') : 'claude', ts: m.ts || 0, text: m.role === 'user' ? String(m.text || '') : (m.parts || []).filter((p) => p.type === 'text').map((p) => p.text).join('\n') }));
+      kept = { at: t.updatedAt, texts, whole: texts.map((x) => x.text).join('\n').toLowerCase() };
+      searchTexts.set(t.id, kept);
+    }
+    const { texts, whole } = kept;
+    if (!words.every((w) => whole.includes(w))) continue;
+    // The place shown: the latest message that holds the first word.
+    const at = texts.filter((x) => x.text.toLowerCase().includes(words[0])).at(-1);
+    const i = at.text.toLowerCase().indexOf(words[0]);
+    const from = Math.max(0, i - 60);
+    const snippet = `${from ? '…' : ''}${at.text.slice(from, i + 110).replace(/\s+/g, ' ').trim()}${i + 110 < at.text.length ? '…' : ''}`;
+    hits.push({ id: t.id, who: at.who, ts: at.ts, snippet });
+    if (hits.length >= 40) break;
+  }
+  res.json({ hits });
+});
+
+// The mood line, the model, the effort, the sleep time, the parts of the page switched off
+// and how he arranged the rest (button order, keys, his own reply buttons, the look). Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, tier, sleep, hidden } = req.body || {};
+  const { mood, model, effort, tier, sleep, hidden, order, keys, replies, look } = req.body || {};
   let { focus } = req.body || {};
   // Focus on one project: an area brings its projects with it. The names are taken from
   // the Projects Index here, so the page cannot widen the focus to anything else.
@@ -303,7 +336,7 @@ app.put('/api/settings', (req, res) => {
     } catch { /* the project alone */ }
     focus = { scope: 'project', project: name, members, until: Number(focus.until) || 0 };
   }
-  res.json(setState({ mood, model, effort, tier, sleep, focus, hidden }));
+  res.json(setState({ mood, model, effort, tier, sleep, focus, hidden, order, keys, replies, look }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.

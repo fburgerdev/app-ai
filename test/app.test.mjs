@@ -116,6 +116,39 @@ test('parts of the page switched off in Layout are kept, cleaned of anything odd
   assert.deepEqual((await call('PUT', '/api/settings', { hidden: [] })).data.hidden, [], 'everything shown again');
 });
 
+test('how he arranged the page is kept: button order, keys, his own reply buttons, the look', async () => {
+  const s = (await state()).settings;
+  assert.deepEqual([s.order, s.keys, s.replies, s.look], [{}, {}, [], { accent: '', size: '' }], 'nothing arranged at first');
+  const out = (await call('PUT', '/api/settings', {
+    order: { composer: ['send', 'done-btn', 'send', 'Not A Key'], 'Bad Group': ['x'], head: [] },
+    keys: { requeue: 'KeyR', done: 'KeyR', inbox: 'F5', 'Bad Action': 'KeyQ' },
+    replies: [{ label: 'Build', text: 'Build it.' }, { text: 'Shorter, please.' }, { label: 'empty' , text: '' }, { label: '', text: '' }, 7],
+    look: { accent: 'rose', size: 'huge' },
+  })).data;
+  assert.deepEqual(out.order, { composer: ['send', 'done-btn'] }, 'duplicates, odd keys, odd and empty groups dropped');
+  assert.deepEqual(out.keys, { requeue: 'KeyR' }, 'one action per key, real keys only');
+  assert.deepEqual(out.replies, [{ label: 'Build', text: 'Build it.' }, { label: 'Shorter, please.', text: 'Shorter, please.' }, { label: 'empty', text: 'empty' }]);
+  assert.deepEqual(out.look, { accent: 'rose', size: '' }, 'an unknown size is ignored');
+  assert.deepEqual((await call('PUT', '/api/settings', { look: { size: 'large' } })).data.look, { accent: 'rose', size: 'large' }, 'one part of the look leaves the other');
+  const kept = (await call('PUT', '/api/settings', { mood: '' })).data;
+  assert.deepEqual([kept.order, kept.keys, kept.replies.length], [{ composer: ['send', 'done-btn'] }, { requeue: 'KeyR' }, 3], 'another setting leaves them alone');
+  const back = (await call('PUT', '/api/settings', { order: {}, keys: {}, replies: [], look: { accent: '', size: '' } })).data;
+  assert.deepEqual([back.order, back.keys, back.replies, back.look], [{}, {}, [], { accent: '', size: '' }], 'all back to the app\'s own');
+});
+
+test('search finds a thread by what was said in it, with the place', async () => {
+  const id = (await call('POST', '/api/threads', { text: 'Where is the zebrafinch protocol from the spring meeting?' })).data.thread.id;
+  await until(async () => (await call('GET', `/api/threads/${id}`)).data.thread.state === 'ready', 'answered');
+  const { hits } = (await call('GET', '/api/search?q=ZEBRAFINCH%20protocol')).data;
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].id, id);
+  assert.match(hits[0].snippet, /zebrafinch protocol/);
+  assert.equal(hits[0].who, 'you');
+  assert.deepEqual((await call('GET', '/api/search?q=zebrafinch%20nowhere-said')).data.hits, [], 'every word has to be there');
+  assert.deepEqual((await call('GET', '/api/search?q=')).data.hits, []);
+  await call('POST', `/api/threads/${id}/state`, { state: 'done' });
+});
+
 test('a thread started from a project carries it; the tree shows it', async () => {
   planThread = (await call('POST', '/api/threads', { text: 'Where does the motion stand?', project: 'Motion' })).data.thread.id;
   mailThread = (await call('POST', '/api/threads', { text: 'Please draft a mail to the office' })).data.thread.id;

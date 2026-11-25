@@ -34,8 +34,51 @@ const DEFAULTS = {
   // or `project` (one project or area, `members` its names, until he ends it or `until`).
   focus: { on: false, until: 0, scope: 'deep', project: '', members: [] },
   hidden: [], // parts of the page he switched off in Settings → Layout (keys the page defines)
+  // How he arranged the page (Settings → Layout and Shortcuts). The page defines the keys;
+  // here they are only kept and cleaned.
+  order: {}, // a row of buttons -> its buttons' keys in his order ({ topbar: [...], composer: [...], head: [...] })
+  keys: {}, // an action -> the key it is on with Alt ({ requeue: 'KeyS' }); only what he changed
+  replies: [], // his own reply buttons: [{ label, text }], sent with one click
+  look: { accent: '', size: '' }, // the colour of "yours", and the size of the text in a thread
 };
 const PART = /^[a-z][a-z0-9-]{0,39}$/;
+const CODE = /^(Key[A-Z]|Digit[0-9]|Comma|Period|Slash|Semicolon|Quote|Minus|Equal|Backquote|BracketLeft|BracketRight|Backslash)$/;
+const ACCENTS = ['', 'orange', 'rose', 'lime'];
+const SIZES = ['', 'small', 'large', 'larger'];
+
+const keyList = (list) => (Array.isArray(list) ? [...new Set(list.filter((k) => typeof k === 'string' && PART.test(k)))].slice(0, 40) : []);
+function cleanOrder(order) {
+  const out = {};
+  if (!order || typeof order !== 'object' || Array.isArray(order)) return out;
+  for (const [group, list] of Object.entries(order).slice(0, 12)) {
+    const keys = keyList(list);
+    if (PART.test(group) && keys.length) out[group] = keys;
+  }
+  return out;
+}
+function cleanKeys(keys) {
+  const out = {};
+  if (!keys || typeof keys !== 'object' || Array.isArray(keys)) return out;
+  // One action per key: a key given twice stays with the first action that has it.
+  const taken = new Set();
+  for (const [action, code] of Object.entries(keys).slice(0, 40)) {
+    if (!PART.test(action) || typeof code !== 'string' || !CODE.test(code) || taken.has(code)) continue;
+    taken.add(code);
+    out[action] = code;
+  }
+  return out;
+}
+function cleanReplies(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((r) => ({ label: String(r?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 24), text: String(r?.text ?? '').trim().slice(0, 600) }))
+    .map((r) => ({ label: r.label || r.text.slice(0, 24), text: r.text || r.label }))
+    .filter((r) => r.text)
+    .slice(0, 8);
+}
+const cleanLook = (look, base = DEFAULTS.look) => ({
+  accent: ACCENTS.includes(look?.accent) ? look.accent : base.accent,
+  size: SIZES.includes(look?.size) ? look.size : base.size,
+});
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 let state = null;
@@ -56,6 +99,10 @@ function load() {
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   state.focus = { ...DEFAULTS.focus, ...(state.focus || {}) };
   state.hidden = Array.isArray(state.hidden) ? state.hidden.filter((k) => PART.test(k)) : [];
+  state.order = cleanOrder(state.order);
+  state.keys = cleanKeys(state.keys);
+  state.replies = cleanReplies(state.replies);
+  state.look = cleanLook(state.look);
   return state;
 }
 
@@ -116,6 +163,10 @@ export function setState(patch) {
   // `gate` when it waits for the lock instead (gate.js): 'update' or 'handover'.
   if ('brainHeld' in patch) next.brainHeld = Number.isFinite(patch.brainHeld?.until) ? { until: patch.brainHeld.until, type: String(patch.brainHeld.type || ''), only: patch.brainHeld.only === 'mail' ? 'mail' : '', ...(['update', 'handover'].includes(patch.brainHeld.gate) ? { gate: patch.brainHeld.gate } : {}) } : null;
   if (Array.isArray(patch.hidden)) next.hidden = [...new Set(patch.hidden.filter((k) => typeof k === 'string' && PART.test(k)))].slice(0, 100);
+  if (patch.order && typeof patch.order === 'object') next.order = cleanOrder(patch.order);
+  if (patch.keys && typeof patch.keys === 'object') next.keys = cleanKeys(patch.keys);
+  if (Array.isArray(patch.replies)) next.replies = cleanReplies(patch.replies);
+  if (patch.look && typeof patch.look === 'object') next.look = cleanLook(patch.look, next.look);
   if (patch.focus != null) { const f = focusFrom(patch.focus, next.sleep); if (f) next.focus = f; }
   if (patch.sleep && typeof patch.sleep === 'object') {
     const sl = { ...DEFAULTS.sleep, ...next.sleep };
