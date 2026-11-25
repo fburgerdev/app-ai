@@ -16,7 +16,7 @@ For each file in the list:
 
 1. Outdated (a project that is done, an event that has passed, a resolved to-do): move its lasting lines into the person, organisation, project or area file they belong to, then delete it; the note of a done or dropped project is not deleted but moved to `Archive/Projects/` with `git mv`, as it is. You may write those lines into any file in `Core/`, inside or outside this part's list. Deleting or archiving a note and moving its content happen in this same part, never split across two.
 2. Still current: check its form and cut what "What a Core file is for" says to cut (interpretation, appended update blocks, cross-references that describe contents). Edit in place.
-3. When you delete or rename a note, fix the index lines and wikilinks that point to it (`People Index`, `Organizations Index`, `Projects Index`, `Learnings Index`, `Campaigns Index`) in this part too, so the vault is consistent after every part.
+3. When you delete or rename a note, fix the index lines and wikilinks that point to it (`People Index`, `Organizations Index`, `Projects Index`, `Learnings Index`) in this part too, so the vault is consistent after every part.
 
 ## What this run does not decide
 
@@ -32,7 +32,7 @@ Florian chose (16-11-2026) that the questions a prune would ask him wait for the
 ## Tools
 
 - Delete a file with plain `rm "<path>"`, move one with `mv` or `git mv`. Do not use other git commands: the app commits and pushes.
-- Write only inside `Core/`, except moving a project note into `Archive/Projects/`. `Threads/` and everything already in `Archive/` are never touched, nor are `Scratchpad.md`, `.obsidian`, `For Claude` and `For Florian` are never touched.
+- Write only inside `Core/`, except moving a project note into `Archive/Projects/`. `Threads/` and everything already in `Archive/` are never touched.
 - If a tool is refused, do not try to work around it. Leave that file as it is and say what was refused under Questions.
 
 ## How to finish
