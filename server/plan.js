@@ -7,9 +7,18 @@
 // is older than five minutes, and shortly after each run ends. In between, a run's
 // rate_limit_event that carries a utilization updates its window straight away.
 // If the call breaks with an SDK update, the meter is simply not shown.
+//
+// Every reading is also written to plan.jsonl in the data folder (Florian's yes,
+// 27-11-2026), next to usage.jsonl's runs, so it can be worked out which work and which
+// time of day empties the five-hour window fastest. It travels with the data repo like
+// usage.jsonl, merged line by line, each line saying which computer read it.
 
+import fs from 'node:fs';
 import os from 'node:os';
-import { log } from './config.js';
+import path from 'node:path';
+import { DATA_DIR, log } from './config.js';
+
+const FILE = path.join(DATA_DIR, 'plan.jsonl');
 
 const STALE_MS = 5 * 60_000; // older than this, a look asks again
 const MIN_GAP_MS = 60_000; // never asked more often than this
@@ -64,7 +73,7 @@ export function refreshPlan({ fake = process.env.APP_AI_FAKE === '1' } = {}) {
   if (Date.now() - lastAsk < MIN_GAP_MS) return Promise.resolve(now);
   lastAsk = Date.now();
   asking = ask()
-    .then((u) => { now = shape(u); return now; })
+    .then((u) => { now = shape(u); keep(now, 'poll'); return now; })
     .catch((err) => { log(`plan usage: ${err.message}`); return now; })
     .finally(() => { asking = null; });
   return asking;
@@ -92,6 +101,29 @@ export function notePlanEvent(info) {
   const value = pct(u > 1 || Math.abs(u - before) < Math.abs(u * 100 - before) ? u : u * 100);
   const resetsAt = Number(info.resetsAt) ? (info.resetsAt < 1e11 ? info.resetsAt * 1000 : info.resetsAt) : 0;
   now = { ...now, [key]: { pct: value, resetsAt: resetsAt || now[key]?.resetsAt || 0 } };
+  keep(now, 'event', Date.now());
+}
+
+// One reading as a line of plan.jsonl: short keys, percentages and reset times only.
+export function lineOf(p, src, ts = p?.at || Date.now()) {
+  if (!p) return null;
+  const w = (x) => (x ? [x.pct, x.resetsAt || 0] : null);
+  const line = { ts, host: os.hostname(), src, h5: w(p.fiveHour), wk: w(p.week) };
+  for (const m of p.models || []) line[`wk_${m.name.toLowerCase()}`] = w(m);
+  return line;
+}
+
+function keep(p, src, ts) {
+  const line = lineOf(p, src, ts);
+  if (!line) return;
+  try { fs.appendFileSync(FILE, JSON.stringify(line) + '\n'); } catch { /* never in the way */ }
+}
+
+// Every reading from `since` on, for working it out later.
+export function readings(since = 0) {
+  let text = '';
+  try { text = fs.readFileSync(FILE, 'utf8'); } catch { return []; }
+  return text.split('\n').filter(Boolean).flatMap((l) => { try { const e = JSON.parse(l); return e.ts >= since ? [e] : []; } catch { return []; } });
 }
 
 // A run ended: ask again a little later, once, however many runs end at the same time.
