@@ -2046,6 +2046,10 @@ html.is-arranging .out-folded-list { max-height: 60vh; overflow: auto; }
 .reply-row input:focus { outline: none; border-color: var(--you); }
 .reply-label { flex: 0 1 11rem; }
 .reply-text { flex: 1 1 14rem; }
+.quick-fields { display: flex; flex-direction: column; gap: 10px; }
+.quick-fields .reply-row .select { margin: 0; flex: none; }
+.quick-fields .reply-row kbd { flex: none; min-width: 1.4em; text-align: center; color: var(--muted); }
+.quick-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .replies { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .replies[hidden] { display: none; }
 .btn-reply { flex: none; white-space: nowrap; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; }

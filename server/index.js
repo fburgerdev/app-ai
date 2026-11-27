@@ -38,7 +38,7 @@ import { planNow } from './plan.js';
 import { startSelfUpdate, updateStatus, checkNow, lockForUpdate, unlockUpdate, noteMerged, fakeAvailable } from './selfupdate.js';
 import * as gate from './gate.js';
 import { parseMail, closesOnSend } from './mail.js';
-import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIERS, TIER_NAMES } from './state.js';
+import { getState, setState, reloadState, readPad, writePad, MODELS, EFFORTS, TIER_NAMES, isTier } from './state.js';
 import * as drafts from './drafts.js';
 import * as secrets from './secrets.js';
 import { dateDMY, dateTimeDMY, readPrompt, todayLine } from './util.js';
@@ -282,7 +282,7 @@ app.get('/api/state', (req, res) => {
     brain: extraction.extractionStatus(),
     config: publicConfig(req),
     connections: connections(req),
-    settings: { ...getState(), models: MODELS, efforts: EFFORTS, tiers: TIERS, tierNames: TIER_NAMES },
+    settings: { ...getState(), models: MODELS, efforts: EFFORTS, tierNames: TIER_NAMES },
     queue: queue.queueStatus(),
     cards: cards.cardsStatus(),
   });
@@ -324,7 +324,7 @@ app.get('/api/search', (req, res) => {
 // The mood line, the model, the effort, the sleep time, the parts of the page switched off
 // and how he arranged the rest (button order, keys, his own reply buttons, the look). Saved as you change them; nothing is sent.
 app.put('/api/settings', (req, res) => {
-  const { mood, model, effort, tier, askDefault, sleep, hidden, order, keys, replies, look } = req.body || {};
+  const { mood, model, effort, tier, askDefault, quick, sleep, hidden, order, keys, replies, look } = req.body || {};
   let { focus } = req.body || {};
   // Focus on one project: an area brings its projects with it. The names are taken from
   // the Projects Index here, so the page cannot widen the focus to anything else.
@@ -337,7 +337,7 @@ app.put('/api/settings', (req, res) => {
     } catch { /* the project alone */ }
     focus = { scope: 'project', project: name, members, until: Number(focus.until) || 0 };
   }
-  res.json(setState({ mood, model, effort, tier, askDefault, sleep, focus, hidden, order, keys, replies, look }));
+  res.json(setState({ mood, model, effort, tier, askDefault, quick, sleep, focus, hidden, order, keys, replies, look }));
 });
 
 // Pads: the scratchpad, notes for Claude, and the queue's learned profile.
@@ -755,7 +755,7 @@ app.post('/api/threads/:id/tier', (req, res) => {
   const thread = need(req, res);
   if (!thread) return;
   const tier = String(req.body?.tier || '');
-  if (tier && !TIER_NAMES.includes(tier)) return res.status(400).json({ error: 'Unknown tier' });
+  if (tier && !isTier(tier)) return res.status(400).json({ error: 'Unknown tier' });
   res.json({ thread: store.updateThread(thread.id, { keepTier: tier }) });
 });
 app.post('/api/threads/:id/project', (req, res) => {

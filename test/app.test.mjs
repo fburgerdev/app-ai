@@ -112,6 +112,29 @@ test('the app starts on Auto, with the five tiers', async () => {
   await call('PUT', '/api/settings', { tier: 'auto', askDefault: 'default' });
 });
 
+test('his own quick select buttons: each on its model and effort, the five back when he removes them', async () => {
+  assert.deepEqual((await state()).settings.quickNames, ['cheap', 'low', 'default', 'high', 'extra'], 'the five while he has none');
+  const out = (await call('PUT', '/api/settings', { quick: [
+    { id: 'my-sonnet', label: '  Quick  Sonnet ', model: 'sonnet', effort: 'low' },
+    { id: 'my-deep', label: 'Deep', model: 'fable', effort: 'high' },
+    { id: 'my-deep', label: 'Twice', model: 'opus', effort: 'medium' },
+    { label: '', model: 'gpt', effort: 'enormous' },
+  ] })).data;
+  assert.deepEqual(out.quick.slice(0, 2), [
+    { id: 'my-sonnet', label: 'Quick Sonnet', model: 'sonnet', effort: 'low' },
+    { id: 'my-deep', label: 'Deep', model: 'fable', effort: 'high' },
+  ]);
+  assert.notEqual(out.quick[2].id, 'my-deep', 'an id given twice gets a new one');
+  assert.deepEqual([out.quick[3].model, out.quick[3].effort, out.quick[3].label], ['opus', 'high', 'Opus high'], 'odd values fall back');
+  assert.deepEqual(out.quickNames.slice(0, 2), ['my-sonnet', 'my-deep']);
+  assert.equal(out.tiers['my-sonnet'].model, 'sonnet');
+  assert.equal(out.tiers.cheap.label, 'Cheap', 'the five stay for Auto');
+  assert.equal((await call('PUT', '/api/settings', { askDefault: 'my-deep' })).data.askDefault, 'my-deep', 'one of his can be the default');
+  const back = (await call('PUT', '/api/settings', { quick: [], askDefault: 'default' })).data;
+  assert.deepEqual(back.quickNames, ['cheap', 'low', 'default', 'high', 'extra'], 'the five again');
+  assert.equal(back.tiers['my-sonnet'], undefined);
+});
+
 test('parts of the page switched off in Layout are kept, cleaned of anything odd', async () => {
   assert.deepEqual((await state()).settings.hidden, [], 'nothing hidden at first');
   const out = (await call('PUT', '/api/settings', { hidden: ['talk', 'tree-people', 'talk', 'Not A Key', 7, 'x'.repeat(60)] })).data;

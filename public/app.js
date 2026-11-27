@@ -1860,7 +1860,8 @@ function renderHead() {
     // What the last turn was worth, and the way to say "that deserved more".
     if (t.lastTier && t.kind !== 'card') {
       const label = S.settings.tiers?.[t.lastTier]?.label || t.lastTier;
-      const top = t.lastTier === (S.settings.tierNames || []).at(-1);
+      const own = S.settings.tiers?.[t.lastTier]?.own && (S.settings.quickNames || []).includes(t.lastTier);
+      const top = t.lastTier === ((own ? S.settings.quickNames : S.settings.tierNames) || []).at(-1);
       actions.push('tier-again', h('button', {
         class: 'btn btn-quiet btn-tier', type: 'button', disabled: top,
         title: top ? `This ran on ${label}, the highest tier.` : `This ran on ${label}${t.keepTier ? ' (kept for this thread)' : ' (picked for the message)'}. Run the same message again one tier up, and keep that tier for this thread.`,
@@ -2009,8 +2010,9 @@ function updateButton() {
 // Start, a spin-off, a "Next"); never for "Done", which Claude does not answer, nor for a
 // message added into the running turn. And "When?", while Claude works: "Add now"
 // (Claude reads it at its next step) or "Next" (runs after the turn, with its own tier).
+const quickList = () => (S.settings.quickNames?.length ? S.settings.quickNames : S.settings.tierNames || []);
 const askDefault = () => {
-  const names = S.settings.tierNames || [];
+  const names = quickList();
   return [S.settings.askDefault, 'default'].find((n) => names.includes(n)) || names[Math.floor(names.length / 2)];
 };
 const asksTier = () => S.settings.tier === 'ask';
@@ -2042,7 +2044,7 @@ function askChoice({ label, aria, items, def, go }) {
   els.input.focus();
 }
 function askTier(go) {
-  const names = S.settings.tierNames || [];
+  const names = quickList();
   askChoice({
     label: 'How much?', aria: 'How much is this worth?',
     items: names.map((n) => ({ key: n, label: S.settings.tiers?.[n]?.label || n, about: S.settings.tiers?.[n]?.about || '' })),
@@ -3400,13 +3402,72 @@ function lookFields() {
 }
 
 // Florian, 25-11-2026: so that Low can be the default when he runs low on tokens.
+// Florian, 27-11-2026: his own buttons, each on the model and effort he gives it.
+const MODEL_LABELS = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' };
 function tierFields() {
-  return [
-    h('h3', { class: 'window-head' }, 'Quick select'),
-    h('p', { class: 'panel-note' }, 'What Enter takes when sending asks "How much?". Pick a cheaper one when you run low on tokens. Auto is not affected.'),
-    h('div', { class: 'sleep-fields ask-default' }, (S.settings.tierNames || []).map((n) => h('label', { class: 'check', title: S.settings.tiers?.[n]?.about || '' },
-      h('input', { type: 'radio', name: 'ask-default', value: n, checked: askDefault() === n, onchange: () => { closeTierAsk(); saveSetting({ askDefault: n }); } }), ` ${S.settings.tiers?.[n]?.label || n}`))),
-  ];
+  const box = h('div', { class: 'quick-fields' });
+  const draw = () => {
+    const names = quickList();
+    const own = (S.settings.quick || []).length > 0;
+    box.replaceChildren(
+      h('p', { class: 'panel-note' }, 'What Enter takes when sending asks "How much?". Pick a cheaper one when you run low on tokens.'),
+      h('div', { class: 'sleep-fields ask-default' }, names.map((n) => h('label', { class: 'check', title: S.settings.tiers?.[n]?.about || '' },
+        h('input', { type: 'radio', name: 'ask-default', value: n, checked: askDefault() === n, onchange: () => { closeTierAsk(); saveSetting({ askDefault: n }); } }), ` ${S.settings.tiers?.[n]?.label || n}`))),
+      h('p', { class: 'panel-note' }, own
+        ? 'Your own buttons, in the order they stand over the box (1 to 9). Each runs on the model and effort you give it. Auto still picks from the five tiers.'
+        : 'Quick select shows the five tiers. Make your own buttons instead, each with its name, model and effort; Auto still picks from the five.'),
+      quickRows(own ? S.settings.quick : null),
+    );
+  };
+  // Saved at once; the app gives back the tiers with the new buttons in them.
+  const save = async (quick) => {
+    closeTierAsk();
+    S.settings = { ...S.settings, quick };
+    try { S.settings = { ...S.settings, ...(await api('PUT', '/api/settings', { quick })) }; } catch (err) { toast(err.message); }
+    draw();
+    renderSettings();
+  };
+  const newId = () => `my-${Math.random().toString(36).slice(2, 9)}`;
+  function quickRows(list) {
+    const rows = h('div', { class: 'reply-rows' });
+    const add = h('button', { class: 'btn btn-quiet', type: 'button' }, list ? 'Add a button' : 'Make my own buttons');
+    if (!list) {
+      // Start from the five, so he changes what is there instead of building from nothing.
+      add.addEventListener('click', () => save((S.settings.tierNames || []).map((n) => {
+        const t = S.settings.tiers[n];
+        return { id: newId(), label: t.label, model: t.model, effort: t.effort };
+      })));
+      return h('div', {}, add);
+    }
+    const collect = () => [...rows.children].map((r) => ({
+      id: r.dataset.id, label: r.querySelector('.reply-label').value.trim(),
+      model: r.querySelector('.quick-model').value, effort: r.querySelector('.quick-effort').value,
+    }));
+    const choice = (cls, aria, values, labels, now) => {
+      const sel = h('select', { class: `select ${cls}`, 'aria-label': aria, onchange: () => save(collect()) },
+        ...values.map((v) => h('option', { value: v }, labels[v] || v)));
+      sel.value = now;
+      return sel;
+    };
+    const row = (q, i) => {
+      const label = h('input', { class: 'reply-label', type: 'text', maxlength: '24', placeholder: 'On the button', 'aria-label': 'What the button says', onchange: () => save(collect()) });
+      label.value = q.label;
+      const move = (by) => { const all = collect(); const [it] = all.splice(i, 1); all.splice(i + by, 0, it); save(all); };
+      return h('div', { class: 'reply-row', dataset: { id: q.id } },
+        h('kbd', {}, String(i + 1)), label,
+        choice('quick-model', 'Model', S.settings.models || ['haiku', 'sonnet', 'opus', 'fable'], MODEL_LABELS, q.model),
+        choice('quick-effort', 'Effort', S.settings.efforts || ['low', 'medium', 'high'], {}, q.effort),
+        h('button', { class: 'btn btn-quiet btn-icon', type: 'button', 'aria-label': 'Move up', title: 'Move up', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+        h('button', { class: 'btn btn-quiet btn-icon', type: 'button', 'aria-label': 'Remove this button', title: 'Remove', onclick: () => save(collect().filter((_, k) => k !== i)) }, '×'));
+    };
+    rows.append(...list.map(row));
+    add.disabled = list.length >= 9;
+    add.addEventListener('click', () => save([...collect(), { id: newId(), label: '', model: 'opus', effort: 'medium' }]));
+    const reset = h('button', { class: 'btn btn-quiet', type: 'button', title: 'Remove your own buttons; quick select shows the five tiers again', onclick: () => save([]) }, 'Back to the five tiers');
+    return h('div', { class: 'reply-rows' }, rows, h('div', { class: 'quick-actions' }, add, reset));
+  }
+  draw();
+  return [h('h3', { class: 'window-head' }, 'Quick select'), box];
 }
 
 function sleepFields() {
@@ -4299,14 +4360,14 @@ function renderSettings() {
   if (els.tier.classList.contains('is-open')) return; // he is choosing: redrawing would close the menu
   const s = S.settings;
   const t = S.current ? S.threads.get(S.current) : null;
-  const kept = t?.keepTier && (s.tierNames || []).includes(t.keepTier) ? t.keepTier : '';
+  const kept = t?.keepTier && s.tiers?.[t.keepTier] ? t.keepTier : '';
   const mode = s.tier === 'ask' ? 'ask' : 'auto'; // an older state may still name a tier
   picker(els.tier, {
     options: ['auto', 'ask'],
     value: kept ? 'kept' : mode,
     name: (n) => (n === 'auto' ? 'Auto' : n === 'ask' ? 'Quick select' : `${s.tiers?.[kept]?.label || kept}, kept`),
     describe: (n) => (n === 'auto' ? 'Picked per message by a cheap model, so you never have to choose.'
-      : `Send asks first: five buttons over the box, 1 to 5, or Enter for ${s.tiers?.[askDefault()]?.label || 'Default'}. Settings → General changes that one.`),
+      : `Send asks first: ${quickList().length} buttons over the box, 1 to ${quickList().length}, or Enter for ${s.tiers?.[askDefault()]?.label || 'Default'}. Settings → General sets the buttons and that one.`),
     onPick: (n) => {
       closeTierAsk();
       if (kept) {
