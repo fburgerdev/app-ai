@@ -4067,41 +4067,48 @@ setInterval(() => { if (!document.hidden) checkUpdate(); }, 60_000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStatus(); });
 
-// ---------- usage: what Claude used through this app ----------
+// ---------- usage: how much of the plan's limits is used ----------
 //
-// From what the Agent SDK reports per run: tokens, and what the run would have cost on
-// the API. Not the plan's limit, which the SDK does not report.
+// The five-hour window and the week, as Claude Code's /usage shows them (server/plan.js).
+// It replaced the API-cost button, 27-11-2026. Not shown while the app does not know.
 
-let usageNow = null;
-const money = (n) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
-const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+let planUsage = null;
+const HOT = 80; // from here the meter turns orange
+function resetWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date().toDateString()) return hm;
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${hm}`;
+}
 
 function renderUsage() {
   const box = document.getElementById('usage');
-  if (!usageNow || box.classList.contains('is-open')) return;
-  const u = usageNow;
-  const button = h('button', { class: 'top-btn usage-btn', type: 'button', 'aria-haspopup': 'menu', title: 'What Claude used through this app today, at API prices. Click for more.' },
-    h('span', { class: 'top-label' }, money(u.today.cost)), h('span', { class: 'events-when' }, 'today'));
+  if (box.classList.contains('is-open')) return;
+  const p = planUsage;
+  if (!p || (!p.fiveHour && !p.week)) { box.replaceChildren(); return; }
+  const part = (label, w) => (w ? h('span', { class: `plan-part${w.pct >= HOT ? ' is-hot' : ''}` }, h('span', { class: 'events-when' }, label), ` ${w.pct}%`) : null);
+  const title = [p.fiveHour && `5 hours: ${p.fiveHour.pct}% used, resets ${resetWhen(p.fiveHour.resetsAt)}`, p.week && `Week: ${p.week.pct}% used, resets ${resetWhen(p.week.resetsAt)}`].filter(Boolean).join('\n');
+  const button = h('button', { class: 'top-btn usage-btn', type: 'button', 'aria-haspopup': 'menu', title },
+    part('5h', p.fiveHour), p.fiveHour && p.week ? h('span', { class: 'plan-sep' }, '·') : null, part('week', p.week));
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     if (box.classList.contains('is-open')) { closePickers(); return; }
     closePickers();
     box.classList.add('is-open');
-    const line = (label, x) => h('div', { class: 'usage-line' }, h('span', {}, label), h('span', { class: 'usage-num' }, `${money(x.cost)} · ${tokens(x.out)} out · ${plural(x.runs, 'run', 'runs')}`));
-    const max = Math.max(0.01, ...u.days.map((d) => d.cost));
+    const line = (label, w) => h('div', { class: 'plan-line' },
+      h('div', { class: 'usage-line' }, h('span', {}, label), h('span', { class: 'usage-num' }, `${w.pct}% · resets ${resetWhen(w.resetsAt)}`)),
+      h('div', { class: 'plan-track' }, h('span', { class: w.pct >= HOT ? 'is-hot' : '', style: `width:${Math.min(100, Math.max(0, w.pct))}%` })));
     box.append(h('div', { class: 'pick-menu usage-menu', role: 'menu' },
-      line('Last 5 hours', u.fiveHours), line('Today', u.today), line('7 days', u.week),
-      u.byKind.length ? h('p', { class: 'events-head' }, 'Today, by kind') : null,
-      ...u.byKind.map((k) => line(k.kind, k)),
-      h('p', { class: 'events-head' }, 'Per day'),
-      h('div', { class: 'usage-bars' }, ...u.days.map((d) => h('div', { class: 'usage-bar', title: `${new Date(d.day).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}: ${money(d.cost)}, ${plural(d.runs, 'run', 'runs')}` },
-        h('span', { style: `height:${Math.max(2, Math.round((d.cost / max) * 44))}px` }), h('small', {}, new Date(d.day).toLocaleDateString(undefined, { weekday: 'narrow' }))))),
-      h('p', { class: 'link-status' }, 'What this app used on both computers, counted at API prices. On your subscription nothing is charged; how much of the plan\'s limit is left is not something the app can read.')));
+      p.fiveHour ? line('Current 5 hours', p.fiveHour) : null,
+      p.week ? line('This week, all models', p.week) : null,
+      ...(p.models || []).map((m) => line(`This week, ${m.name}`, m)),
+      h('p', { class: 'link-status' }, `As Claude Code's /usage shows it, checked ${resetWhen(p.at)}.`)));
   });
   box.replaceChildren(button);
 }
 async function checkUsage() {
-  try { usageNow = await (await fetch('/api/usage')).json(); renderUsage(); } catch { /* next time */ }
+  try { planUsage = (await (await fetch('/api/plan')).json()).plan; renderUsage(); } catch { /* next time */ }
 }
 checkUsage();
 loadReports();

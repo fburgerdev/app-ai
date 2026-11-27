@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, log } from './config.js';
 import { fromEvent, limitOf, noteLimit } from './limits.js';
+import { notePlanEvent, planAfterRun } from './plan.js';
 import { withEnv } from './secrets.js';
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
@@ -376,6 +377,7 @@ export async function runAgent(params) {
     // Only a real run that keeps its session can be carried on, so only those are tracked.
     const kept = !params.fake && params.mode !== 'plain' && params.mode !== 'lookup';
     recordUsage({ kind: params.usageKind || params.mode, model: params.model, usage, cost: out.cost || (params.fake ? 0.01 : 0), durationMs, sessionId: kept ? out.sessionId || '' : '', resumed: Boolean(params.resume) });
+    if (!params.fake) planAfterRun();
     if (out.limit && !out.aborted) noteLimit(out.limit);
     else if (!out.error && !out.aborted) noteLimit(null);
     return { ...out, durationMs };
@@ -543,6 +545,7 @@ async function runReal({ prompt, cwd, resume, systemAppend, model, effort, mode,
     if (msg.type === 'rate_limit_event') {
       // Which limit, and exactly when it lifts. A later "allowed" takes it back.
       rejected = fromEvent(msg.rate_limit_info);
+      notePlanEvent(msg.rate_limit_info);
     } else if (msg.type === 'stream_event') {
       if (msg.parent_tool_use_id) continue; // a helper's own text is not shown
       resultSeen = false; // Claude is writing again
