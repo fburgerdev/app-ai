@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { messageText, readPrompt, todayLine, dateDMY, dateTimeDMY, voiceActivity } from './util.js';
-import { getState, TIERS, TIER_NAMES } from './state.js';
+import { getState, MODELS, TIERS, TIER_NAMES, isTier, allTiers, quickNames } from './state.js';
 import { projectContext, repoOf, projectChoices, followRenames } from './projects.js';
 import { lastThreadOn } from './threadexport.js';
 import * as repos from './repos.js';
@@ -173,7 +173,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
   if (doneAfter && !auto) stored.unanswered = true;
   const message = store.appendMessage(threadId, stored);
   // Only for a message Claude answers: one that just closes the thread starts no turn.
-  if (tier && TIER_NAMES.includes(tier) && !doneAfter) store.updateThread(threadId, { nextTier: tier }, { quiet: true });
+  if (tier && isTier(tier) && !doneAfter) store.updateThread(threadId, { nextTier: tier }, { quiet: true });
   const prompt = promptFor(threadId, text, files);
   if (doneAfter && !auto) {
     const unsent = [...(thread.unsent || []), prompt];
@@ -200,7 +200,7 @@ export function sendMessage(threadId, text, { auto = false, files = [], doneAfte
     const { held } = thread;
     const added = thread.pending || [];
     heldPrompt.set(threadId, { prompt: held.prompt, tries: 0, kind: held.kind });
-    store.updateThread(threadId, { held: null, pending: [], nextTier: thread.nextTier || (TIER_NAMES.includes(held.tier) ? held.tier : '') }, { quiet: true });
+    store.updateThread(threadId, { held: null, pending: [], nextTier: thread.nextTier || (isTier(held.tier) ? held.tier : '') }, { quiet: true });
     log(`thread "${thread.title}": he wrote while it waited to carry on by itself; starting now`);
     startTurn(threadId, retry.interruptedText(held, [...added, withUnsent].join('\n\n')));
     return message;
@@ -282,7 +282,7 @@ function addMidTurn(threadId, thread, run, { text, files, tier, mode, answers = 
     if (files.length) stored.files = files;
     return store.appendMessage(threadId, stored);
   }
-  const item = { id: qid(), text, ...shown, files, prompt, tier: TIER_NAMES.includes(tier) ? tier : '', ts: Date.now() };
+  const item = { id: qid(), text, ...shown, files, prompt, tier: isTier(tier) ? tier : '', ts: Date.now() };
   store.updateThread(threadId, { queued: [...(thread.queued || []), item], queuedHeld: '' });
   return null;
 }
@@ -477,7 +477,7 @@ function startHeld(t, now = Date.now()) {
   ].join('\n\n');
   supervisorNote(t.id, own ? own.note : `[The ${limitLabel(held.type)} lifted; the app carried on with this turn by itself on ${dateTimeDMY(now)}.]`, prompt);
   heldPrompt.set(t.id, { prompt: added.length ? `${held.prompt}\n\n${added.join('\n\n')}` : held.prompt, tries: kind === 'limit' ? held.tries || 1 : 0, kind });
-  store.updateThread(t.id, { pending: [], nextTier: TIER_NAMES.includes(held.tier) ? held.tier : '' }, { quiet: true });
+  store.updateThread(t.id, { pending: [], nextTier: isTier(held.tier) ? held.tier : '' }, { quiet: true });
   log(`thread "${t.title}": ${kind === 'limit' ? `the ${limitLabel(held.type)} lifted` : `the ${kind} hold is over`}, carrying on`);
   startTurn(t.id, prompt);
 }
@@ -1418,7 +1418,8 @@ export async function backfillSignatures() {
 // could also be fixed per thread (`tier`) or for everything; neither is read any more,
 // so threads from then behave like all others.
 
-function tierOf(name) { return { name, ...TIERS[name] }; }
+// A tier by its name: one of the five, or one of his own quick select buttons.
+function tierOf(name) { return { name, ...allTiers()[name] }; }
 
 // Auto picks a tier per message, but changing the model in the middle of a conversation
 // has a price of its own. Claude keeps what it has read ready for an hour, per model, and
@@ -1435,10 +1436,15 @@ const READY_MS = 55 * 60_000;
 const WORTH_KEEPING = 30_000; // tokens
 export function stickyTier(pick, thread, now = Date.now()) {
   const last = thread?.lastTier;
-  if (!TIER_NAMES.includes(pick) || !TIER_NAMES.includes(last) || !thread.sessionId) return pick;
-  if (TIERS[pick].model === TIERS[last].model || TIER_NAMES.indexOf(pick) > TIER_NAMES.indexOf(last)) return pick;
+  const tiers = allTiers();
+  if (!TIER_NAMES.includes(pick) || !Object.hasOwn(tiers, last) || !thread.sessionId) return pick;
+  const lastModel = tiers[last].model;
+  if (TIERS[pick].model === lastModel) return pick;
+  // Up: a later tier of the five, or (after one of his own buttons) a bigger model.
+  const up = TIER_NAMES.includes(last) ? TIER_NAMES.indexOf(pick) > TIER_NAMES.indexOf(last) : MODELS.indexOf(TIERS[pick].model) > MODELS.indexOf(lastModel);
+  if (up) return pick;
   if (now - (thread.turnEndedAt || 0) > READY_MS || (thread.contextTokens || 0) < WORTH_KEEPING) return pick;
-  return TIER_NAMES.find((n) => TIERS[n].model === TIERS[last].model);
+  return TIER_NAMES.find((n) => TIERS[n].model === lastModel) || pick;
 }
 
 export async function tierFor(threadId, prompt) {
@@ -1446,11 +1452,11 @@ export async function tierFor(threadId, prompt) {
   // Chosen for this one message when sending (quick select), then forgotten.
   // Read it before clearing it: the stored thread is the same object.
   const once = thread?.nextTier || '';
-  if (TIER_NAMES.includes(once)) {
+  if (isTier(once)) {
     store.updateThread(threadId, { nextTier: '' }, { quiet: true });
     return tierOf(once);
   }
-  if (TIER_NAMES.includes(thread?.keepTier)) return tierOf(thread.keepTier);
+  if (isTier(thread?.keepTier)) return tierOf(thread.keepTier);
   const messages = store.readMessages(threadId);
   const earlier = messages.slice(-5, -1).map((m) => `${m.role === 'user' ? 'Florian' : 'Claude'}: ${messageText(m).slice(0, 400)}`).join('\n');
   let answer = '';
@@ -1509,8 +1515,10 @@ export function againHigher(threadId) {
   const messages = store.readMessages(threadId);
   const last = [...messages].reverse().find((m) => m.role === 'user');
   if (!last) throw new Error('There is nothing to run again here.');
-  const at = TIER_NAMES.indexOf(thread.lastTier);
-  const next = TIER_NAMES[Math.min(TIER_NAMES.length - 1, (at < 0 ? 2 : at) + 1)];
+  // After one of his own buttons, one higher is the next button in his row.
+  const ladder = TIER_NAMES.includes(thread.lastTier) || !quickNames().includes(thread.lastTier) ? TIER_NAMES : quickNames();
+  const at = ladder.indexOf(thread.lastTier);
+  const next = ladder[Math.min(ladder.length - 1, (at < 0 ? 2 : at) + 1)];
   store.updateThread(threadId, { keepTier: next, nextTier: '' });
   startTurn(threadId, promptFor(threadId, messageText(last), last.files || []));
   return { thread: store.getThread(threadId), tier: next };

@@ -22,12 +22,47 @@ export const TIERS = {
 };
 export const TIER_NAMES = ['cheap', 'low', 'default', 'high', 'extra'];
 
+// His own quick select buttons (Settings → General, Florian 27-11-2026): each a label and
+// the model and effort it runs on. While he has none, quick select shows the five tiers.
+// Auto keeps choosing from the five, since it needs their descriptions to pick.
+const QUICK_ID = /^my-[a-z0-9]{1,10}$/;
+const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' };
+let quickSeq = 0;
+const newQuickId = () => `my-${(Date.now() + quickSeq++).toString(36).slice(-7)}`;
+export function cleanQuick(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const q of list.slice(0, 9)) {
+    if (!q || typeof q !== 'object') continue;
+    const model = MODELS.includes(q.model) ? q.model : 'opus';
+    const effort = EFFORTS.includes(q.effort) ? q.effort : 'high';
+    const label = String(q.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 24) || `${MODEL_NAMES[model]} ${effort}`;
+    let id = typeof q.id === 'string' && QUICK_ID.test(q.id) && !seen.has(q.id) ? q.id : newQuickId();
+    while (seen.has(id)) id = newQuickId();
+    seen.add(id);
+    out.push({ id, label, model, effort });
+  }
+  return out;
+}
+// Every tier a turn can run on: the five, and his own buttons by their ids.
+export function allTiers(quick = load().quick) {
+  const own = Object.fromEntries(quick.map((q) => [q.id, { label: q.label, model: q.model, effort: q.effort, about: `${MODEL_NAMES[q.model]}, ${q.effort} effort`, own: true }]));
+  return { ...TIERS, ...own };
+}
+export const isTier = (name) => typeof name === 'string' && Object.hasOwn(allTiers(), name);
+// What quick select shows, in his order.
+export function quickNames(quick = load().quick) {
+  return quick.length ? quick.map((q) => q.id) : [...TIER_NAMES];
+}
+
 const DEFAULTS = {
   mood: '',
   model: 'opus',
   effort: 'high',
   tier: 'auto', // auto: a cheap model picks per message | ask: choose on sending (quick select)
   askDefault: 'default', // the tier quick select starts on
+  quick: [], // his own quick select buttons: [{ id, label, model, effort }]; none = the five tiers
   mailLevel: 0, // mail up to this moment has been through a brain update
   cardsLevel: 0, // card outcomes up to this moment have been through a brain update
   sleep: { on: true, from: '00:00', to: '08:00' }, // the app shows a go-to-sleep screen in between
@@ -97,7 +132,8 @@ function load() {
   if (!EFFORTS.includes(state.effort)) state.effort = DEFAULTS.effort;
   // Until 13-11-2026 a fixed tier could be set here too. Such a state reads as Auto now.
   if (state.tier !== 'ask') state.tier = 'auto';
-  if (!TIER_NAMES.includes(state.askDefault)) state.askDefault = DEFAULTS.askDefault;
+  state.quick = cleanQuick(state.quick);
+  if (!Object.hasOwn(allTiers(state.quick), state.askDefault)) state.askDefault = DEFAULTS.askDefault;
   state.sleep = { ...DEFAULTS.sleep, ...(state.sleep || {}) };
   state.focus = { ...DEFAULTS.focus, ...(state.focus || {}) };
   state.hidden = Array.isArray(state.hidden) ? state.hidden.filter((k) => PART.test(k)) : [];
@@ -130,6 +166,9 @@ export function reloadState() { state = null; }
 export function getState() {
   const s = { ...load() };
   if (s.focus?.on && !inFocus()) s.focus = { ...DEFAULTS.focus };
+  // Derived, never saved: every tier with his own buttons, and what quick select shows.
+  s.tiers = allTiers(s.quick);
+  s.quickNames = quickNames(s.quick);
   return s;
 }
 
@@ -159,7 +198,8 @@ export function setState(patch) {
   if (MODELS.includes(patch.model)) next.model = patch.model;
   if (EFFORTS.includes(patch.effort)) next.effort = patch.effort;
   if (patch.tier === 'auto' || patch.tier === 'ask') next.tier = patch.tier;
-  if (TIER_NAMES.includes(patch.askDefault)) next.askDefault = patch.askDefault;
+  if (Array.isArray(patch.quick)) next.quick = cleanQuick(patch.quick);
+  if (typeof patch.askDefault === 'string' && Object.hasOwn(allTiers(next.quick), patch.askDefault)) next.askDefault = patch.askDefault;
   if (Number.isFinite(patch.mailLevel)) next.mailLevel = patch.mailLevel;
   if (Number.isFinite(patch.cardsLevel)) next.cardsLevel = patch.cardsLevel;
   // A brain update held by the usage limit: { until, type, only } (extract.js), or null.
