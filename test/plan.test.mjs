@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shape, notePlanEvent, planNow, _reset } from '../server/plan.js';
+import { shape, notePlanEvent, planNow, lineOf, _reset } from '../server/plan.js';
 
 // What the SDK's usage call answered on 27-11-2026, cut down.
 const answer = {
@@ -35,4 +35,15 @@ test('a run\'s rate-limit event updates its window', async () => {
   notePlanEvent({ status: 'allowed', rateLimitType: 'five_hour', utilization: 0.5 }); // nothing known yet: ignored
   assert.equal(await planNow(), null);
   delete process.env.APP_AI_FAKE;
+});
+
+test('a reading is kept as one short line', () => {
+  const l = lineOf(shape(answer, 1000), 'poll');
+  assert.equal(l.ts, 1000);
+  assert.equal(l.src, 'poll');
+  assert.deepEqual(l.h5, [18, Date.parse('2026-11-27T19:19:59.787Z')]);
+  assert.equal(l.wk[0], 33);
+  assert.equal(l.wk_fable[0], 31);
+  assert.ok(l.host);
+  assert.equal(lineOf(null, 'poll'), null);
 });
