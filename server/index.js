@@ -34,6 +34,7 @@ import { stats, recount as recountStats } from './stats.js';
 import { initLabels, reloadLabels } from './labels.js';
 import * as nextActions from './nextactions.js';
 import { overview as usageOverview } from './usage.js';
+import { planNow } from './plan.js';
 import { startSelfUpdate, updateStatus, checkNow, lockForUpdate, unlockUpdate, noteMerged, fakeAvailable } from './selfupdate.js';
 import * as gate from './gate.js';
 import { parseMail, closesOnSend } from './mail.js';
@@ -680,6 +681,10 @@ app.post('/api/next-actions/wake', (req, res) => {
   try { res.json({ thread: nextActions.wake({ project: String(req.body?.project || ''), text: String(req.body?.text || '') }) }); } catch (err) { res.status(409).json({ error: err.message }); }
 });
 app.get('/api/usage', (req, res) => res.json(usageOverview()));
+// How much of the plan's five-hour and weekly limits is used (server/plan.js); null when unknown.
+app.get('/api/plan', async (req, res) => {
+  try { res.json({ plan: await planNow({ wait: req.query.wait === '1' }) }); } catch { res.json({ plan: null }); }
+});
 // What happened, counted by week (server/stats.js).
 // It answers with the kept count at once; ?wait=1 waits for a count already running, and
 // ?fresh=1 for a new one.
