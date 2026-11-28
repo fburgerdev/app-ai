@@ -97,14 +97,15 @@ const marked = new Marked({
   },
 });
 
-const CALLOUT = /^\s*\[!(\w+)\][+-]?\s*(.*)$/;
+const CALLOUT = /^\s*\[!(\w+)\]([+-]?)\s*(.*)$/;
 
-// The blocks of a reply (Florian, 23-11-2026): what is his to do, what Claude found, what
-// Claude makes of it, what Claude did, and lines for him to confirm with Yes or No.
+// The blocks of a reply (Florian, 23-11-2026, three more 28-11-2026): what Claude did,
+// where a thinking session stands, his own points mirrored back, a briefing, what Claude
+// found, what Claude makes of it, what is his to do, and lines for him to confirm.
 // Claude writes them as callouts, `> [!move]`, so in `Threads/` and on GitHub they still
 // read as plain quotes.
-const BLOCK_ALIAS = { you: 'move', yourmove: 'move', mytake: 'take' };
-const BLOCK_TITLE = { move: 'Your move', take: 'My take', found: 'Found', done: 'Done', confirm: 'To confirm' };
+const BLOCK_ALIAS = { you: 'move', yourmove: 'move', mytake: 'take', sofar: 'yours', briefing: 'brief' };
+const BLOCK_TITLE = { move: 'Your move', take: 'My take', found: 'Found', done: 'Done', confirm: 'To confirm', stage: 'Stage', yours: 'So far', brief: 'Briefing' };
 
 // A line to confirm, as its text: its own words, without a list nested under it.
 function lineText(li) {
@@ -230,10 +231,12 @@ function confirmLines(quote) {
   }
 }
 
-// "Done" folds to its title line; what is under it opens on a click.
-function foldDone(quote, title) {
+// "Done" folds to its title line; what is under it opens on a click. Written `[!done]+`
+// it starts open (the bullets of a build report).
+function foldDone(quote, title, open) {
   const det = document.createElement('details');
   det.className = quote.className;
+  if (open) det.open = true;
   const sum = document.createElement('summary');
   const lab = document.createElement('span');
   lab.className = 'callout-title';
@@ -283,11 +286,11 @@ function decorate(root) {
     if (BLOCK_TITLE[kind]) quote.classList.add('block');
     const title = document.createElement('div');
     title.className = 'callout-title';
-    title.textContent = m[2] || BLOCK_TITLE[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
+    title.textContent = m[3] || BLOCK_TITLE[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
     const rest = lines.slice(1).join('<br>');
     if (rest.trim()) first.innerHTML = rest;
     else first.remove();
-    if (kind === 'done') { foldDone(quote, m[2] || ''); continue; }
+    if (kind === 'done') { foldDone(quote, m[3] || '', m[2] === '+'); continue; }
     quote.prepend(title);
     if (kind === 'confirm') confirmLines(quote);
     if (kind === 'move') askLines(quote);
