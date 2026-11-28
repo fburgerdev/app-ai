@@ -55,7 +55,7 @@ const DEFAULTS = {
 
   // Vault files put into every thread's instructions, so Claude has the current rules
   // without spending a tool call on reading them. Paths relative to the vault.
-  preload: ['Claude/Instructions.md', 'Claude/Thinking With Me.md'],
+  preload: ['Claude/Instructions.md', 'Claude/Thinking With Me.md', 'Claude/Reply Format.md'],
 
   // Paths in the vault the app never writes, whatever a run does.
   protectedPaths: ['Scratchpad.md', '.obsidian', 'For Claude', 'For Florian'],

@@ -23,6 +23,8 @@
   --code: #a8e6cf;
   --link: #8cc4ff;
   --bad: #ff8f8f;
+  --sea: #9fcfca;      /* "Found" in a reply: quiet, not an alarm */
+  --sand: #e2d2a8;     /* "Briefing" in a reply */
 
   /* What a thread is, in the inbox and wherever its state is shown (Florian, 13-11-2026). */
   --s-ready: #8fd0a8;   /* waiting for you */
@@ -68,6 +70,8 @@
   --code: #1d6a50;
   --link: #2a5daf;
   --bad: #b5302d;
+  --sea: #4f8c86;
+  --sand: #9a8248;
 
   --s-ready: #3a8a5a;
   --s-working: #c07a10;
@@ -792,14 +796,17 @@ a.wikilink-path code { color: var(--work); text-decoration: underline dashed rgb
 .md .callout-danger, .md .callout-bug, .md .callout-failure { border-left-color: var(--bad); background: rgba(255, 143, 143, 0.08); }
 .md .callout-danger .callout-title, .md .callout-bug .callout-title, .md .callout-failure .callout-title { color: var(--bad); }
 
-/* The blocks of a reply (Florian, 23-11-2026): square, a thin rule and a coloured label;
-   only "Your move" and the lines to confirm are tinted, so the eye lands there first. */
-.md .block { border-radius: 0; background: none; border-left: 2px solid var(--b); padding: 0.1em 0 0.1em 0.9em; margin: 0 0 1em; color: var(--read); }
+/* The blocks of a reply (Florian, 28-11-2026): no tint on any of them, a hairline on the
+   side and a coloured label, all in pastel, so a day of replies stays quiet. */
+.md .block { border-radius: 0; background: none; border-left: 1px solid var(--b); padding: 0.1em 0 0.1em 0.9em; margin: 0 0 1em; color: var(--read); }
 .md .block .callout-title { font: 700 0.72em/1.4 var(--sans); text-transform: uppercase; letter-spacing: 0.08em; color: var(--b); margin-bottom: 0.25em; }
-.md .callout-move, .md .callout-confirm { --b: var(--you); border-left-width: 4px; padding: 0.7em 1em; background: color-mix(in srgb, var(--you) 12%, transparent); }
-.md .callout-take { --b: var(--work); }
-.md .callout-found { --b: var(--bad); }
-.md details.callout-done { --b: var(--done); border-left: 2px solid var(--b); background: color-mix(in srgb, var(--done) 8%, transparent); padding: 0.4em 0.9em; margin: 0 0 1em; font-size: 0.88em; }
+.md .callout-move, .md .callout-confirm { --b: color-mix(in srgb, var(--you) 72%, var(--read)); }
+.md .callout-take { --b: color-mix(in srgb, var(--work) 72%, var(--read)); }
+.md .callout-found { --b: var(--sea); }
+.md .callout-yours { --b: color-mix(in srgb, var(--quote) 72%, var(--read)); }
+.md .callout-brief { --b: var(--sand); }
+.md .callout-stage { --b: var(--muted); border-left: 0; padding-left: 0; margin-bottom: 0.6em; }
+.md details.callout-done { --b: color-mix(in srgb, var(--done) 72%, var(--read)); border-left: 1px solid var(--b); background: none; padding: 0.1em 0 0.1em 0.9em; margin: 0 0 1em; font-size: 0.88em; }
 .md details.callout-done > summary { display: flex; align-items: baseline; gap: 0.6em; cursor: pointer; list-style: none; }
 .md details.callout-done > summary::-webkit-details-marker { display: none; }
 .md details.callout-done > summary .callout-title { margin: 0; flex: none; }
